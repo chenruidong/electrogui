@@ -18,6 +18,8 @@ from imitation_phys.session_stability import get_session_stability
 
 
 _OUTCOMES = {"prey_capture", "prey_miss", "predator_contact", "predator_avoid"}
+# Their value (info.tokens_at_contact) is the token count the trial pays out.
+_GOAL_CONTACTS = {"goal_contact_rewarded", "goal_contact_empty"}
 _UNAVAILABLE = {
     "joystick_direction": "continuous joystick features are not part of GUI v0.1",
     "gaze_direction": "continuous gaze features are not part of GUI v0.1",
@@ -47,7 +49,7 @@ _FIELD_INFO = {
     "image_id": ("object", "Image identity.", "Identity of the displayed object at object timing.", None),
     "bar": ("object", "Whether the object is a bar.", "Recorded for the object.", None),
     "success": ("task", "Trial success.", "Resolved for the completed trial.", None),
-    "reward_tokens": ("task", "Reward token change.", "Resolved for the completed trial.", "tokens"),
+    "reward_tokens": ("task", "Reward tokens held at goal contact, i.e. what the trial pays out.", "Read at goal contact (goal_contact_rewarded or goal_contact_empty); missing on a trial that never reached the goal.", "tokens"),
     "block_id": ("task", "Block identifier.", "Recorded for the trial.", None),
     "trial": ("task", "Trial index.", "Recorded for the trial.", None),
     "t": ("common", "Session time.", "The row's aligned time on the ephys clock.", "s"),
@@ -189,10 +191,13 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None):
             "complete": _boolean(values.get("complete")), "world": values.get("block_type"),
             "block_id": values.get("preset_block_id", values.get("block_id")),
             "success": _boolean(values.get("success")),
-            "reward_tokens": values.get("reward_token_delta", values.get("reward_tokens")),
+            # Filled from goal contact below.  The trial table's
+            # reward_token_delta is the task's sound-cue variable (+/- a
+            # per-trial counter of token-change cues), not a token count.
+            "reward_tokens": None,
             "intention": None,
         }
-    objects, releases = {}, {}
+    objects, releases, goal_contacts = {}, {}, {}
     # Gaze events also target the agent, starting point, and other scene items.
     # Only task object lifecycles may enter ordinal/history/trial-choice joins.
     task_keys = {(_trial_id(r.get("trial_index")), str(_safe(r.get("object_uid"))))
@@ -204,6 +209,11 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None):
         record["info"] = info
         if record.get("event") == "goal_release" and tid is not None and _finite(t):
             releases[tid] = min(t, releases.get(tid, t))
+        if record.get("event") in _GOAL_CONTACTS and tid is not None and _finite(t):
+            tokens = info.get("tokens_at_contact")
+            tokens = _safe(record.get("value")) if tokens is None else tokens
+            if _finite(tokens) and (tid not in goal_contacts or t < goal_contacts[tid][0]):
+                goal_contacts[tid] = (t, int(round(float(tokens))))
         if tid is None or uid is None:
             continue
         key = (tid, str(uid))
@@ -231,6 +241,11 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None):
         role = role or {"prey": "prey", "predator": "predator"}.get(info.get("behavior"))
         if role:
             obj["role"] = role
+    # A trial that never reached the goal paid nothing but has no count either;
+    # it stays missing rather than becoming 0.
+    for tid, (_, tokens) in goal_contacts.items():
+        if tid in trials_by_id:
+            trials_by_id[tid]["reward_tokens"] = tokens
     for item in canonical.to_dict(orient="records"):
         tid, uid = _trial_id(item["trial_index"]), _safe(item["object_uid"])
         obj = objects.get((tid, str(uid)))

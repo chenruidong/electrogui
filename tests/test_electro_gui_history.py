@@ -129,6 +129,28 @@ class ElectroGuiHistoryTests(unittest.TestCase):
         self.assertIsNone(rows[0]["trial_error_free"])
         self.assertIsInstance(rows[0]["success"], bool)
 
+    def test_reward_tokens_is_the_goal_contact_count_not_the_sound_cue_counter(self):
+        # reward_token_delta is the task's sound trigger (+/- a per-trial count
+        # of token-change cues).  On real sessions 4 pairs with 3 tokens at goal
+        # contact and 1 with 0 tokens, so reading it drops every 0-token trial.
+        trials = pd.concat([_trials(start_time=10.0 * i, stop_time=10.0 * i + 9, reward_token_delta=delta)
+                            for i, delta in enumerate((4.0, 1.0, 0.0))])
+        trials.index = pd.Index([0, 1, 2], name="trial_index")
+        events = _events([
+            {"event": "goal_contact_rewarded", "t_ephys_s": 7.0, "trial_index": 0, "value": 3, "info": {"tokens_at_contact": 3}},
+            {"event": "goal_contact_empty", "t_ephys_s": 17.0, "trial_index": 1, "value": 0, "info": {"tokens_at_contact": 0}},
+            {"event": "trial_display_end", "t_ephys_s": 8.0, "trial_index": 0},
+            {"event": "trial_display_end", "t_ephys_s": 18.0, "trial_index": 1},
+            {"event": "trial_display_end", "t_ephys_s": 28.0, "trial_index": 2},  # never reached the goal
+        ])
+        ordered, rows = _enrich(trials, events)
+        self.assertEqual([t["reward_tokens"] for t in ordered], [3, 0, None])
+        ends = [r for r in rows if r["event"] == "trial_display_end"]
+        self.assertEqual([r["reward_tokens"] for r in ends], [3, 0, None])
+        self.assertEqual([r["trial.reward_token_delta"] for r in ends], [4.0, 1.0, 0.0])  # raw column kept
+        field = {f["key"]: f for f in _registry(trials, rows)}["reward_tokens"]
+        self.assertEqual(field["range"], [0, 3])
+
 
 if __name__ == "__main__":
     unittest.main()
