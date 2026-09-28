@@ -1,0 +1,347 @@
+"""electro_gui 0.2 explorer: server payloads and browser-side computations.
+
+The explorer computes rasters/PSTHs in the browser (``electro_gui/static/core.js``)
+from three payloads built by ``electro_gui/explorer.py``.  These tests pin the
+payloads to the v0.1 selection rules in ``analysis.prepare_rows`` and, when node
+is available, pin core.js's PSTH to ``analysis.compute_unit`` on the same rows.
+"""
+import gzip
+import http.client
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import threading
+import unittest
+
+import numpy as np
+
+from electro_gui import explorer
+from electro_gui.analysis import compute_unit, prepare_rows
+from electro_gui.data import SessionStore
+from electro_gui.server import Application, make_server
+from tests.synthetic_session import write_synthetic_session_file
+
+CORE_JS = Path(__file__).resolve().parents[1] / "electro_gui" / "static" / "core.js"
+
+
+class ExplorerPayloadTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        path = write_synthetic_session_file(Path(cls.temp.name))
+        cls.sid = path.name.removesuffix("_session.nwb")
+        cls.store = SessionStore([], [path], Path(cls.temp.name) / "cache")
+        cls.loaded = cls.store.get(cls.sid)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def test_table_rows_match_v01_candidates_in_session_order(self):
+        table = explorer.alignment_table(self.loaded, "object_outcome")
+        complete = {t["id"] for t in self.loaded.trials if t["complete"] is True}
+        expected = sorted((r for r in self.loaded.rows if r["event"] in explorer.OUTCOMES and r["trial"] in complete),
+                          key=lambda r: (r["t"], r["row_id"]))
+        self.assertEqual(table["row_id"], [r["row_id"] for r in expected])
+        self.assertEqual(table["n"], len(expected))
+        self.assertEqual(table["t"], sorted(table["t"]))
+        columns = {c["key"]: c for c in table["columns"]}
+        self.assertIn("world", columns)
+        world = columns["world"]
+        self.assertEqual(world["kind"], "cat")
+        decoded = [None if c < 0 else world["levels"][c] for c in world["codes"]]
+        self.assertEqual(decoded, [r["world"] for r in expected])
+        for key in ("row_id", "t", "event", "complete", "session_time"):
+            self.assertNotIn(key, columns)
+        for column in table["columns"]:
+            if column.get("relative"):
+                self.assertTrue(column["key"].endswith("_t"))
+        with self.assertRaises(KeyError):
+            explorer.alignment_table(self.loaded, "no_such_event")
+
+    def test_spikes_are_half_open_and_relative(self):
+        lo, hi = -1.0, 1.5
+        raster = explorer.unit_raster(self.loaded, "object_outcome", 1, "all_complete", lo, hi)
+        table = explorer.alignment_table(self.loaded, "object_outcome")
+        spikes = np.sort(self.loaded.spikes(1))
+        self.assertEqual(raster["row_id"], table["row_id"])
+        for t, got in zip(table["t"], raster["spikes"]):
+            want = spikes[(spikes >= t + lo) & (spikes < t + hi)] - t
+            np.testing.assert_allclose(got, want, atol=1e-5)
+        with self.assertRaises(ValueError):
+            explorer.unit_raster(self.loaded, "object_outcome", 99999, "all_complete", lo, hi)
+        with self.assertRaises(ValueError):
+            explorer.unit_raster(self.loaded, "object_outcome", 1, "all_complete", 1.0, -1.0)
+
+    def test_span_rule_reproduces_prepare_rows_eligibility(self):
+        for policy in ("all_complete", "verified_stable"):
+            for pre, post in ((-0.5, 0.5), (-2.0, 1.0), (-6.0, 4.0)):
+                raster = explorer.unit_raster(self.loaded, "object_outcome", 2, policy, pre - 1, post + 1)
+                shown = {rid for rid, span in zip(raster["row_id"], raster["span"])
+                         if span and pre - explorer.GUARD_S >= span[0] - 1e-9 and post + explorer.GUARD_S <= span[1] + 1e-9}
+                request = {"pre": pre, "post": post, "bin": 0.05, "sigma": 0, "count_window": [pre, post],
+                           "stability": policy, "alignment": "object_outcome", "recipe": {"enabled": False, "cohorts": []}}
+                rows, _, _ = prepare_rows(self.loaded, request, [2])
+                self.assertEqual(shown, {r["row_id"] for r in rows}, (policy, pre, post))
+
+    def test_event_times_cover_every_valid_occurrence(self):
+        name = next(r["event"] for r in self.loaded.rows if r["event"] in explorer.OUTCOMES)
+        events = explorer.event_times(self.loaded, name)
+        expected = [r for r in self.loaded.rows if r["event"] == name]
+        self.assertEqual(events["n"], len(expected))
+        self.assertEqual(events["t"], sorted(events["t"]))
+        union = explorer.event_times(self.loaded, "object_outcome")
+        self.assertGreaterEqual(union["n"], events["n"])
+
+    def test_session_summary_carries_peak_channels_and_alignment_counts(self):
+        summary = explorer.session_summary(self.loaded)
+        self.assertTrue(all("peak_channel" in u for u in summary["units"]))
+        self.assertEqual({u["id"]: u["peak_channel"] for u in summary["units"]}[2], 3)
+        counts = {a["key"]: a["n"] for a in summary["alignments"]}
+        self.assertEqual(counts["object_outcome"], explorer.alignment_table(self.loaded, "object_outcome")["n"])
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_core_js_psth_matches_compute_unit(self):
+        pre, post, bin_, sigma = -1.0, 1.0, 0.05, 0.05
+        table = explorer.alignment_table(self.loaded, "object_outcome")
+        raster = explorer.unit_raster(self.loaded, "object_outcome", 3, "all_complete", pre - 0.65, post + 0.65)
+        request = {"unit_id": 3, "alignment": "object_outcome", "pre": pre, "post": post, "bin": bin_, "sigma": sigma,
+                   "count_window": [-0.5, 0.0], "stability": "all_complete", "recipe": {"enabled": False, "cohorts": []}}
+        v01 = compute_unit(self.loaded, request)
+        self.assertEqual(len(v01["groups"]), 1)
+        script = """
+const C = require(process.argv[1]);
+const fs = require('fs');
+const [table, raster] = JSON.parse(fs.readFileSync(0, 'utf8'));
+const T = C.prepareTable(table);
+const spikes = raster.spikes.map(a => Float64Array.from(a));
+const elig = C.eligibility(raster, %(pre)s, %(post)s);
+const rows = []; for (let i = 0; i < T.n; i++) if (!elig[i]) rows.push(i);
+const grid = C.psthGrid(%(pre)s, %(post)s, %(bin)s, %(sigma)s);
+const byTrial = C.psth(rows, i => spikes[i], T.trial, grid, 'trial');
+const rates = C.windowRates(rows, i => spikes[i], T.trial, -0.5, 0.0, 'event');
+process.stdout.write(JSON.stringify({rows: rows.map(i => T.rowId[i]), times: Array.from(grid.times),
+  mean: Array.from(byTrial.mean), sem: Array.from(byTrial.sem), n: byTrial.n, values: rates.values}));
+""" % {"pre": pre, "post": post, "bin": bin_, "sigma": sigma}
+        done = subprocess.run(["node", "-e", script, str(CORE_JS)], input=json.dumps([table, raster]),
+                              capture_output=True, text=True, timeout=60, check=True)
+        js = json.loads(done.stdout)
+        group = v01["groups"][0]
+        self.assertEqual(sorted(js["rows"]), sorted(r["row_id"] for r in v01["rows"]))
+        self.assertEqual(js["n"], group["trials"])
+        np.testing.assert_allclose(js["times"], v01["times"], atol=1e-9)
+        np.testing.assert_allclose(js["mean"], group["mean"], atol=1e-6)
+        np.testing.assert_allclose(js["sem"], group["sem"], atol=1e-6)
+        by_id = {r["row_id"]: r["rate"] for r in v01["rows"]}
+        np.testing.assert_allclose(js["values"], [by_id[r] for r in js["rows"]], atol=1e-9)
+
+
+class PopulationWorkspaceTests(unittest.TestCase):
+    """The explorer's population fit reuses v0.1's basis and v0.1's eligibility rule."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        path = write_synthetic_session_file(Path(cls.temp.name))
+        cls.sid = path.name.removesuffix("_session.nwb")
+        cls.loaded = SessionStore([], [path], Path(cls.temp.name) / "cache").get(cls.sid)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def v01(self, method="pca", scaling="zscore"):
+        request = {"unit_ids": [1, 2, 3, 4, 5, 6], "alignment": "object_outcome", "pre": -1.0, "post": 1.0, "bin": 0.05,
+                   "sigma": 0.05, "count_window": [-0.5, 0.0], "stability": "all_complete", "method": method,
+                   "scaling": scaling, "components": 2}
+        from electro_gui.population import compute_population
+        return request, compute_population(self.loaded, request)
+
+    def fit(self, request, v01, **overrides):
+        groups = [{"key": g["name"], "label": g["label"], "row_ids": [r["row_id"] for r in v01["rows"] if r["group"] == g["name"]]}
+                  for g in v01["groups"]]
+        body = {"unit_ids": request["unit_ids"], "alignment": request["alignment"], "policy": "all_complete",
+                "pre": request["pre"], "post": request["post"], "bin": request["bin"], "sigma": request["sigma"],
+                "weight": "trial", "method": request["method"], "scaling": request["scaling"],
+                "components": request["components"], "groups": groups}
+        body.update(overrides)
+        return explorer.population_fit(self.loaded, body)
+
+    def test_fit_reproduces_v01_means_and_variance(self):
+        request, v01 = self.v01()
+        got = self.fit(request, v01)
+        self.assertEqual(got["active_unit_ids"], v01["active_unit_ids"])
+        keep = [request["unit_ids"].index(u) for u in got["active_unit_ids"]]
+        for mine, theirs in zip(got["groups"], v01["groups"]):
+            np.testing.assert_allclose(mine["means"], np.array(theirs["input_means"])[:, keep], atol=1e-3)
+            coords, ref = np.array(mine["coords"]), np.array(theirs["coordinates"])
+            for k in range(2):  # signs are normalised in the explorer
+                self.assertTrue(np.allclose(coords[:, k], ref[:, k], atol=1e-4) or np.allclose(coords[:, k], -ref[:, k], atol=1e-4))
+        np.testing.assert_allclose(got["explained_variance_ratio"], v01["diagnostics"]["explained_variance_ratio"], atol=1e-6)
+        np.testing.assert_allclose(got["component_r2"], got["explained_variance_ratio"], atol=1e-6)
+        loadings = np.array(got["loadings"])
+        for k in range(2):
+            self.assertGreater(loadings[np.argmax(np.abs(loadings[:, k])), k], 0)
+
+    def test_fit_rejects_rows_outside_the_eligibility_rule(self):
+        request, v01 = self.v01()
+        table = explorer.alignment_table(self.loaded, "object_outcome")
+        spans = explorer.population_spans(self.loaded, "object_outcome", [1, 2], "all_complete")
+        wide = next((rid for rid, span in zip(spans["row_id"], spans["span"]) if span and -6 - 0.4 < span[0]), None)
+        with self.assertRaises(ValueError):
+            self.fit(request, v01, groups=[{"key": "a", "row_ids": [table["row_id"][0], table["row_id"][0]]}])
+        with self.assertRaises(ValueError):
+            self.fit(request, v01, groups=[{"key": "a", "row_ids": [999999]}])
+        if wide is not None:
+            with self.assertRaises(ValueError):
+                self.fit(request, v01, pre=-6.0, groups=[{"key": "a", "row_ids": [wide]}])
+        with self.assertRaises(ValueError):
+            self.fit(request, v01, unit_ids=[1])
+
+    def test_ica_and_fa_run_with_event_weighting(self):
+        for method in ("ica", "fa"):
+            request, v01 = self.v01(method=method, scaling="center")
+            got = self.fit(request, v01, weight="event")
+            self.assertEqual(got["method"], method)
+            self.assertEqual(len(got["component_r2"]), 2)
+            self.assertTrue(all(np.isfinite(np.array(g["coords"])).all() for g in got["groups"]))
+
+    def test_single_trial_cloud_is_centred_on_the_trajectory(self):
+        for method in ("pca", "ica", "fa"):
+            for weight in ("trial", "event"):
+                with self.subTest(method=method, weight=weight):
+                    request, v01 = self.v01(method=method, scaling="zscore")
+                    fitted = self.fit(request, v01, weight=weight)
+                    groups = [{"key": g["name"], "label": g["label"], "row_ids": [r["row_id"] for r in v01["rows"] if r["group"] == g["name"]]}
+                              for g in v01["groups"]]
+                    body = {"unit_ids": request["unit_ids"], "alignment": "object_outcome", "policy": "all_complete",
+                            "pre": -1.0, "post": 1.0, "bin": 0.05, "sigma": 0.05, "weight": weight, "method": method,
+                            "scaling": "zscore", "components": 2, "groups": groups, "probe_times": [0.0, -0.37]}
+                    probe = explorer.population_probe(self.loaded, body)
+                    self.assertEqual(probe["unit"], weight)
+                    for p in probe["probes"]:
+                        self.assertEqual(p["bin_index"], int(np.floor((p["t"] + 1.0) / 0.05 + 1e-9)))
+                        for mine, g in zip(p["groups"], fitted["groups"]):
+                            points = np.array(mine["points"])
+                            expected_n = g["trials"] if weight == "trial" else g["events"]
+                            self.assertEqual(len(points), expected_n)
+                            np.testing.assert_allclose(points.mean(axis=0), g["coords"][p["bin_index"]], atol=1e-4)
+        with self.assertRaises(ValueError):
+            explorer.population_probe(self.loaded, {**body, "probe_times": [5.0]})
+        with self.assertRaises(ValueError):
+            explorer.population_probe(self.loaded, {**body, "probe_times": []})
+
+    def test_stability_masks_decode_to_eligibility(self):
+        import base64
+        masks = explorer.stability_masks(self.loaded)
+        for unit in self.loaded.units:
+            bits = base64.b64decode(masks["units"][str(unit["id"])])
+            decoded = {t for i, t in enumerate(masks["trials"]) if bits[i >> 3] >> (i & 7) & 1}
+            self.assertEqual(decoded, set(self.loaded.eligibility([unit["id"]], "verified_stable")[0]))
+        common = explorer.population_spans(self.loaded, "object_outcome", [1, 2, 3], "verified_stable")["common_trials"]
+        self.assertEqual(common, len(self.loaded.eligibility([1, 2, 3], "verified_stable")[0]))
+
+
+class ExplorerServerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        path = write_synthetic_session_file(Path(self.temp.name))
+        self.sid = path.name.removesuffix("_session.nwb")
+        store = SessionStore([], [path], Path(self.temp.name) / "cache")
+        self.app = Application(store, views_path=Path(self.temp.name) / "views.json")
+        self.servers = []
+
+    def tearDown(self):
+        for server, thread in self.servers:
+            server.shutdown(); server.server_close(); thread.join()
+        self.app.close()
+        self.temp.cleanup()
+
+    def serve(self, **kwargs):
+        server = make_server(self.app, port=0, **kwargs)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.servers.append((server, thread))
+        return server.server_address[1]
+
+    def request(self, port, path, method="GET", body=None, headers=None):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+        connection.request(method, path, body=json.dumps(body) if body is not None else None,
+                           headers={"Content-Type": "application/json", **(headers or {})})
+        response = connection.getresponse()
+        data = response.read()
+        result = response.status, dict(response.getheaders()), data
+        connection.close()
+        return result
+
+    def test_explorer_endpoints_views_and_gzip(self):
+        port = self.serve()
+        status, _, body = self.request(port, f"/api/explorer/session?session={self.sid}")
+        self.assertEqual(status, 200, body)
+        summary = json.loads(body)
+        self.assertEqual(summary["session_id"], self.sid)
+        status, headers, body = self.request(port, f"/api/explorer/table?session={self.sid}&alignment=object_outcome",
+                                             headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(status, 200)
+        table = json.loads(gzip.decompress(body) if headers.get("Content-Encoding") == "gzip" else body)
+        self.assertGreater(table["n"], 0)
+        status, _, body = self.request(port, f"/api/explorer/raster?session={self.sid}&alignment=object_outcome&unit=1&policy=all_complete&lo=-1&hi=1")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["n"], table["n"])
+        status, _, body = self.request(port, f"/api/explorer/raster?session={self.sid}&alignment=object_outcome&unit=1&policy=bogus&lo=-1&hi=1")
+        self.assertEqual(status, 400)
+        status, _, _ = self.request(port, f"/api/explorer/table?session={self.sid}&alignment=nope")
+        self.assertEqual(status, 404)
+        status, _, body = self.request(port, "/api/views", "POST", {"name": "demo", "state": {"unit": 1}})
+        self.assertEqual(status, 200, body)
+        status, _, body = self.request(port, "/api/views")
+        self.assertEqual(json.loads(body)["demo"]["state"], {"unit": 1})
+        self.request(port, "/api/views", "POST", {"name": "demo", "delete": True})
+        self.assertEqual(json.loads(self.request(port, "/api/views")[2]), {})
+        status, _, body = self.request(port, f"/api/explorer/popspans?session={self.sid}&alignment=object_outcome&units=1,2&policy=all_complete")
+        self.assertEqual(status, 200, body)
+        spans = json.loads(body)
+        self.assertEqual(spans["n"], table["n"])
+        status, _, body = self.request(port, f"/api/explorer/stability?session={self.sid}")
+        self.assertEqual(status, 200, body)
+        self.assertIn("1", json.loads(body)["units"])
+        status, _, body = self.request(port, f"/api/explorer/stable_roster?session={self.sid}")
+        self.assertEqual(status, 200, body)
+        rows = [rid for rid, span in zip(spans["row_id"], spans["span"]) if span and -1.4 >= span[0] and 1.4 <= span[1]]
+        fit = {"session_id": self.sid, "unit_ids": [1, 2, 3], "alignment": "object_outcome", "policy": "all_complete",
+               "pre": -1, "post": 1, "bin": 0.05, "sigma": 0.02, "weight": "event", "method": "pca", "scaling": "zscore",
+               "components": 2, "groups": [{"key": "all", "label": "all", "row_ids": rows}]}
+        status, _, body = self.request(port, "/api/explorer/popfit", "POST", fit)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(len(json.loads(body)["groups"][0]["coords"]), 40)
+        status, _, body = self.request(port, "/api/explorer/popfit", "POST", {**fit, "groups": [{"key": "x", "row_ids": [123456]}]})
+        self.assertEqual(status, 400, body)
+        status, _, body = self.request(port, "/api/explorer/popprobe", "POST", {**fit, "probe_times": [0.0]})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(len(json.loads(body)["probes"][0]["groups"][0]["points"]), len(rows))
+        status, _, body = self.request(port, "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"explorer.js", body)
+        status, _, body = self.request(port, "/classic/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"/classic/app.js", body)
+
+    def test_lan_mode_requires_token(self):
+        with self.assertRaises(ValueError):
+            make_server(self.app, host="0.0.0.0", port=0)
+        port = self.serve(token="s3cret")
+        status, _, _ = self.request(port, "/api/catalog")
+        self.assertEqual(status, 403)
+        status, headers, _ = self.request(port, "/api/catalog?token=wrong")
+        self.assertEqual(status, 403)
+        status, headers, _ = self.request(port, "/api/catalog?token=s3cret")
+        self.assertEqual(status, 200)
+        self.assertIn("electro_token=s3cret", headers.get("Set-Cookie", ""))
+        status, _, _ = self.request(port, "/api/catalog", headers={"Cookie": "electro_token=s3cret", "Host": "192.168.1.5:8765"})
+        self.assertEqual(status, 200)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,2466 @@
+/* electro_gui explorer UI.  Computations live in core.js (EGCore). */
+(() => {
+  'use strict';
+  const C = window.EGCore;
+  const $ = id => document.getElementById(id);
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  const clone = v => JSON.parse(JSON.stringify(v));
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const tidy = (v, d = 3) => Number(Number(v).toFixed(d));
+  const f1 = v => Math.round(v * 10) / 10;
+  const VERSION = '0.2';
+
+  // Spikes are fetched with this margin beyond the window: 4 sigma (<= 0.4 s) plus one bin (<= 0.2 s).
+  const PAD = 0.65;
+  const DASHES = ['', '6 4', '1.6 3', '9 3 2 3', '14 4', '3 3'];
+  const INK = 'ink';
+
+  // --------------------------------------------------------------- names
+  const EVENT_NAMES = {
+    object_outcome: 'object outcome (any)', prey_capture: 'prey captured', prey_miss: 'prey missed',
+    predator_contact: 'predator touched', predator_avoid: 'predator avoided', object_visible_onset: 'object visible',
+    object_fully_visible: 'object fully visible', object_spawn: 'object spawn', object_offset: 'object offset',
+    joystick_move_onset: 'joystick onset', joystick_move_offset: 'joystick offset', joystick_peak: 'joystick peak',
+    joystick_reversal: 'joystick reversal', agent_move_onset: 'agent move onset', agent_move_offset: 'agent move offset',
+    agent_align_object: 'agent aligned with object', trial_initiation: 'trial initiation', goal_release: 'goal release',
+    reward_valve_onset: 'reward valve on', reward_valve_offset: 'reward valve off', reward_command: 'reward command',
+    trial_display_start: 'trial display start', trial_display_end: 'trial display end', trial_outcome: 'trial outcome',
+    mworks_trial_start: 'MWorks trial start', mworks_trial_end: 'MWorks trial end', gaze_on_object_onset: 'gaze on object',
+    gaze_on_object_offset: 'gaze leaves object', saccade_onset: 'saccade onset', saccade_offset: 'saccade offset',
+    blink_onset: 'blink onset', blink_offset: 'blink offset', fixation_acquired: 'fixation acquired',
+    start_block_contact_onset: 'start block contact', start_block_contact_offset: 'start block release',
+    goal_contact_rewarded: 'goal contact (rewarded)', goal_contact_empty: 'goal contact (empty)',
+    punishment_cue_onset: 'punishment cue on', sound_onset: 'sound onset', token_change: 'token change',
+  };
+  const eventLabel = e => EVENT_NAMES[e] || C.humanize(e);
+  const PINNED_ALIGN = ['object_outcome', 'prey_capture', 'predator_contact', 'prey_miss', 'predator_avoid',
+    'object_visible_onset', 'trial_initiation', 'joystick_move_onset', 'goal_release', 'reward_valve_onset'];
+  const OBJECT_EVENTS = /^(object_|prey_|predator_(contact|avoid)|gaze_on_object)/;
+  function eventCategory(e) {
+    if (/^(sync_|state_|preset_|block_type|stimuli_changed|predator_trial_flag|mworks_trial_duration|report$|task_start)|_(hue|image)_change$/.test(e)) return 'Technical';
+    if (/^(object_|prey_|predator_(contact|avoid))/.test(e)) return 'Object & outcome';
+    if (/^(joystick|agent)/.test(e)) return 'Movement';
+    if (/^(reward|token|cumulative|punishment|sound)/.test(e)) return 'Reward & feedback';
+    if (/^(saccade|blink|eyelink|gaze|fixation)/.test(e)) return 'Eye';
+    return 'Trial';
+  }
+  const CATEGORY_ORDER = ['Object & outcome', 'Trial', 'Movement', 'Reward & feedback', 'Eye', 'Technical'];
+
+  const COMMON_FIELDS = ['world', 'role', 'action', 'outcome', 'intention', 'correct', 'order', 'previous_role',
+    'previous_outcome', 'next_role', 'trial_error_free', 'before_first_error', 'is_first_object', 'is_last_object', 'success'];
+  const QUICK_FIELDS = ['world', 'role', 'action'];
+  function fieldGroup(col) {
+    if (COMMON_FIELDS.includes(col.key)) return 'Common';
+    if (col.relative) return 'Timing (s from event)';
+    if (/^(previous|next)_/.test(col.key) || col.key === 'trial_changed_strategy') return 'History';
+    if (col.key.startsWith('object.')) return 'Object details';
+    if (col.key.startsWith('trial.')) return 'Trial details';
+    return 'Task & trial';
+  }
+  const FIELD_GROUP_ORDER = ['Common', 'History', 'Task & trial', 'Timing (s from event)', 'Object details', 'Trial details'];
+
+  // -------------------------------------------------------------- colours
+  const SEM = {
+    world: {PP: '#2b8a3e', PM: '#6741d9', MM: '#e03131'},
+    intention: {PP: '#2b8a3e', PM: '#6741d9', MM: '#e03131', NA: '#868e96'},
+    role: {prey: '#2b8a3e', predator: '#e03131'},
+    action: {touch: '#1c7ed6', avoid: '#f08c00'},
+    outcome: {prey_capture: '#2b8a3e', prey_miss: '#8fcf9c', predator_contact: '#e03131', predator_avoid: '#f4a3a3'},
+  };
+  ['previous_trial_intention', 'next_trial_intention'].forEach(k => { SEM[k] = SEM.intention; });
+  ['previous_role', 'next_role'].forEach(k => { SEM[k] = SEM.role; });
+  ['previous_action', 'next_action'].forEach(k => { SEM[k] = SEM.action; });
+  ['previous_outcome', 'next_outcome'].forEach(k => { SEM[k] = SEM.outcome; });
+  const PALETTE = ['#1c7ed6', '#f08c00', '#2b8a3e', '#e03131', '#7048e8', '#0c8599', '#d6336c', '#5c940d', '#495057', '#e8590c'];
+  const RAMP = ['#74c0fc', '#339af0', '#1c7ed6', '#1864ab', '#0b3d74'];
+  const MISSING_COLOR = '#adb5bd';
+  const MARKER_COLORS = [INK, '#0b7285', '#e8590c', '#ae3ec9', '#1971c2', '#f59f00', '#c2255c', '#2f9e44'];
+
+  function mix(hex, other, amount) {
+    const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+    const a = p(hex), b = p(other);
+    return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * amount).toString(16).padStart(2, '0')).join('');
+  }
+  const isDark = () => document.documentElement.dataset.theme === 'dark';
+  const figVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  function paint(hex) {
+    if (hex === INK) return figVar('--fig-ink');
+    return isDark() ? mix(hex, '#ffffff', 0.18) : hex;
+  }
+  function groupColor(g, grouping, table) {
+    if (!grouping.colorField) return grouping.nStyles > 1 ? figVar('--fig-ink') : paint('#3b5bdb');
+    if (g.colorKey === C.MISSING) return paint(MISSING_COLOR);
+    const sem = SEM[grouping.colorField];
+    if (sem && sem[g.colorKey]) return paint(sem[g.colorKey]);
+    const col = table.byKey.get(grouping.colorField);
+    if (col && col.kind === 'num') {
+      const k = Math.max(1, grouping.nColors - (grouping.hasMissingColor ? 1 : 0));
+      const idx = Math.round((k === 1 ? 0.5 : g.colorIndex / (k - 1)) * (RAMP.length - 1));
+      return paint(RAMP[clamp(idx, 0, RAMP.length - 1)]);
+    }
+    if (col && col.kind === 'cat' && col.levels.length === 2 && col.levels[0] === false) return paint(g.colorKey === 'true' ? '#1c7ed6' : '#f08c00');
+    return paint(PALETTE[g.colorIndex % PALETTE.length]);
+  }
+
+  // ---------------------------------------------------------------- state
+  const DEFAULTS = {
+    session: null, unit: null, align: 'object_outcome', policy: 'verified_stable',
+    win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem',
+    filters: [], color: 'role', style: 'action', panel: null, qbins: 3, hidden: [],
+    sort: 'session', dir: 1, grouped: true, markers: [], refs: [], medians: true,
+    tick: 'line', rasterH: 260, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
+    mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, dims: '2', heatNorm: 'z',
+    nsort: 'loading:0', axes: [0, 1, 2], heatGroup: null, cloud: false, cloudAlpha: 0.3, cloudZero: true, cloudFit: 'traj',
+  };
+  const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, ylock: null, bars: true};
+  let S = clone(DEFAULTS);
+
+  const TEMPLATES = [
+    {name: 'Touch: predator vs prey', hint: 'unit 893 style · touches aligned to contact, colour = role, style = world', state: {
+      align: 'object_outcome', filters: [{k: 'action', v: ['touch']}], color: 'role', style: 'world', panel: null,
+      win: [-2.2, 0.6], cw: [-0.5, 0], bin: 0.02, sigma: 0.05,
+      markers: [{e: 'object_visible_onset', match: 'object', occ: 'nearest', label: 'object visible', c: INK}]}},
+    {name: 'Prey touch: world × previous object', hint: 'unit 315 style · PP/PM prey captures, style = previous object', state: {
+      align: 'prey_capture', filters: [{k: 'world', v: ['PP', 'PM']}], color: 'world', style: 'previous_role', panel: null,
+      win: [-3, 1], cw: [-1, 0], bin: 0.02, sigma: 0.06,
+      markers: [{e: 'object_visible_onset', match: 'object', occ: 'nearest', label: 'prey visible', c: INK}]}},
+    {name: 'World × role × action', hint: 'every object outcome, one panel per world', state: {
+      align: 'object_outcome', filters: [], color: 'role', style: 'action', panel: 'world', win: [-1.5, 1], cw: [-0.5, 0]}},
+    {name: 'PM touches: did the trial go wrong?', hint: 'unit 893 panel B · PM touches, style = error-free trial', state: {
+      align: 'object_outcome', filters: [{k: 'world', v: ['PM']}, {k: 'action', v: ['touch']}], color: 'role',
+      style: 'trial_error_free', panel: null, win: [-2.2, 0.6], cw: [-0.5, 0]}},
+    {name: 'Trial initiation by world', hint: 'initiation-aligned, first object visible marked', state: {
+      align: 'trial_initiation', filters: [], color: 'world', style: null, panel: null, win: [-1, 3], cw: [0, 1],
+      markers: [{e: 'object_visible_onset', match: 'trial', occ: 'first_after', label: 'first object visible', c: INK}]}},
+    {name: 'Prey visible, sorted by touch time', hint: 'visibility-aligned prey, rows sorted by when the touch came', state: {
+      align: 'object_visible_onset', filters: [{k: 'role', v: ['prey']}], color: 'world', style: 'action', panel: null,
+      win: [-0.5, 2.5], cw: [0, 0.5], sort: 'marker:m1',
+      markers: [{id: 'm1', e: 'object_outcome', match: 'object', occ: 'first_after', label: 'outcome', c: INK}]}},
+  ];
+
+  const D = {
+    catalog: [], summary: null, units: [], tables: new Map(), rasters: new Map(), events: new Map(),
+    inflight: new Map(), sessionToken: 0, layout: null, model: null, views: {}, fatal: null,
+    unitMap: new Map(), popspans: new Map(), stab: null, fits: new Map(), fitErrors: new Map(), fitPending: null,
+    heatCache: new Map(), view3d: {yaw: -0.6, pitch: 0.35}, cursor: null, playTimer: 0, popLayout: null, popFit: null, popModel: null,
+    probes: new Map(), probeErrors: new Map(), probePending: null, probeShown: null, popReq: null,
+  };
+
+  function sanitize(raw) {
+    const s = {...clone(DEFAULTS), ...(raw && typeof raw === 'object' ? raw : {})};
+    const pair = (v, d) => (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite) && v[0] < v[1] ? v : d);
+    s.win = pair(s.win, DEFAULTS.win); s.win = [clamp(s.win[0], -10, -0.05), clamp(s.win[1], 0.05, 10)];
+    s.cw = pair(s.cw, DEFAULTS.cw);
+    s.bin = Number.isFinite(s.bin) ? clamp(s.bin, 0.005, 0.2) : DEFAULTS.bin;
+    s.sigma = Number.isFinite(s.sigma) ? clamp(s.sigma, 0, 0.1) : DEFAULTS.sigma;
+    for (const [k, allowed] of Object.entries({weight: ['event', 'trial'], err: ['sem', 'ci', 'none'], policy: ['verified_stable', 'all_complete'], tick: ['line', 'dot']}))
+      if (!allowed.includes(s[k])) s[k] = DEFAULTS[k];
+    for (const k of ['filters', 'hidden', 'markers', 'refs', 'unitQ', 'unitArea']) if (!Array.isArray(s[k])) s[k] = clone(DEFAULTS[k]);
+    s.markers = s.markers.filter(m => m && typeof m.e === 'string').map((m, i) => ({id: m.id || `m${i + 1}`, match: 'trial', occ: 'nearest', c: INK, ...m}));
+    s.refs = s.refs.filter(Number.isFinite);
+    s.rasterH = Number.isFinite(s.rasterH) ? clamp(s.rasterH, 80, 700) : DEFAULTS.rasterH;
+    s.qbins = [2, 3, 4, 5].includes(Number(s.qbins)) ? Number(s.qbins) : 3;
+    s.dir = s.dir === -1 ? -1 : 1;
+    if (!s.gstyle || typeof s.gstyle !== 'object' || Array.isArray(s.gstyle)) s.gstyle = {};
+    for (const [k, allowed] of Object.entries({mode: ['raster', 'population'], method: ['pca', 'ica', 'fa'], scaling: ['zscore', 'center'], dims: ['2', '3'], heatNorm: ['z', 'peak'], cloudFit: ['traj', 'cloud']}))
+      if (!allowed.includes(String(s[k]))) s[k] = DEFAULTS[k]; else s[k] = String(s[k]);
+    s.roster = Array.isArray(s.roster) ? [...new Set(s.roster.filter(Number.isInteger))].sort((a, b) => a - b) : [];
+    s.ncomp = Number.isInteger(s.ncomp) ? clamp(s.ncomp, 2, 10) : DEFAULTS.ncomp;
+    s.axes = Array.isArray(s.axes) && s.axes.length === 3 && s.axes.every(Number.isInteger) ? s.axes : clone(DEFAULTS.axes);
+    if (typeof s.nsort !== 'string') s.nsort = DEFAULTS.nsort;
+    s.cloud = s.cloud === true; s.cloudZero = s.cloudZero !== false;
+    s.cloudAlpha = Number.isFinite(s.cloudAlpha) ? clamp(s.cloudAlpha, 0.05, 1) : DEFAULTS.cloudAlpha;
+    return s;
+  }
+  function clampCw() {
+    const [pre, post] = S.win;
+    let [a, b] = S.cw;
+    a = clamp(a, pre, post); b = clamp(b, pre, post);
+    if (b - a < 0.01) { a = clamp(Math.min(a, post - 0.05), pre, post); b = clamp(a + 0.05, pre, post); }
+    S.cw = [tidy(a), tidy(b)];
+  }
+  let saveTimer = 0;
+  function saveState() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try { history.replaceState(null, '', `${location.pathname}#s=${C.encodeState(S)}`); } catch (e) { /* hash too long */ }
+      try { localStorage.setItem('eg-state', JSON.stringify(S)); } catch (e) { /* private mode */ }
+    }, 250);
+  }
+  function loadState() {
+    let parsed = null;
+    const m = location.hash.match(/[#&]s=([^&]+)/);
+    if (m) { try { parsed = C.decodeState(m[1]); } catch (e) { toast('Could not read the view in this link; using defaults.', true); } }
+    if (!parsed) { try { parsed = JSON.parse(localStorage.getItem('eg-state') || 'null'); } catch (e) { parsed = null; } }
+    S = sanitize(parsed);
+  }
+
+  // ------------------------------------------------------------- network
+  let busyCount = 0;
+  function busy(delta) { busyCount = Math.max(0, busyCount + delta); $('busy').hidden = busyCount === 0; }
+  async function getJSON(path, options) {
+    busy(1);
+    try {
+      const response = await fetch(path, options);
+      const body = await response.json().catch(() => ({error: `HTTP ${response.status}`}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      return body;
+    } finally { busy(-1); }
+  }
+  const query = obj => Object.entries(obj).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+  function once(key, factory) {
+    if (!D.inflight.has(key)) D.inflight.set(key, factory().finally(() => D.inflight.delete(key)));
+    return D.inflight.get(key);
+  }
+  const rasterKey = () => `${S.unit}|${S.align}|${S.policy}`;
+  function fetchWindow() {
+    return [clamp(Math.floor((S.win[0] - PAD) * 2) / 2 - 0.5, -11, 0), clamp(Math.ceil((S.win[1] + PAD) * 2) / 2 + 0.5, 0, 11)];
+  }
+  function rasterCovers(r) { return r && r.lo <= S.win[0] - PAD + 1e-9 && r.hi >= S.win[1] + PAD - 1e-9; }
+
+  async function ensureData() {
+    if (!D.summary || S.unit === null) return;
+    const sid = D.summary.session_id, token = D.sessionToken;
+    const jobs = [];
+    const align = S.align;
+    if (!D.tables.has(align)) {
+      jobs.push(once(`t|${align}`, async () => {
+        const raw = await getJSON(`/api/explorer/table?${query({session: sid, alignment: align})}`);
+        if (token === D.sessionToken) D.tables.set(align, C.prepareTable(raw));
+      }));
+    }
+    const key = rasterKey();
+    if (S.mode === 'population') {
+      if (!D.stab) {
+        jobs.push(once('stab', async () => {
+          const raw = await getJSON(`/api/explorer/stability?${query({session: sid})}`);
+          if (token === D.sessionToken) D.stab = decodeStability(raw);
+        }));
+      }
+      const pkey = popSpansKey();
+      if (S.roster.length && !D.popspans.has(pkey)) {
+        const units = S.roster.join(','), policy = S.policy;
+        jobs.push(once(`p|${pkey}`, async () => {
+          const raw = await getJSON(`/api/explorer/popspans?${query({session: sid, alignment: align, units, policy})}`);
+          if (token !== D.sessionToken) return;
+          D.popspans.set(pkey, raw);
+          if (D.popspans.size > 8) D.popspans.delete(D.popspans.keys().next().value);
+        }));
+      }
+    } else if (!rasterCovers(D.rasters.get(key))) {
+      const [lo, hi] = fetchWindow();
+      const unit = S.unit, policy = S.policy;
+      jobs.push(once(`r|${key}|${lo}|${hi}`, async () => {
+        const raw = await getJSON(`/api/explorer/raster?${query({session: sid, alignment: align, unit, policy, lo, hi})}`);
+        if (token !== D.sessionToken) return;
+        raw.spikesT = raw.spikes.map(a => Float64Array.from(a));
+        delete raw.spikes;
+        D.rasters.set(key, {lo, hi, data: raw});
+        if (D.rasters.size > 8) D.rasters.delete(D.rasters.keys().next().value);
+      }));
+    }
+    for (const m of S.markers) for (const e of [m.e, m.end]) {
+      if (!e || D.events.has(e)) continue;
+      jobs.push(once(`e|${e}`, async () => {
+        const raw = await getJSON(`/api/explorer/events?${query({session: sid, event: e})}`);
+        if (token === D.sessionToken) D.events.set(e, C.indexEvents(raw));
+      }));
+    }
+    if (!jobs.length) return;
+    schedule();
+    const results = await Promise.allSettled(jobs);
+    const failed = results.find(r => r.status === 'rejected');
+    if (failed) toast(failed.reason.message, true);
+    if (token === D.sessionToken) { renderStructure(); schedule(); }
+  }
+
+  async function selectSession(sid) {
+    const token = ++D.sessionToken;
+    S.session = sid;
+    D.summary = null; D.tables.clear(); D.rasters.clear(); D.events.clear(); D.model = null;
+    D.popspans.clear(); D.stab = null; D.fits.clear(); D.fitErrors.clear(); D.heatCache.clear(); D.popFit = null; D.popLayout = null; stopPlay();
+    D.probes.clear(); D.probeErrors.clear(); D.probeShown = null;
+    $('sessionSelect').value = sid;
+    showLoading(`Opening ${sid}`, 'The first open of a session verifies the whole NWB file — about 1–2 minutes for a 3 GB recording. After that, units, alignments and knobs respond immediately.');
+    try {
+      const job = await getJSON('/api/jobs', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'load', session_id: sid})});
+      const t0 = Date.now();
+      for (;;) {
+        const j = await getJSON(`/api/jobs/${job.id}`);
+        if (token !== D.sessionToken) return;
+        if (j.status === 'error') throw new Error(j.error || 'Session load failed');
+        if (j.status === 'done') break;
+        showLoading(`Opening ${sid}`, `${j.message} (${Math.round((Date.now() - t0) / 1000)} s)`);
+        await sleep(700);
+      }
+      const summary = await getJSON(`/api/explorer/session?${query({session: sid})}`);
+      if (token !== D.sessionToken) return;
+      D.summary = summary;
+      D.units = summary.units.map(u => ({...u, rate: u.n_spikes / Math.max(1, summary.duration_s)}));
+      D.unitMap = new Map(D.units.map(u => [u.id, u]));
+      S.roster = S.roster.filter(id => D.unitMap.has(id));
+      if (!D.units.some(u => u.id === S.unit)) S.unit = (unitList()[0] || D.units[0]).id;
+      if (!summary.alignments.some(a => a.key === S.align)) S.align = 'object_outcome';
+      D.fatal = null;
+      for (const n of summary.notices || []) toast(n);
+      saveState();
+      renderHeader();
+      await ensureData();
+    } catch (e) {
+      if (token !== D.sessionToken) return;
+      D.fatal = e.message;
+      showEmpty('Could not open this session', esc(e.message));
+    }
+  }
+
+  // --------------------------------------------------------------- model
+  function activeFilters(T) { return S.filters.filter(f => T.byKey.has(f.k)); }
+  function validField(T, key) { return key && T.byKey.has(key) ? key : null; }
+
+  function buildModel() {
+    const T = D.tables.get(S.align);
+    const R = D.rasters.get(rasterKey());
+    if (!T || !rasterCovers(R) || R.data.n !== T.n) return null;
+    const raster = R.data;
+    const [pre, post] = S.win;
+    clampCw();
+    const elig = C.eligibility(raster, pre, post);
+    const fmask = C.filterMask(T, activeFilters(T));
+    const rows = [], excl = {1: 0, 2: 0, 3: 0};
+    let filtered = 0;
+    for (let i = 0; i < T.n; i++) {
+      if (!fmask[i]) { filtered++; continue; }
+      if (elig[i]) excl[elig[i]]++; else rows.push(i);
+    }
+    const spec = {color: validField(T, S.color), style: validField(T, S.style), panel: validField(T, S.panel), qbins: S.qbins};
+    const grouping = C.groupRows(T, rows, spec);
+    grouping.hasMissingColor = grouping.groups.some(g => g.colorKey === C.MISSING);
+    const hidden = new Set(S.hidden);
+    const spikes = raster.spikesT, spikesOf = i => spikes[i];
+    const grid = C.psthGrid(pre, post, S.bin, S.sigma);
+    const cw = S.cw;
+    const markerData = {};
+    for (const m of S.markers) {
+      if (m.off) continue;
+      const start = D.events.get(m.e), end = m.end ? D.events.get(m.end) : null;
+      if (!start || (m.end && !end)) continue;
+      markerData[m.id] = C.markerTimes(T, rows, start, m, end);
+    }
+    // Per-row smoothed curves depend only on the unit's spikes and the grid, so
+    // filtering, grouping, sorting and markers reuse them.
+    const curveKey = `${rasterKey()}|${R.lo}|${R.hi}|${pre}|${post}|${S.bin}|${S.sigma}`;
+    if (!D.curves || D.curves.key !== curveKey) D.curves = {key: curveKey, map: new Map()};
+    const curveMap = D.curves.map;
+    const curveOf = i => { let c = curveMap.get(i); if (!c) { c = C.rowCurve(spikes[i], grid); curveMap.set(i, c); } return c; };
+    const counts = new Map();
+    const count = i => { if (!counts.has(i)) counts.set(i, C.countIn(spikes[i], cw[0], cw[1])); return counts.get(i); };
+    const ctx = {count, markers: markerData};
+    for (const g of grouping.groups) {
+      g.hidden = hidden.has(g.key);
+      const own = S.gstyle[g.key] || {};
+      g.color = own.c ? paint(own.c) : groupColor(g, grouping, T);
+      g.dash = Number.isInteger(own.d) ? DASHES[own.d % DASHES.length] : DASHES[g.styleIndex % DASHES.length];
+      g.sorted = C.sortRows(T, g.rows, S.sort, S.dir, ctx);
+      if (!g.hidden) {
+        g.psth = C.psthFromCurves(g.rows, curveOf, T.trial, grid.n, S.weight);
+        g.rate = C.windowRates(g.rows, spikesOf, T.trial, cw[0], cw[1], S.weight);
+      }
+    }
+    const visible = grouping.groups.filter(g => !g.hidden);
+    const errMul = S.err === 'ci' ? 1.96 : S.err === 'sem' ? 1 : 0;
+    let ymax = 0;
+    for (const g of visible) for (let j = 0; j < grid.n; j++) {
+      const v = g.psth.mean[j] + errMul * (g.psth.sem[j] || 0);
+      if (Number.isFinite(v)) ymax = Math.max(ymax, v);
+    }
+    ymax = S.ylock || niceMax(Math.max(1, ymax * 1.06));
+    const unit = D.units.find(u => u.id === S.unit) || raster.unit;
+    return {T, raster, rows, grouping, visible, grid, cw, excl, filtered, markerData, ctx, ymax, errMul, unit, pre, post, spikes};
+  }
+  function niceMax(v) {
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
+    return 10 * p;
+  }
+  function niceTicks(lo, hi, target) {
+    const span = hi - lo, raw = span / Math.max(1, target);
+    const p = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw) || 10 * p;
+    const out = [];
+    for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + 1e-9; v += step) out.push(tidy(v, 6));
+    return out;
+  }
+
+  // -------------------------------------------------------------- figure
+  function unitName(u) {
+    if (!u) return 'unit —';
+    return `unit ${u.id}${u.peak_channel !== null && u.peak_channel !== undefined ? ` · ch ${u.peak_channel}` : ''}`;
+  }
+  const shortSession = id => { const m = /^sub-([^_]+)_ses-(\d{4})_(\d{2})_(\d{2})(.*)$/.exec(id); return m ? `${m[1]} · ${m[2]}-${m[3]}-${m[4]}${m[5]}` : id; };
+  const policyText = () => (S.policy === 'verified_stable' ? 'stable trials' : 'all complete trials');
+
+  /**
+   * Build the figure SVG. Returns {svg, layout}. opts.export adds a title and legend
+   * and inlines everything so the file stands alone.
+   */
+  function figureSVG(M, width, opts = {}) {
+    const ink = figVar('--fig-ink'), muted = figVar('--fig-muted'), gridC = figVar('--fig-grid'),
+      axisC = figVar('--fig-axis'), windowC = figVar('--fig-window'), bg = figVar('--fig-bg');
+    const narrow = width < 560;
+    const font = '-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif';
+    const panels = M.grouping.panels.filter(p => M.visible.some(g => g.panel === p.key));
+    if (!panels.length) panels.push({key: '', label: ''});
+    const nP = panels.length;
+    const cols = nP > 1 ? Math.max(1, Math.min(nP, Math.floor((width + 26) / 236))) : 1;
+    const nRowsP = Math.ceil(nP / cols);
+    const showN = S.grouped;
+    const ml = narrow ? 42 : 52, mr = showN ? (narrow ? 30 : 38) : 10;
+    const gapX = 26, gapY = 26;
+    const rasterH = Math.round(S.rasterH * (narrow ? 0.8 : 1));
+    const psthH = narrow ? 170 : 205;
+    const titleH = nP > 1 ? 22 : 4;
+    const markerLabelH = S.medians && Object.keys(M.markerData).length ? 14 : 0;
+    const xAxisH = 40;
+    const panelW = (width - (cols - 1) * gapX) / cols;
+    const plotW = Math.max(60, panelW - ml - mr);
+    let header = '', top = 0;
+    if (opts.export) {
+      const legendLines = exportLegend(M, width, font, ink, muted);
+      header = `<text x="0" y="16" font-size="14" font-weight="600" fill="${ink}">${esc(opts.title)}</text>` +
+        `<text x="0" y="34" font-size="11.5" fill="${muted}">${esc(opts.subtitle)}</text>` +
+        `<g transform="translate(0,46)">${legendLines.svg}</g>`;
+      top = 52 + legendLines.height;
+    }
+    const panelH = titleH + rasterH + 10 + markerLabelH + psthH + xAxisH;
+    const height = top + nRowsP * panelH + (nRowsP - 1) * gapY;
+    const [pre, post] = [M.pre, M.post];
+    const out = [];
+    const layout = {panels: [], pre, post, ymax: M.ymax, width, height};
+    const f = v => f1(v);
+    panels.forEach((p, pi) => {
+      const cx = (pi % cols) * (panelW + gapX), cy = top + Math.floor(pi / cols) * (panelH + gapY);
+      const x0 = cx + ml, x1 = x0 + plotW;
+      const X = t => x0 + (t - pre) / (post - pre) * plotW;
+      const rTop = cy + titleH, rBot = rTop + rasterH;
+      const pTop = rBot + 10 + markerLabelH, pBot = pTop + psthH;
+      const Y = v => pBot - clamp(v / M.ymax, 0, 1.02) * psthH;
+      const gs = M.visible.filter(g => g.panel === p.key);
+      const L = {key: p.key, x0, x1, plotW, rTop, rBot, pTop, pBot, blocks: [], groups: gs};
+      layout.panels.push(L);
+      if (nP > 1) out.push(`<text x="${f(x0)}" y="${f(cy + 14)}" font-size="12.5" font-weight="600" fill="${ink}">${esc(p.label)}</text>`);
+
+      // ---- raster
+      let blocks;
+      if (S.grouped) blocks = gs.map(g => ({g, rows: g.sorted}));
+      else {
+        const all = C.sortRows(M.T, gs.flatMap(g => g.rows), S.sort, S.dir, M.ctx);
+        const owner = new Map(); gs.forEach(g => g.rows.forEach(i => owner.set(i, g)));
+        blocks = [{g: null, rows: all, owner}];
+      }
+      const total = blocks.reduce((a, b) => a + b.rows.length, 0);
+      const cap = Math.max(300, Math.round(rasterH * 4));
+      if (total > cap) {
+        blocks.forEach(b => { b.all = b.rows.length; b.rows = C.thin(b.rows, Math.max(1, Math.round(b.rows.length * cap / total))); });
+        L.thinned = {shown: blocks.reduce((a, b) => a + b.rows.length, 0), total};
+      }
+      const nRows = blocks.reduce((a, b) => a + b.rows.length, 0);
+      const gap = S.grouped ? 3 : 0;
+      const rowH = (rasterH - gap * Math.max(0, blocks.length - 1)) / Math.max(1, nRows);
+      const cw0 = X(clamp(M.cw[0], pre, post)), cw1 = X(clamp(M.cw[1], pre, post));
+      out.push(`<rect x="${f(cw0)}" y="${f(rTop)}" width="${f(cw1 - cw0)}" height="${rasterH}" fill="${windowC}" opacity="${isDark() ? 0.55 : 0.5}"/>`);
+      const markers = S.markers.filter(m => !m.off && M.markerData[m.id]);
+      let y = rTop;
+      const tickH = Math.min(9, Math.max(1, rowH * 0.8));
+      const bandPaths = new Map(), tickPaths = new Map(), dotPaths = new Map();
+      for (const b of blocks) {
+        const blockTop = y;
+        b.rows.forEach((i, k) => {
+          const yc = y + (k + 0.5) * rowH;
+          const g = b.g || b.owner.get(i);
+          const spikes = M.spikes[i];
+          let d = tickPaths.get(g) || '';
+          if (S.tick === 'dot') {
+            const r = f(Math.min(1.5, Math.max(0.55, rowH * 0.42)));
+            for (let s = C.lowerBound(spikes, pre); s < spikes.length && spikes[s] < post; s++)
+              d += `M${f(X(spikes[s]) - r)} ${f(yc)}a${r} ${r} 0 1 0 ${f(2 * r)} 0a${r} ${r} 0 1 0 ${f(-2 * r)} 0`;
+          } else {
+            for (let s = C.lowerBound(spikes, pre); s < spikes.length && spikes[s] < post; s++)
+              d += `M${f(X(spikes[s]))} ${f(yc - tickH / 2)}v${f(tickH)}`;
+          }
+          tickPaths.set(g, d);
+          for (const m of markers) {
+            const hits = M.markerData[m.id][i];
+            if (!hits) continue;
+            for (const h of hits) {
+              if (m.end && Number.isFinite(h.t2)) {
+                const a = clamp(h.t, pre, post), z = clamp(h.t2, pre, post);
+                if (z > a) bandPaths.set(m, (bandPaths.get(m) || '') + `M${f(X(a))} ${f(yc - rowH / 2)}H${f(X(z))}v${f(Math.max(rowH, 0.6))}H${f(X(a))}Z`);
+              }
+              if (h.t >= pre && h.t <= post) {
+                const r = f(clamp(rowH * 0.55, 1.1, 2.6));
+                dotPaths.set(m, (dotPaths.get(m) || '') + `M${f(X(h.t) - r)} ${f(yc)}a${r} ${r} 0 1 0 ${f(2 * r)} 0a${r} ${r} 0 1 0 ${f(-2 * r)} 0`);
+              }
+            }
+          }
+        });
+        const h = b.rows.length * rowH;
+        L.blocks.push({g: b.g, owner: b.owner, rows: b.rows, top: blockTop, rowH, height: h});
+        if (b.g) {
+          out.push(`<rect x="${f(x0 - 7)}" y="${f(blockTop)}" width="3" height="${f(Math.max(h, 1))}" rx="1.5" fill="${b.g.color}"/>`);
+          if (showN && h >= 10) out.push(`<text x="${f(x1 + 5)}" y="${f(blockTop + h / 2 + 3.5)}" font-size="10" fill="${b.g.color}">${b.all || b.rows.length}</text>`);
+        }
+        y += h + gap;
+      }
+      for (const [m, d] of bandPaths) out.push(`<path d="${d}" fill="${paint(m.c)}" opacity="0.16"/>`);
+      for (const [g, d] of tickPaths) {
+        if (!d) continue;
+        out.push(S.tick === 'dot' ? `<path d="${d}" fill="${g.color}"/>` : `<path d="${d}" stroke="${g.color}" stroke-width="${rowH < 1.5 ? 0.9 : 1.1}" fill="none"/>`);
+      }
+      for (const [m, d] of dotPaths) out.push(`<path d="${d}" fill="${paint(m.c)}" stroke="${bg}" stroke-width="0.5"/>`);
+      if (!nRows) out.push(`<text x="${f((x0 + x1) / 2)}" y="${f(rTop + rasterH / 2)}" text-anchor="middle" font-size="12" fill="${muted}">no events</text>`);
+      const zeroX = X(0);
+      if (pre < 0 && post > 0) out.push(`<line x1="${f(zeroX)}" x2="${f(zeroX)}" y1="${f(rTop)}" y2="${f(rBot)}" stroke="${ink}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>`);
+      for (const r of S.refs) if (r > pre && r < post) out.push(`<line x1="${f(X(r))}" x2="${f(X(r))}" y1="${f(rTop)}" y2="${f(rBot)}" stroke="${muted}" stroke-width="1" stroke-dasharray="5 3"/>`);
+      out.push(`<text transform="translate(${f(x0 - 16)},${f((rTop + rBot) / 2)}) rotate(-90)" text-anchor="middle" font-size="11" fill="${muted}">${L.thinned ? `events (${L.thinned.shown} of ${L.thinned.total} drawn)` : 'events'}</text>`);
+
+      // ---- PSTH
+      const yt = niceTicks(0, M.ymax, psthH > 180 ? 5 : 4);
+      for (const v of yt) out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(Y(v))}" y2="${f(Y(v))}" stroke="${gridC}" stroke-width="1"/>`);
+      out.push(`<rect x="${f(cw0)}" y="${f(pTop)}" width="${f(cw1 - cw0)}" height="${psthH}" fill="${windowC}" opacity="${isDark() ? 0.55 : 0.6}"/>`);
+      if (pre < 0 && post > 0) out.push(`<line x1="${f(zeroX)}" x2="${f(zeroX)}" y1="${f(pTop)}" y2="${f(pBot)}" stroke="${ink}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>`);
+      for (const r of S.refs) if (r > pre && r < post) out.push(`<line x1="${f(X(r))}" x2="${f(X(r))}" y1="${f(pTop)}" y2="${f(pBot)}" stroke="${muted}" stroke-width="1" stroke-dasharray="5 3"/>`);
+      // marker medians
+      if (S.medians) {
+        let li = 0;
+        for (const m of markers) {
+          const rowsHere = gs.flatMap(g => g.rows);
+          const med = C.median(rowsHere.map(i => (M.markerData[m.id][i] && M.markerData[m.id][i][0] ? M.markerData[m.id][i][0].t : NaN)));
+          if (!(med >= pre && med <= post)) continue;
+          const mx = X(med), c = paint(m.c);
+          out.push(`<line x1="${f(mx)}" x2="${f(mx)}" y1="${f(pTop - markerLabelH + 2)}" y2="${f(pBot)}" stroke="${c}" stroke-width="1.2" stroke-dasharray="4 3"/>`);
+          const anchor = mx > x1 - 110 ? 'end' : 'start';
+          out.push(`<text x="${f(mx + (anchor === 'end' ? -4 : 4))}" y="${f(pTop - markerLabelH + 10 + (li % 2) * 11)}" font-size="10.5" fill="${c}" text-anchor="${anchor}">${esc(m.label || eventLabel(m.e))} (median)</text>`);
+          for (const g of gs) {
+            const gm = C.median(g.rows.map(i => (M.markerData[m.id][i] && M.markerData[m.id][i][0] ? M.markerData[m.id][i][0].t : NaN)));
+            if (gm >= pre && gm <= post) out.push(`<path d="M${f(X(gm) - 3.5)} ${f(pTop)}h7l-3.5 5z" fill="${g.color}"/>`);
+          }
+          li++;
+        }
+      }
+      out.push(`<g clip-path="url(#clip${pi})">`);
+      out.push(`<clipPath id="clip${pi}"><rect x="${f(x0)}" y="${f(pTop - 2)}" width="${f(plotW)}" height="${f(psthH + 2)}"/></clipPath>`);
+      const times = M.grid.times;
+      for (const g of gs) {
+        if (!M.errMul || g.psth.n < 2) continue;
+        let d = '';
+        for (let j = 0; j < times.length; j++) d += `${j ? 'L' : 'M'}${f(X(times[j]))} ${f(Y(g.psth.mean[j] + M.errMul * g.psth.sem[j]))}`;
+        for (let j = times.length - 1; j >= 0; j--) d += `L${f(X(times[j]))} ${f(Y(Math.max(0, g.psth.mean[j] - M.errMul * g.psth.sem[j])))}`;
+        out.push(`<path d="${d}Z" fill="${g.color}" opacity="${isDark() ? 0.22 : 0.15}"/>`);
+      }
+      for (const g of gs) {
+        let d = '';
+        for (let j = 0; j < times.length; j++) d += `${j ? 'L' : 'M'}${f(X(times[j]))} ${f(Y(g.psth.mean[j]))}`;
+        out.push(`<path d="${d}" fill="none" stroke="${g.color}" stroke-width="${narrow ? 1.8 : 2}" stroke-linejoin="round" stroke-linecap="round"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/>`);
+      }
+      out.push('</g>');
+      // axes
+      out.push(`<line x1="${f(x0)}" x2="${f(x0)}" y1="${f(pTop)}" y2="${f(pBot)}" stroke="${axisC}"/>`);
+      out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(pBot)}" y2="${f(pBot)}" stroke="${axisC}"/>`);
+      for (const v of yt) out.push(`<text x="${f(x0 - 6)}" y="${f(Y(v) + 3.5)}" text-anchor="end" font-size="10.5" fill="${muted}">${C.fmtNum(v)}</text>`);
+      const xt = niceTicks(pre, post, Math.max(3, Math.round(plotW / 80)));
+      for (const v of xt) {
+        out.push(`<line x1="${f(X(v))}" x2="${f(X(v))}" y1="${f(pBot)}" y2="${f(pBot + 4)}" stroke="${axisC}"/>`);
+        out.push(`<text x="${f(X(v))}" y="${f(pBot + 16)}" text-anchor="middle" font-size="10.5" fill="${muted}">${C.fmtNum(v)}</text>`);
+      }
+      out.push(`<text x="${f((x0 + x1) / 2)}" y="${f(pBot + 33)}" text-anchor="middle" font-size="11.5" fill="${ink}">time from ${esc(eventLabel(S.align))} (s)</text>`);
+      out.push(`<text transform="translate(${f(cx + 11)},${f((pTop + pBot) / 2)}) rotate(-90)" text-anchor="middle" font-size="11.5" fill="${ink}">spikes/s</text>`);
+      if (!opts.export) {
+        out.push(`<rect class="hit" data-kind="raster" data-p="${pi}" x="${f(x0)}" y="${f(rTop)}" width="${f(plotW)}" height="${rasterH}" fill="transparent"/>`);
+        out.push(`<rect class="hit" data-kind="psth" data-p="${pi}" x="${f(x0)}" y="${f(pTop)}" width="${f(plotW)}" height="${psthH}" fill="transparent"/>`);
+      }
+    });
+    const meta = opts.export ? `<metadata>${esc(JSON.stringify(provenance(M)))}</metadata>` : '';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${Math.ceil(height)}" viewBox="0 0 ${width} ${Math.ceil(height)}" font-family="${font}">` +
+      meta + (opts.export ? `<rect x="-20" y="-20" width="${width + 40}" height="${Math.ceil(height) + 40}" fill="${bg}"/>` : '') +
+      header + out.join('') + (opts.export ? '' : '<g id="hoverLayer" pointer-events="none"></g>') + '</svg>';
+    return {svg, layout};
+  }
+
+  function exportLegend(M, width, font, ink, muted) {
+    let x = 0, y = 0;
+    const parts = [];
+    for (const g of M.visible) {
+      const text = `${g.label}${g.panelLabel ? ` (${g.panelLabel})` : ''} · n=${g.psth.n}`;
+      const w = 34 + text.length * 6.1 + 16;
+      if (x + w > width && x > 0) { x = 0; y += 18; }
+      parts.push(`<line x1="${x}" x2="${x + 26}" y1="${y + 6}" y2="${y + 6}" stroke="${g.color}" stroke-width="2.2"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/>` +
+        `<text x="${x + 32}" y="${y + 10}" font-size="11" fill="${ink}">${esc(text)}</text>`);
+      x += w;
+    }
+    return {svg: parts.join(''), height: y + 18};
+  }
+
+  function barsSVG(M, width, height) {
+    const ink = figVar('--fig-ink'), muted = figVar('--fig-muted'), gridC = figVar('--fig-grid'), axisC = figVar('--fig-axis');
+    const gs = M.visible.filter(g => g.rate && g.rate.n);
+    if (!gs.length) return '';
+    const f = f1;
+    const labelOf = g => g.label + (g.panelLabel ? ` · ${g.panelLabel}` : '');
+    const ml = 36, mr = 6, mt = 26;
+    const slotsGuess = gs.length + (new Set(gs.map(g => g.panel)).size - 1) * 0.6;
+    const longestLine = Math.max(...gs.map(g => Math.max(...labelOf(g).split(' · ').map(x => x.length))));
+    const many = gs.length > 6 || longestLine * 5.3 > (width - ml - mr) / slotsGuess * 0.96;
+    const longest = Math.max(...gs.map(g => labelOf(g).length));
+    const mb = many ? Math.min(130, 22 + longest * 4.3) : 22 + 11 * Math.max(...gs.map(g => Math.min(3, labelOf(g).split(' · ').length)));
+    const w = width - ml - mr, h = Math.max(60, height - mt - mb);
+    let max = 0;
+    for (const g of gs) max = Math.max(max, g.rate.mean + (M.errMul || 1) * (g.rate.sem || 0));
+    max = niceMax(Math.max(1, max * 1.08));
+    const Y = v => mt + h - v / max * h;
+    const panelsSeen = [];
+    gs.forEach(g => { if (!panelsSeen.includes(g.panel)) panelsSeen.push(g.panel); });
+    const slots = gs.length + (panelsSeen.length - 1) * 0.6;
+    const step = w / slots, bw = Math.min(46, step * 0.72);
+    const out = [];
+    out.push(`<text x="0" y="12" font-size="11.5" font-weight="600" fill="${ink}">rate in [${C.fmtNum(M.cw[0])}, ${C.fmtNum(M.cw[1])}) s</text>`);
+    for (const v of niceTicks(0, max, 4)) {
+      out.push(`<line x1="${ml}" x2="${ml + w}" y1="${f(Y(v))}" y2="${f(Y(v))}" stroke="${gridC}"/>`);
+      out.push(`<text x="${ml - 5}" y="${f(Y(v) + 3.5)}" text-anchor="end" font-size="10" fill="${muted}">${C.fmtNum(v)}</text>`);
+    }
+    let slot = 0, lastPanel = gs[0].panel;
+    gs.forEach(g => {
+      if (g.panel !== lastPanel) { slot += 0.6; lastPanel = g.panel; }
+      const cx = ml + (slot + 0.5) * step;
+      slot += 1;
+      const top = Y(g.rate.mean), e = (M.errMul || 1) * (g.rate.sem || 0);
+      const light = g.dash ? 0.45 : 0.88;
+      out.push(`<rect x="${f(cx - bw / 2)}" y="${f(top)}" width="${f(bw)}" height="${f(mt + h - top)}" rx="2" fill="${g.color}" opacity="${light}"${g.dash ? ` stroke="${g.color}" stroke-dasharray="${g.dash}" stroke-width="1.4"` : ''}/>`);
+      if (g.rate.n > 1) out.push(`<path d="M${f(cx)} ${f(Y(g.rate.mean + e))}V${f(Y(Math.max(0, g.rate.mean - e)))}M${f(cx - 4)} ${f(Y(g.rate.mean + e))}h8M${f(cx - 4)} ${f(Y(Math.max(0, g.rate.mean - e)))}h8" stroke="${ink}" stroke-width="1.2" fill="none"/>`);
+      out.push(`<text x="${f(cx)}" y="${f(mt + h - 4)}" text-anchor="middle" font-size="9.5" fill="${light > 0.6 ? '#fff' : ink}">${g.rate.n}</text>`);
+      const lines = labelOf(g).split(' · ');
+      if (many) out.push(`<text transform="translate(${f(cx + 3)},${f(mt + h + 10)}) rotate(-40)" text-anchor="end" font-size="9.5" fill="${muted}">${esc(lines.join(' · '))}</text>`);
+      else lines.slice(0, 3).forEach((line, k) => out.push(`<text x="${f(cx)}" y="${f(mt + h + 13 + k * 11)}" text-anchor="middle" font-size="9.5" fill="${muted}">${esc(line)}</text>`));
+    });
+    out.push(`<line x1="${ml}" x2="${ml + w}" y1="${f(mt + h)}" y2="${f(mt + h)}" stroke="${axisC}"/>`);
+    out.push(`<text transform="translate(10,${f(mt + h / 2)}) rotate(-90)" text-anchor="middle" font-size="10.5" fill="${muted}">spikes/s (mean ± ${S.err === 'ci' ? '95% CI' : 'SEM'})</text>`);
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">${out.join('')}</svg>`;
+  }
+
+  // -------------------------------------------------------------- render
+  // requestAnimationFrame coalesces slider drags; the timer covers hidden tabs, where frames never fire.
+  let pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    const run = () => { if (!pending) return; pending = false; render(); };
+    requestAnimationFrame(run);
+    setTimeout(run, 80);
+  }
+  function changed({data = false, structure = false} = {}) {
+    saveState();
+    if (structure) renderStructure();
+    syncControls();
+    if (data) ensureData();
+    schedule();
+  }
+
+  function renderHeader() {
+    const u = D.units.find(x => x.id === S.unit);
+    $('unitLabel').textContent = u ? `${u.id}${u.peak_channel !== null && u.peak_channel !== undefined ? ` · ch ${u.peak_channel}` : ''}` : '—';
+    $('unitBtn').title = u ? `${unitName(u)} · ${u.area || 'area ?'} · ${u.quality}` : '';
+    $('rosterLabel').textContent = S.roster.length ? `${S.roster.length} neurons` : 'no neurons';
+    const a = D.summary && D.summary.alignments.find(x => x.key === S.align);
+    $('alignLabel').textContent = eventLabel(S.align) + (a ? ` · ${a.n}` : '');
+  }
+
+  function render() {
+    renderHeader();
+    if (D.fatal) return;
+    if (!D.summary) return;
+    if (S.mode === 'population') { D.layout = null; renderPopulation(); return; }
+    const M = buildModel();
+    const fig = $('figure');
+    if (!M) {
+      if (D.model && fig.querySelector('svg')) fig.classList.add('stale');
+      else showLoading('Loading raster…', '');
+      return;
+    }
+    fig.classList.remove('stale');
+    D.model = M;
+    $('empty').hidden = true;
+    const u = M.unit;
+    const title = `${unitName(u)} · ${u.area || 'area ?'} · ${String(u.quality || '').toUpperCase()}`;
+    const subtitle = `${eventLabel(S.align)} · ${policyText()} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.weight === 'trial' ? 'trial-weighted' : 'event-weighted'} mean ± ${S.err === 'none' ? '—' : S.err === 'ci' ? '95% CI' : 'SEM'}`;
+    $('title').textContent = title;
+    $('subtitle').textContent = subtitle;
+    renderSupport(M);
+    renderLegend(M);
+    renderQuickFilters(M);
+    if (!M.rows.length) {
+      fig.innerHTML = ''; $('bars').innerHTML = ''; D.layout = null;
+      renderEmptyReason(M);
+      return;
+    }
+    const wrap = document.querySelector('.figure-wrap');
+    const stageW = $('stage').clientWidth - 36;
+    const side = S.bars && stageW >= 760 && M.grouping.panels.length <= 1;
+    wrap.classList.toggle('stacked', !side);
+    const barsW = side ? 210 : 0;
+    const width = Math.max(260, Math.floor((wrap.clientWidth || stageW) - barsW - (side ? 8 : 0)));
+    const {svg, layout} = figureSVG(M, width);
+    fig.innerHTML = svg;
+    D.layout = layout;
+    D.figMeta = {title, subtitle, width};
+    if (S.bars) {
+      const h = side ? Math.min(380, Math.max(260, layout.height * 0.6)) : 260;
+      $('bars').innerHTML = barsSVG(M, side ? barsW : Math.min(Math.max(260, width), 140 + 70 * M.visible.length), h);
+      $('bars').style.marginTop = side ? `${Math.max(0, layout.panels[0].pTop - 30)}px` : '';
+    } else $('bars').innerHTML = '';
+    $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · rows are events; half-open count window; ${S.policy === 'verified_stable' ? 'stability from the exact NWB (v0.1 rule, 0.4 s guard)' : 'no stability filter'} · electro_gui ${VERSION}`;
+  }
+
+  function renderSupport(M) {
+    const shown = M.visible.reduce((a, g) => a + g.rows.length, 0);
+    const trials = new Set(); M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
+    const ex = M.excl[1] + M.excl[2] + M.excl[3];
+    const bits = [`<b>${shown}</b> events · <b>${trials.size}</b> trials`];
+    const detail = [];
+    if (M.filtered) detail.push(`${M.filtered} filtered out`);
+    if (M.excl[1] + M.excl[2]) detail.push(`${M.excl[1] + M.excl[2]} in trials not ${S.policy === 'verified_stable' ? 'stable for this unit' : 'complete'}`);
+    if (M.excl[3]) detail.push(`${M.excl[3]} whose window leaves the stable run`);
+    const hiddenRows = M.grouping.groups.filter(g => g.hidden).reduce((a, g) => a + g.rows.length, 0);
+    if (hiddenRows) detail.push(`${hiddenRows} in hidden groups`);
+    $('support').innerHTML = bits.join('') + (detail.length ? `<br>${esc(detail.join(' · '))}` : '') + (ex && S.policy === 'verified_stable' && !M.rows.length ? '' : '');
+  }
+
+  function renderEmptyReason(M) {
+    const e = $('empty');
+    const reasons = [];
+    const stab = M.excl[1] + M.excl[2];
+    if (stab) reasons.push(`${stab} events are in trials that are not ${S.policy === 'verified_stable' ? 'stable for this unit' : 'complete'}.`);
+    if (M.excl[3]) reasons.push(`${M.excl[3]} events have a window (plus the 0.4 s guard) that leaves the unit's stable run — try a shorter window.`);
+    if (M.filtered === M.T.n) reasons.push('The filters exclude every event.');
+    e.innerHTML = `<h3>No events to show</h3>${reasons.map(r => `<p>${esc(r)}</p>`).join('')}` +
+      (S.policy === 'verified_stable' && stab ? '<button class="primary" type="button" data-act="all-complete">Use all complete trials</button> ' : '') +
+      (S.filters.length ? '<button class="small" type="button" data-act="clear-filters">Clear filters</button>' : '');
+    e.hidden = false;
+  }
+
+  function renderLegend(M) {
+    const groups = M.grouping.groups;
+    const hiddenAny = groups.some(g => g.hidden);
+    const html = groups.map(g => {
+      const byTrial = S.weight === 'trial';
+      const n = g.hidden ? g.rows.length : g.psth ? g.psth.n : byTrial ? new Set(g.rows.map(i => M.T.trial[i])).size : g.rows.length;
+      const unitWord = byTrial ? 'trials' : 'events';
+      return `<button class="lg${g.hidden ? ' off' : ''}" type="button" data-g="${esc(g.key)}" title="${g.hidden ? 'Show' : 'Hide'} this group · double-click to show only this group">` +
+        `<svg viewBox="0 0 26 10"><line x1="1" x2="25" y1="5" y2="5" stroke="${g.color}" stroke-width="2.4" stroke-linecap="round"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/></svg>` +
+        `${esc(g.label)}${g.panelLabel ? ` <small>· ${esc(g.panelLabel)}</small>` : ''} <small>${n} ${g.hidden ? 'events' : unitWord}</small></button>`;
+    }).join('');
+    const hint = matchMedia('(hover: none)').matches ? 'tap to hide · hold to restyle' : 'click to hide · right-click to restyle';
+    $('legend').innerHTML = html + (hiddenAny ? '<button class="link" type="button" data-g="__all">show all</button>' : '') + (groups.length ? `<span class="lg-hint">${hint}</span>` : '');
+  }
+
+  function showLoading(title, text) {
+    $('figure').innerHTML = `<div class="loading-card"><div class="spinner"></div><div><b>${esc(title)}</b><p>${esc(text)}</p></div></div>`;
+    $('figure').classList.remove('stale');
+    $('bars').innerHTML = '';
+    $('legend').innerHTML = '';
+    D.layout = null;
+  }
+  function showEmpty(title, html) {
+    $('figure').innerHTML = '';
+    $('bars').innerHTML = '';
+    $('empty').innerHTML = `<h3>${esc(title)}</h3><p>${html}</p>`;
+    $('empty').hidden = false;
+  }
+
+  // ------------------------------------------------------------ controls
+  function fieldOptions(T, {none = 'none', grouping = false, sortExtras = false} = {}) {
+    const groups = new Map(FIELD_GROUP_ORDER.map(g => [g, []]));
+    for (const col of T.columns) {
+      if (grouping && col.kind === 'cat' && col.levels.length > 16) continue;
+      const g = fieldGroup(col);
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(col);
+    }
+    const common = groups.get('Common');
+    common.sort((a, b) => COMMON_FIELDS.indexOf(a.key) - COMMON_FIELDS.indexOf(b.key));
+    let html = none ? `<option value="">${esc(none)}</option>` : '';
+    if (sortExtras) {
+      html = '<optgroup label="Rows"><option value="session">session order</option><option value="count">spikes in count window</option>';
+      for (const m of S.markers) html += `<option value="marker:${esc(m.id)}">marker: ${esc(m.label || eventLabel(m.e))}</option>`;
+      html += '</optgroup>';
+    }
+    for (const [name, cols] of groups) {
+      if (!cols.length) continue;
+      if (name !== 'Common') cols.sort((a, b) => a.label.localeCompare(b.label));
+      html += `<optgroup label="${esc(name)}">` + cols.map(c => {
+        const v = sortExtras ? `field:${c.key}` : c.key;
+        const extra = !sortExtras && c.kind === 'num' && !c.discrete ? ' (binned)' : '';
+        return `<option value="${esc(v)}">${esc(c.label)}${extra}</option>`;
+      }).join('') + '</optgroup>';
+    }
+    return html;
+  }
+
+  function renderStructure() {
+    const T = D.tables.get(S.align);
+    if (T) {
+      $('colorBy').innerHTML = fieldOptions(T, {none: 'none', grouping: true});
+      $('styleBy').innerHTML = fieldOptions(T, {none: 'none', grouping: true});
+      $('panelBy').innerHTML = fieldOptions(T, {none: 'none', grouping: true});
+      $('sortBy').innerHTML = S.mode === 'population'
+        ? [...Array(S.ncomp).keys()].map(k => `<option value="loading:${k}">loading on ${compName(k)}</option>`).join('') +
+          '<option value="peak">peak time (heatmap group)</option><option value="rate">mean rate</option><option value="channel">peak channel</option><option value="area">area, then channel</option><option value="id">unit ID</option>'
+        : fieldOptions(T, {none: '', sortExtras: true});
+    }
+    renderFilterChips();
+    renderMarkers();
+    renderPresets();
+    syncControls();
+  }
+
+  function syncControls() {
+    const T = D.tables.get(S.align);
+    const setSel = (id, v) => { const el = $(id); el.value = v || ''; if (el.value !== (v || '') && el.options.length) el.value = ''; };
+    setSel('colorBy', S.color); setSel('styleBy', S.style); setSel('panelBy', S.panel);
+    if (S.mode === 'population') { $('sortBy').value = S.nsort; if ($('sortBy').value !== S.nsort) { S.nsort = 'loading:0'; $('sortBy').value = S.nsort; } }
+    else { $('sortBy').value = S.sort; if ($('sortBy').value !== S.sort) $('sortBy').value = 'session'; }
+    $('sortLabel').textContent = S.mode === 'population' ? 'Sort neurons' : 'Sort rows by';
+    $('ncomp').value = S.ncomp; $('ncompOut').textContent = String(S.ncomp);
+    $('cloudOn').checked = S.cloud; $('cloudZero').checked = S.cloudZero;
+    $('cloudAlpha').value = Math.round(S.cloudAlpha * 100); $('cloudAlphaOut').textContent = `${Math.round(S.cloudAlpha * 100)}%`;
+    $('cloudKnob').classList.toggle('off', !S.cloud); $('cloudZeroWrap').classList.toggle('off', !S.cloud); $('cloudFitWrap').classList.toggle('off', !S.cloud);
+    applyMode();
+    $('sortDir').textContent = S.dir === 1 ? '↑' : '↓';
+    $('grouped').checked = S.grouped;
+    const cont = T && [S.color, S.style, S.panel].some(k => { const c = k && T.byKey.get(k); return c && c.kind === 'num' && !c.discrete; });
+    $('qbinsField').hidden = !cont; $('qbins').value = String(S.qbins);
+    $('showMedians').checked = S.medians;
+    $('winLo').value = S.win[0]; $('winHi').value = S.win[1];
+    if (document.activeElement !== $('winLoN')) $('winLoN').value = S.win[0];
+    if (document.activeElement !== $('winHiN')) $('winHiN').value = S.win[1];
+    $('cwLo').min = $('cwHi').min = S.win[0]; $('cwLo').max = $('cwHi').max = S.win[1];
+    $('cwLo').value = S.cw[0]; $('cwHi').value = S.cw[1];
+    if (document.activeElement !== $('cwLoN')) $('cwLoN').value = S.cw[0];
+    if (document.activeElement !== $('cwHiN')) $('cwHiN').value = S.cw[1];
+    $('bin').value = Math.round(S.bin * 1000); $('binOut').textContent = `${Math.round(S.bin * 1000)} ms`;
+    $('sigma').value = Math.round(S.sigma * 1000); $('sigmaOut').textContent = S.sigma ? `${Math.round(S.sigma * 1000)} ms` : 'off';
+    $('rasterH').value = S.rasterH; $('rasterHOut').textContent = `${S.rasterH} px`;
+    $('ylock').checked = S.ylock !== null; $('ymax').disabled = S.ylock === null;
+    if (document.activeElement !== $('ymax')) $('ymax').value = S.ylock !== null ? S.ylock : (D.model ? tidy(D.model.ymax, 1) : '');
+    $('showBars').checked = S.bars;
+    document.querySelectorAll('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', S[seg.dataset.key] === b.dataset.v)));
+  }
+
+  function renderQuickFilters(M) {
+    const T = M.T;
+    const host = $('quickFilters');
+    const parts = [];
+    const elig = C.eligibility(M.raster, M.pre, M.post);
+    for (const key of QUICK_FIELDS) {
+      const col = T.byKey.get(key);
+      if (!col) continue;
+      const levels = C.fieldLevels(col);
+      if (!levels || levels.length < 2) continue;
+      const others = activeFilters(T).filter(f => f.k !== key);
+      const mask = C.filterMask(T, others);
+      const counts = new Map();
+      for (let i = 0; i < T.n; i++) if (mask[i] && !elig[i]) { const k = C.levelKey(C.rawValue(col, i)); counts.set(k, (counts.get(k) || 0) + 1); }
+      const f = S.filters.find(x => x.k === key && x.v);
+      const on = new Set(f ? f.v : []);
+      const sem = SEM[key] || {};
+      parts.push(`<div class="qf"><span>${esc(col.label)}</span><div class="chips">` + levels.map(l => {
+        const c = counts.get(l.key) || 0;
+        const color = sem[l.key] ? paint(sem[l.key]) : '';
+        return `<button type="button" class="chip${on.has(l.key) ? ' on' : ''}${c ? '' : ' zero'}" data-qf="${esc(key)}" data-level="${esc(l.key)}"${color ? ` style="--c:${color}"` : ''}>${esc(l.key === C.MISSING ? 'missing' : C.formatLevel(key, l.value))} <small>${c}</small></button>`;
+      }).join('') + '</div></div>');
+    }
+    host.innerHTML = parts.join('') || '<p class="pop-note" style="padding:0">No task/object fields for this alignment; use “Filter on any field”.</p>';
+  }
+
+  function filterText(f, T) {
+    const col = T && T.byKey.get(f.k);
+    const label = col ? col.label : C.fieldLabel(f.k);
+    if (f.v) {
+      const names = f.v.map(k => (k === C.MISSING ? 'missing' : col ? C.formatLevel(f.k, levelValue(col, k)) : k));
+      return `<b>${esc(label)}</b>: ${esc(names.length > 3 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ') || 'none')}`;
+    }
+    const [lo, hi] = f.r;
+    return `<b>${esc(label)}</b>: ${lo !== null && lo !== undefined ? C.fmtNum(lo) : '−∞'} to ${hi !== null && hi !== undefined ? C.fmtNum(hi) : '∞'}`;
+  }
+  function levelValue(col, key) {
+    if (key === C.MISSING) return null;
+    if (col.kind === 'cat') { const l = col.levels.find(x => C.levelKey(x) === key); return l === undefined ? key : l; }
+    return Number(key);
+  }
+  function renderFilterChips() {
+    const T = D.tables.get(S.align);
+    const chips = S.filters.map((f, idx) => {
+      if (QUICK_FIELDS.includes(f.k) && f.v && T && T.byKey.has(f.k)) return '';
+      const stale = T && !T.byKey.has(f.k);
+      return `<span class="chip fchip${stale ? ' stale' : ''}" data-f="${idx}" role="button" tabindex="0" title="${stale ? 'Not available for this alignment — ignored' : 'Edit filter'}">${filterText(f, T)}${stale ? ' (n/a)' : ''}<button class="x" type="button" data-fx="${idx}" aria-label="Remove filter">×</button></span>`;
+    }).join('');
+    $('otherFilters').innerHTML = chips;
+  }
+
+  function renderMarkers() {
+    $('markerList').innerHTML = S.markers.map(m => {
+      const where = m.match === 'object' ? 'same object' : 'same trial';
+      const occ = {nearest: 'nearest', first_after: 'first after', last_before: 'last before', all: 'all', first: 'first in trial', last: 'last in trial'}[m.occ] || m.occ;
+      return `<div class="marker${m.off ? ' off' : ''}" style="--c:${paint(m.c)}"><i class="${m.end ? 'band' : ''}"></i><div><b>${esc(m.label || eventLabel(m.e))}</b><small>${esc(eventLabel(m.e))}${m.end ? ` → ${esc(eventLabel(m.end))}` : ''} · ${where} · ${occ}</small></div>` +
+        `<button type="button" data-medit="${esc(m.id)}" title="Edit" aria-label="Edit marker">✎</button><button type="button" data-mdel="${esc(m.id)}" title="Remove" aria-label="Remove marker">×</button></div>`;
+    }).join('');
+    $('refList').innerHTML = S.refs.map((r, i) => `<span class="chip fchip">${C.fmtNum(r)} s<button class="x" type="button" data-rdel="${i}" aria-label="Remove line">×</button></span>`).join('');
+  }
+
+  function renderPresets() {
+    const T = D.tables.get(S.align);
+    const avail = new Set(D.summary ? D.summary.events : []);
+    const mk = [['object_visible_onset', 'object', 'nearest', 'object visible'], ['joystick_move_onset', 'trial', 'last_before', 'joystick onset'],
+      ['trial_initiation', 'trial', 'nearest', 'trial initiation'], ['goal_release', 'trial', 'nearest', 'goal release'],
+      ['reward_valve_onset', 'trial', 'first_after', 'reward'], ['object_outcome', 'object', 'first_after', 'outcome']];
+    $('markerPresets').innerHTML = mk.filter(([e]) => (avail.has(e) || e === 'object_outcome') && !S.markers.some(m => m.e === e))
+      .map(([e, match, occ, label]) => `<button type="button" class="preset" data-mp="${e}|${match}|${occ}|${label}">+ ${esc(label)}</button>`).join('');
+    const gp = [['world', null, 'world'], ['role', 'action', 'role × action'], ['world', 'previous_role', 'world × previous object'],
+      ['role', 'world', 'role × world'], ['correct', null, 'correct / error'], ['order', null, 'object #']];
+    $('groupPresets').innerHTML = T ? gp.filter(([a, b]) => T.byKey.has(a) && (!b || T.byKey.has(b)))
+      .map(([a, b, label]) => `<button type="button" class="preset" data-gp="${a}|${b || ''}">${esc(label)}</button>`).join('') : '';
+  }
+
+  // ------------------------------------------------------------- popovers
+  let popAnchor = null;
+  function openPop(anchor, html, {wide = false} = {}) {
+    const pop = $('popover');
+    pop.innerHTML = html;
+    pop.hidden = false;
+    $('scrim').hidden = false;
+    $('scrim').style.background = matchMedia('(max-width: 959px)').matches ? '' : 'transparent';
+    pop.style.width = wide ? 'min(460px, calc(100vw - 24px))' : '';
+    popAnchor = anchor;
+    placePop();
+    const search = pop.querySelector('input[type=search]');
+    if (search && !matchMedia('(hover: none)').matches) search.focus();
+  }
+  function placePop() {
+    const pop = $('popover');
+    if (pop.hidden || !popAnchor || matchMedia('(max-width: 959px)').matches) { pop.style.left = ''; pop.style.top = ''; return; }
+    const r = popAnchor.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    let left = clamp(r.left, 12, innerWidth - w - 12), top = r.bottom + 6;
+    if (top + h > innerHeight - 12) top = Math.max(12, r.top - h - 6);
+    pop.style.left = `${left}px`; pop.style.top = `${top}px`;
+  }
+  function closePop() { $('popover').hidden = true; $('scrim').hidden = true; popAnchor = null; }
+  const popHead = title => `<div class="pop-head"><h3>${esc(title)}</h3><button class="close" type="button" data-close aria-label="Close">×</button></div>`;
+
+  function unitList() {
+    return D.units.filter(u => (!S.unitQ.length || S.unitQ.includes(String(u.quality).toLowerCase())) && (!S.unitArea.length || S.unitArea.includes(u.area)));
+  }
+  function openUnitPicker() {
+    const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))];
+    const qs = [...new Set(D.units.map(u => String(u.quality).toLowerCase()))];
+    const html = popHead('Choose a unit') +
+      `<div class="pop-search"><input type="search" id="unitSearch" placeholder="unit id, channel, area…" autocomplete="off">` +
+      `<div class="chips">${qs.map(q => `<button type="button" class="chip${S.unitQ.includes(q) ? ' on' : ''}" data-uq="${esc(q)}">${esc(q.toUpperCase())}</button>`).join('')}` +
+      `${areas.map(a => `<button type="button" class="chip${S.unitArea.includes(a) ? ' on' : ''}" data-ua="${esc(a)}">${esc(a)}</button>`).join('')}</div></div>` +
+      `<div class="pop-body" id="unitItems"></div><div class="pop-note">← / → step through the listed units. Channel IDs survive a re-sort; unit IDs do not.</div>`;
+    openPop($('unitBtn'), html);
+    fillUnitItems('');
+  }
+  function fillUnitItems(text) {
+    const t = text.trim().toLowerCase();
+    const list = unitList().filter(u => !t || `${u.id} ch${u.peak_channel} ch ${u.peak_channel} ${u.area} ${u.quality}`.toLowerCase().includes(t));
+    $('unitItems').innerHTML = list.slice(0, 600).map(u => `<button type="button" class="item${u.id === S.unit ? ' on' : ''}" data-unit="${u.id}"><span class="main"><b>unit ${u.id}${u.peak_channel !== null && u.peak_channel !== undefined ? ` · ch ${u.peak_channel}` : ''}</b><small>${esc(u.area || 'area ?')} · ${C.fmtNum(u.rate, 1)} spikes/s</small></span><span class="q ${esc(String(u.quality).toLowerCase())}">${esc(u.quality)}</span></button>`).join('') ||
+      '<div class="pop-note">No units match.</div>';
+    const on = $('unitItems').querySelector('.on');
+    if (on) on.scrollIntoView({block: 'center'});
+  }
+
+  function openAlignPicker() {
+    const html = popHead('Align rasters to') + `<div class="pop-search"><input type="search" id="alignSearch" placeholder="search events…" autocomplete="off"></div><div class="pop-body" id="alignItems"></div>`;
+    openPop($('alignBtn'), html);
+    fillAlignItems('');
+  }
+  function fillAlignItems(text) {
+    const t = text.trim().toLowerCase();
+    const items = D.summary.alignments.filter(a => a.n > 0 && (!t || `${a.key} ${eventLabel(a.key)}`.toLowerCase().includes(t)));
+    const item = a => `<button type="button" class="item${a.key === S.align ? ' on' : ''}" data-align="${esc(a.key)}"><span class="main"><b>${esc(eventLabel(a.key))}</b><small>${esc(a.key)}</small></span><span class="n">${a.n}</span></button>`;
+    let html = '';
+    if (!t) {
+      const pinned = PINNED_ALIGN.map(k => items.find(a => a.key === k)).filter(Boolean);
+      html += `<div class="pop-group">Common</div>${pinned.map(item).join('')}`;
+    }
+    for (const cat of CATEGORY_ORDER) {
+      const list = items.filter(a => eventCategory(a.key) === cat && (t || !PINNED_ALIGN.includes(a.key)));
+      if (list.length) html += `<div class="pop-group">${esc(cat)}</div>${list.map(item).join('')}`;
+    }
+    $('alignItems').innerHTML = html || '<div class="pop-note">No events match.</div>';
+  }
+
+  function openFieldPicker(anchor, onPick, title = 'Filter on…') {
+    const T = D.tables.get(S.align);
+    if (!T) return;
+    openPop(anchor, popHead(title) + `<div class="pop-search"><input type="search" id="fieldSearch" placeholder="search fields…" autocomplete="off"></div><div class="pop-body" id="fieldItems"></div>`);
+    const fill = text => {
+      const t = text.trim().toLowerCase();
+      let html = '';
+      for (const g of FIELD_GROUP_ORDER) {
+        const cols = T.columns.filter(c => fieldGroup(c) === g && (!t || `${c.key} ${c.label}`.toLowerCase().includes(t)));
+        if (g === 'Common') cols.sort((a, b) => COMMON_FIELDS.indexOf(a.key) - COMMON_FIELDS.indexOf(b.key)); else cols.sort((a, b) => a.label.localeCompare(b.label));
+        if (!cols.length) continue;
+        html += `<div class="pop-group">${esc(g)}</div>` + cols.map(c => {
+          const lv = C.fieldLevels(c);
+          const info = lv ? lv.slice(0, 4).map(l => l.label).join(', ') + (lv.length > 4 ? ` +${lv.length - 4}` : '') : 'number';
+          return `<button type="button" class="item" data-field="${esc(c.key)}"><span class="main"><b>${esc(c.label)}</b><small>${esc(info)}</small></span></button>`;
+        }).join('');
+      }
+      $('fieldItems').innerHTML = html || '<div class="pop-note">No fields match.</div>';
+    };
+    fill('');
+    $('fieldSearch').addEventListener('input', e => fill(e.target.value));
+    $('fieldItems').addEventListener('click', e => { const b = e.target.closest('[data-field]'); if (b) onPick(b.dataset.field); });
+  }
+
+  function openFilterEditor(anchor, key) {
+    const T = D.tables.get(S.align);
+    const col = T && T.byKey.get(key);
+    if (!col) return;
+    let idx = S.filters.findIndex(f => f.k === key);
+    const levels = C.fieldLevels(col);
+    if (idx < 0) {
+      S.filters.push(levels ? {k: key, v: levels.map(l => l.key)} : {k: key, r: [null, null]});
+      idx = S.filters.length - 1;
+    }
+    const draw = () => {
+      const f = S.filters[idx];
+      const M = D.model;
+      const others = activeFilters(T).filter(x => x !== f);
+      const mask = C.filterMask(T, others);
+      const elig = M ? C.eligibility(M.raster, M.pre, M.post) : new Uint8Array(T.n);
+      let body = '';
+      if (levels) {
+        const counts = new Map();
+        for (let i = 0; i < T.n; i++) if (mask[i] && !elig[i]) { const k = C.levelKey(C.rawValue(col, i)); counts.set(k, (counts.get(k) || 0) + 1); }
+        const on = new Set(f.v);
+        body = `<div class="editor"><div class="chips">${levels.map(l => `<button type="button" class="chip${on.has(l.key) ? ' on' : ''}" data-lv="${esc(l.key)}">${esc(l.key === C.MISSING ? 'missing' : l.label)} <small>${counts.get(l.key) || 0}</small></button>`).join('')}</div>` +
+          `<div class="chips"><button type="button" class="preset" data-lvall>all</button><button type="button" class="preset" data-lvnone>none</button><button type="button" class="preset" data-lvinv>invert</button></div>` +
+          `<p class="pop-note" style="padding:0">${esc(col.description || '')}${col.timing ? ` Timing: ${esc(String(col.timing).replace(/_/g, ' '))}.` : ''}</p></div>`;
+      } else {
+        const vals = [];
+        for (let i = 0; i < T.n; i++) if (mask[i] && !elig[i] && !Number.isNaN(col.data[i])) vals.push(col.data[i]);
+        vals.sort((a, b) => a - b);
+        const lo = vals[0], hi = vals[vals.length - 1];
+        const nb = 24, hist = new Array(nb).fill(0);
+        vals.forEach(v => { hist[Math.min(nb - 1, Math.floor((v - lo) / ((hi - lo) || 1) * nb))]++; });
+        const hmax = Math.max(1, ...hist);
+        const [a, b] = f.r;
+        const inR = j => { const c = lo + (j + 0.5) * (hi - lo) / nb; return (a === null || c >= a) && (b === null || c <= b); };
+        body = `<div class="editor"><div class="hist">${hist.map((h, j) => `<i class="${inR(j) ? 'in' : ''}" style="height:${Math.max(2, h / hmax * 100)}%"></i>`).join('')}</div>` +
+          `<div class="range"><input type="number" id="rLo" step="any" placeholder="${C.fmtNum(lo)}" value="${a ?? ''}"><span>to</span><input type="number" id="rHi" step="any" placeholder="${C.fmtNum(hi)}" value="${b ?? ''}"></div>` +
+          `<p class="pop-note" style="padding:0">Observed ${C.fmtNum(lo)} to ${C.fmtNum(hi)} over ${vals.length} events (inclusive; empty = open). ${esc(col.description || '')}</p></div>`;
+      }
+      $('popover').innerHTML = popHead(col.label) + `<div class="pop-body">${body}</div><div class="pop-foot"><button type="button" class="small" data-fdel>Remove filter</button><button type="button" class="primary" data-close>Done</button></div>`;
+      placePop();
+      const apply = () => { renderFilterChips(); changed(); };
+      $('popover').querySelectorAll('[data-lv]').forEach(b => b.addEventListener('click', () => {
+        const set = new Set(f.v); set.has(b.dataset.lv) ? set.delete(b.dataset.lv) : set.add(b.dataset.lv);
+        f.v = levels.map(l => l.key).filter(k => set.has(k)); apply(); draw();
+      }));
+      const q = sel => $('popover').querySelector(sel);
+      if (q('[data-lvall]')) q('[data-lvall]').addEventListener('click', () => { f.v = levels.map(l => l.key); apply(); draw(); });
+      if (q('[data-lvnone]')) q('[data-lvnone]').addEventListener('click', () => { f.v = []; apply(); draw(); });
+      if (q('[data-lvinv]')) q('[data-lvinv]').addEventListener('click', () => { const s = new Set(f.v); f.v = levels.map(l => l.key).filter(k => !s.has(k)); apply(); draw(); });
+      const num = el => (el.value === '' ? null : Number(el.value));
+      if ($('rLo')) ['rLo', 'rHi'].forEach(id => $(id).addEventListener('change', () => { f.r = [num($('rLo')), num($('rHi'))]; apply(); draw(); }));
+      q('[data-fdel]').addEventListener('click', () => { S.filters = S.filters.filter(x => x !== f); closePop(); renderFilterChips(); changed(); });
+    };
+    openPop(anchor, '');
+    draw();
+    renderFilterChips(); changed();
+  }
+
+  function eventOptions(selected, {none = null} = {}) {
+    const evs = (D.summary ? D.summary.events : []).concat(['object_outcome']);
+    let html = none ? `<option value="">${esc(none)}</option>` : '';
+    for (const cat of CATEGORY_ORDER) {
+      const list = [...new Set(evs.filter(e => eventCategory(e) === cat))].sort((a, b) => eventLabel(a).localeCompare(eventLabel(b)));
+      if (list.length) html += `<optgroup label="${esc(cat)}">${list.map(e => `<option value="${esc(e)}"${e === selected ? ' selected' : ''}>${esc(eventLabel(e))}</option>`).join('')}</optgroup>`;
+    }
+    return html;
+  }
+  function newMarkerId() { let k = 1; while (S.markers.some(m => m.id === `m${k}`)) k++; return `m${k}`; }
+  function addMarker(e, match, occ, label) {
+    const T = D.tables.get(S.align);
+    const objRows = T ? T.objectCodes.filter(c => c >= 0).length : 0;
+    const m = {id: newMarkerId(), e, match: match || (OBJECT_EVENTS.test(e) && objRows > (T ? T.n / 2 : 0) ? 'object' : 'trial'), occ: occ || 'nearest',
+      label: label || eventLabel(e), c: MARKER_COLORS[S.markers.length % MARKER_COLORS.length]};
+    S.markers.push(m);
+    renderStructure(); changed({data: true});
+    return m;
+  }
+  function openMarkerEditor(anchor, id) {
+    let m = S.markers.find(x => x.id === id);
+    if (!m) m = addMarker('object_visible_onset');
+    const seg = (key, opts) => `<div class="seg" data-mkey="${key}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${m[key] === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    const draw = () => {
+      $('popover').innerHTML = popHead('Marker') + `<div class="pop-body"><div class="editor">` +
+        `<label class="row"><span>Event</span><select id="mkEvent">${eventOptions(m.e)}</select></label>` +
+        `<div class="row"><span>Match rows by</span>${seg('match', [['object', 'same object'], ['trial', 'same trial']])}</div>` +
+        `<div class="row"><span>Which occurrence</span>${seg('occ', [['nearest', 'nearest'], ['first_after', 'first after'], ['last_before', 'last before'], ['all', 'all']])}</div>` +
+        `<label class="row"><span>Shade until (optional band)</span><select id="mkEnd">${eventOptions(m.end || '', {none: 'no band — tick only'})}</select></label>` +
+        `<label class="row"><span>Label</span><input type="text" id="mkLabel" value="${esc(m.label || '')}" placeholder="${esc(eventLabel(m.e))}"></label>` +
+        `<div class="row"><span>Colour</span><div class="swatches">${MARKER_COLORS.map(c => `<button type="button" class="swatch${m.c === c ? ' on' : ''}" data-sw="${c}" style="--c:${paint(c)}" aria-label="colour"></button>`).join('')}</div></div>` +
+        `<p class="pop-note" style="padding:0">Each raster row gets a dot at this event's time in the same ${m.match === 'object' ? 'object' : 'trial'}; the PSTH shows the median. Markers never change which events are counted.</p>` +
+        `</div></div><div class="pop-foot"><button type="button" class="small" data-mdel="${esc(m.id)}">Remove</button><button type="button" class="small" data-mtoggle>${m.off ? 'Show' : 'Hide'}</button><button type="button" class="primary" data-close>Done</button></div>`;
+      placePop();
+      const pop = $('popover');
+      const upd = () => { renderMarkers(); renderStructure(); changed({data: true}); };
+      $('mkEvent').addEventListener('change', e => { const old = eventLabel(m.e); m.e = e.target.value; if (!m.label || m.label === old) m.label = eventLabel(m.e); upd(); draw(); });
+      $('mkEnd').addEventListener('change', e => { m.end = e.target.value || undefined; upd(); });
+      $('mkLabel').addEventListener('input', e => { m.label = e.target.value; renderMarkers(); changed(); });
+      pop.querySelectorAll('[data-mkey] button').forEach(b => b.addEventListener('click', () => { m[b.parentElement.dataset.mkey] = b.dataset.v; upd(); draw(); }));
+      pop.querySelectorAll('[data-sw]').forEach(b => b.addEventListener('click', () => { m.c = b.dataset.sw; upd(); draw(); }));
+      pop.querySelector('[data-mtoggle]').addEventListener('click', () => { m.off = !m.off; upd(); draw(); });
+    };
+    openPop(anchor, '');
+    draw();
+  }
+
+  const STYLE_COLORS = ['#2b8a3e', '#8fcf9c', '#6741d9', '#b197fc', '#e03131', '#f4a3a3', '#1c7ed6', '#f08c00', '#0c8599', '#d6336c', '#495057', INK];
+  function openGroupStyle(anchor, key) {
+    const g = D.model && D.model.grouping.groups.find(x => x.key === key);
+    if (!g) return;
+    const own = S.gstyle[key] || {};
+    const dashIdx = Number.isInteger(own.d) ? own.d : g.styleIndex % DASHES.length;
+    const html = popHead(g.label) + `<div class="pop-body"><div class="editor">` +
+      `<div class="row"><span>Colour</span><div class="swatches">${STYLE_COLORS.map(c => `<button type="button" class="swatch${own.c === c ? ' on' : ''}" data-gsc="${c}" style="--c:${paint(c)}" aria-label="colour"></button>`).join('')}</div></div>` +
+      `<div class="row"><span>Line</span><div class="chips">${DASHES.map((d, i) => `<button type="button" class="chip${i === dashIdx ? ' on' : ''}" data-gsd="${i}" style="--c:var(--accent)"><svg viewBox="0 0 34 8" width="34" height="8"><line x1="1" x2="33" y1="4" y2="4" stroke="currentColor" stroke-width="2.2"${d ? ` stroke-dasharray="${d}"` : ''}/></svg></button>`).join('')}</div></div>` +
+      `</div></div><div class="pop-foot"><button type="button" class="small" data-gsreset>Reset style</button><button type="button" class="small" data-gsonly>Show only this</button><button type="button" class="primary" data-close>Done</button></div>`;
+    openPop(anchor, html);
+    const pop = $('popover');
+    const set = patch => { S.gstyle[key] = {...(S.gstyle[key] || {}), ...patch}; changed(); openGroupStyle(anchor, key); };
+    pop.querySelectorAll('[data-gsc]').forEach(b => b.addEventListener('click', () => set({c: b.dataset.gsc})));
+    pop.querySelectorAll('[data-gsd]').forEach(b => b.addEventListener('click', () => set({d: Number(b.dataset.gsd)})));
+    pop.querySelector('[data-gsreset]').addEventListener('click', () => { delete S.gstyle[key]; changed(); closePop(); });
+    pop.querySelector('[data-gsonly]').addEventListener('click', () => { S.hidden = D.model.grouping.groups.map(x => x.key).filter(k => k !== key); changed(); closePop(); });
+  }
+
+  async function openViews() {
+    let saved = {};
+    try { saved = await getJSON('/api/views'); } catch (e) { saved = null; }
+    D.views = saved || {};
+    const savedHtml = saved === null ? '<div class="pop-note">Saved views are unavailable on this server.</div>'
+      : Object.keys(saved).length ? Object.entries(saved).sort((a, b) => String(b[1].saved).localeCompare(String(a[1].saved))).map(([name, v]) =>
+        `<div class="item" style="padding-right:4px"><button type="button" class="item" data-view="${esc(name)}" style="padding:0"><span class="main"><b>${esc(name)}</b><small>${esc(summarizeState(v.state))} · ${esc(v.saved || '')}</small></span></button><button type="button" class="close" data-vdel="${esc(name)}" title="Delete" aria-label="Delete view" style="border:0;background:none;color:var(--muted);width:30px;height:30px">×</button></div>`).join('')
+      : '<div class="pop-note">No saved views yet. Saved views live on this server, so every device that opens it sees them.</div>';
+    const html = popHead('Views') + `<div class="pop-body"><div class="pop-group">Templates · keep the current unit</div>` +
+      TEMPLATES.map((t, i) => `<button type="button" class="item" data-tpl="${i}"><span class="main"><b>${esc(t.name)}</b><small>${esc(t.hint)}</small></span></button>`).join('') +
+      `<div class="pop-group">Saved views · restore unit and settings</div>${savedHtml}</div>` +
+      `<div class="pop-foot"><button type="button" class="small" data-copylink>Copy link</button><button type="button" class="primary" data-saveview${saved === null ? ' disabled' : ''}>Save current view…</button></div>`;
+    openPop($('viewsBtn').offsetParent ? $('viewsBtn') : $('menuBtn'), html, {wide: true});
+  }
+  function summarizeState(s) {
+    if (!s) return '';
+    return [s.unit !== undefined ? `unit ${s.unit}` : '', eventLabel(s.align || ''), [s.color, s.style].filter(Boolean).map(k => C.fieldLabel(k)).join(' × ')].filter(Boolean).join(' · ');
+  }
+  function openSaveView() {
+    const u = D.units.find(x => x.id === S.unit);
+    const suggestion = `${unitName(u)} · ${eventLabel(S.align)}${S.color ? ` · ${C.fieldLabel(S.color)}` : ''}${S.style ? ` × ${C.fieldLabel(S.style)}` : ''}`;
+    $('popover').innerHTML = popHead('Save view') + `<form class="editor" id="saveForm"><label class="row"><span>Name</span><input type="text" id="viewName" value="${esc(suggestion)}" maxlength="120"></label>` +
+      `<p class="pop-note" style="padding:0">Stores the session, unit, alignment, filters, groups, markers and display knobs on this server.</p>` +
+      `<div class="pop-foot" style="padding:0;border:0"><button type="button" class="small" data-close>Cancel</button><button type="submit" class="primary">Save</button></div></form>`;
+    placePop();
+    $('viewName').focus(); $('viewName').select();
+    $('saveForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      try {
+        await getJSON('/api/views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: $('viewName').value, state: S})});
+        closePop(); toast(`Saved “${$('viewName').value}”.`);
+      } catch (err) { toast(err.message, true); }
+    });
+  }
+  function applyTemplate(t) {
+    const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, tick: S.tick, rasterH: S.rasterH, bars: S.bars, err: S.err,
+      mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes};
+    S = sanitize({...clone(DEFAULTS), ...keep, ...clone(t.state)});
+    afterBigChange();
+    toast(`Template: ${t.name}`);
+  }
+  async function applyView(v) {
+    const sessionChanged = v.state.session && v.state.session !== S.session;
+    S = sanitize(clone(v.state));
+    if (sessionChanged) { saveState(); await selectSession(S.session); renderStructure(); }
+    else afterBigChange();
+  }
+  function afterBigChange() {
+    if (!D.units.some(u => u.id === S.unit) && D.units.length) S.unit = D.units[0].id;
+    renderStructure(); changed({data: true});
+  }
+
+  function openExport() {
+    if (S.mode === 'population') {
+      const html = popHead('Export') + `<div class="pop-body">` +
+        `<button type="button" class="item" data-exp="svg"><span class="main"><b>Figure · SVG</b><small>vector, with title, legend and embedded settings</small></span></button>` +
+        `<button type="button" class="item" data-exp="png"><span class="main"><b>Figure · PNG</b><small>2× resolution</small></span></button>` +
+        `<button type="button" class="item" data-exp="coords"><span class="main"><b>Coordinates · CSV</b><small>every group's component time courses</small></span></button>` +
+        `<button type="button" class="item" data-exp="loadings"><span class="main"><b>Loadings · CSV</b><small>one row per neuron: unit, channel, area, quality, loadings</small></span></button>` +
+        (D.probeShown ? `<button type="button" class="item" data-exp="cloud"><span class="main"><b>Single-trial cloud · CSV</b><small>every ${D.probeShown.unit === 'event' ? 'event' : 'trial'}'s projection at t = 0 / reference lines</small></span></button>` : '') +
+        `<button type="button" class="item" data-exp="json"><span class="main"><b>Settings & fit · JSON</b><small>roster, groups, method, variance explained, source SHA256</small></span></button></div>`;
+      openPop($('exportBtn').offsetParent ? $('exportBtn') : $('menuBtn'), html);
+      return;
+    }
+    const html = popHead('Export') + `<div class="pop-body">` +
+      `<button type="button" class="item" data-exp="svg"><span class="main"><b>Figure · SVG</b><small>vector, with title, legend and embedded settings</small></span></button>` +
+      `<button type="button" class="item" data-exp="png"><span class="main"><b>Figure · PNG</b><small>2× resolution, for slides and chat</small></span></button>` +
+      `<button type="button" class="item" data-exp="psth"><span class="main"><b>PSTH · CSV</b><small>mean and SEM per group and time bin</small></span></button>` +
+      `<button type="button" class="item" data-exp="rows"><span class="main"><b>Rows · CSV</b><small>one row per event: group, spike count and rate in the count window, marker times, fields</small></span></button>` +
+      `<button type="button" class="item" data-exp="json"><span class="main"><b>Settings & provenance · JSON</b><small>source file, SHA256, unit, alignment, filters, knobs</small></span></button>` +
+      `</div><div class="pop-note">Formal block-permutation tests and population PCA/ICA/FA are in the <a href="/classic/">classic workspace</a>.</div>`;
+    openPop($('exportBtn').offsetParent ? $('exportBtn') : $('menuBtn'), html);
+  }
+  function openMenu() {
+    const theme = localStorage.getItem('eg-theme') || 'auto';
+    const other = S.mode === 'population' ? ['raster', 'Rasters', 'one unit: raster over PSTH'] : ['population', 'Population', 'many neurons: heatmap, components, trajectories'];
+    const html = popHead('electro_gui') + `<div class="pop-body"><button type="button" class="item" data-menu="mode:${other[0]}"><span class="main"><b>Switch to ${other[1]}</b><small>${other[2]}</small></span></button><button type="button" class="item" data-menu="views"><span class="main"><b>Views & templates</b><small>apply a template, save or restore a view, copy a link</small></span></button>` +
+      `<button type="button" class="item" data-menu="export"><span class="main"><b>Export</b><small>SVG, PNG, CSV, settings</small></span></button><div class="editor">` +
+      `<label class="row"><span>Session</span><select id="menuSession">${D.catalog.map(s => `<option value="${esc(s.id)}"${s.id === S.session ? ' selected' : ''}>${esc(shortSession(s.id))}</option>`).join('')}</select></label>` +
+      `<div class="row"><span>Theme</span><div class="seg" id="themeSeg">${['auto', 'light', 'dark'].map(t => `<button type="button" data-theme="${t}" class="${theme === t ? 'on' : ''}">${t}</button>`).join('')}</div></div>` +
+      `<p class="pop-note" style="padding:0"><b>Shortcuts</b> — ← / → previous / next unit · drag across the PSTH to set the count window · click a legend entry to hide a group, double-click to show only it.</p>` +
+      `<p class="pop-note" style="padding:0"><a href="/classic/">Classic workspace (v0.1)</a> — unit block-permutation tests and provenance-bound job exports; its Population tab is the population view.</p>` +
+      `<p class="pop-note" style="padding:0">${D.summary ? `${esc(D.summary.session_id)} · ${D.summary.counts.units} units · ${D.summary.counts.trials} trials<br><code>${esc(D.summary.source.path || '')}</code>` : ''}</p>` +
+      `</div></div>`;
+    openPop($('menuBtn'), html);
+    $('menuSession').addEventListener('change', e => { closePop(); selectSession(e.target.value).then(renderStructure); });
+    $('themeSeg').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { localStorage.setItem('eg-theme', b.dataset.theme); applyTheme(); openMenu(); }));
+  }
+
+  // ============================================================ population
+  // One joint basis over the condition means of the same groups the raster view
+  // shows (filters x colour x line style), for an explicit neuron roster.
+  const AREA_PALETTE = ['#0c8599', '#e8590c', '#7048e8', '#2b8a3e', '#c2255c', '#5c940d'];
+  const popSpansKey = () => `${S.roster.join(',')}|${S.align}|${S.policy}`;
+  const compName = (k, method = S.method) => `${method === 'pca' ? 'PC' : method === 'ica' ? 'IC' : 'F'}${k + 1}`;
+  const unitShort = u => (u ? `unit ${u.id}${u.peak_channel !== null && u.peak_channel !== undefined ? ` · ch ${u.peak_channel}` : ''}` : '');
+  function areaColor(area) {
+    const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))].sort();
+    const i = areas.indexOf(area);
+    return paint(i < 0 ? MISSING_COLOR : AREA_PALETTE[i % AREA_PALETTE.length]);
+  }
+
+  function decodeStability(raw) {
+    const masks = new Map();
+    for (const [id, b64] of Object.entries(raw.units)) masks.set(Number(id), C.decodeMask(b64));
+    return {trials: raw.trials, n: raw.trials.length, masks};
+  }
+  function sharedMask(ids) {
+    let acc = C.fullMask(D.stab.n);
+    for (const id of ids) acc = C.andMask(acc, D.stab.masks.get(id) || new Uint8Array(acc.length));
+    return acc;
+  }
+  function sharedCount(ids) {
+    if (S.policy === 'all_complete') return D.summary ? D.summary.counts.complete_trials : null;
+    if (!D.stab) return null;
+    return ids.length ? C.popcount(sharedMask(ids), D.stab.n) : 0;
+  }
+  /** Roster units whose removal would regain the most shared stable trials. */
+  function limitingUnits(ids) {
+    if (!D.stab || S.policy !== 'verified_stable' || ids.length < 2) return [];
+    const N = ids.length, nt = D.stab.n;
+    const masks = ids.map(id => D.stab.masks.get(id) || new Uint8Array((nt + 7) >> 3));
+    const prefix = [], suffix = new Array(N);
+    let acc = C.fullMask(nt);
+    for (let i = 0; i < N; i++) { prefix.push(acc); acc = C.andMask(acc, masks[i]); }
+    const base = C.popcount(acc, nt);
+    acc = C.fullMask(nt);
+    for (let i = N - 1; i >= 0; i--) { suffix[i] = acc; acc = C.andMask(acc, masks[i]); }
+    return ids.map((id, i) => ({id, gain: C.popcount(C.andMask(prefix[i], suffix[i]), nt) - base}))
+      .filter(x => x.gain > 0).sort((a, b) => b.gain - a.gain).slice(0, 3);
+  }
+
+  function rosterPresetList() {
+    const q = u => String(u.quality || '').toLowerCase();
+    const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))].sort();
+    const out = [{id: 'stable', label: 'Shared-stable SUA + MUA', hint: 'Greedy search for the most neurons × stable trials they all share (not a guaranteed optimum); sets Trials to stable.'}];
+    out.push({id: 'sua', label: 'All SUA', ids: D.units.filter(u => q(u) === 'sua').map(u => u.id)});
+    out.push({id: 'suamua', label: 'All SUA + MUA', ids: D.units.filter(u => q(u) === 'sua' || q(u) === 'mua').map(u => u.id)});
+    for (const a of areas) out.push({id: `sua:${a}`, label: `${a} SUA`, ids: D.units.filter(u => q(u) === 'sua' && u.area === a).map(u => u.id)});
+    return out;
+  }
+  async function applyRosterPreset(id) {
+    if (id === 'stable') {
+      try {
+        const r = await getJSON(`/api/explorer/stable_roster?${query({session: S.session})}`);
+        S.roster = r.unit_ids.slice().sort((a, b) => a - b);
+        S.policy = 'verified_stable';
+        toast(`${r.n_units} neurons sharing ${r.n_trials} stable trials (greedy heuristic).`);
+      } catch (e) { toast(e.message, true); return; }
+    } else {
+      const p = rosterPresetList().find(x => x.id === id);
+      if (!p) return;
+      S.roster = p.ids.slice().sort((a, b) => a - b);
+    }
+    rosterChanged();
+  }
+  let rosterTimer = 0;
+  function rosterChanged(delay = 0) {
+    renderRosterSection();
+    clearTimeout(rosterTimer);
+    rosterTimer = setTimeout(() => changed({data: true}), delay);
+  }
+
+  function renderRosterSection() {
+    if (!D.summary) return;
+    const ids = S.roster;
+    const areas = new Map(), quals = new Map();
+    for (const id of ids) {
+      const u = D.unitMap.get(id);
+      const a = (u && u.area) || '?', q = u ? String(u.quality).toUpperCase() : '?';
+      areas.set(a, (areas.get(a) || 0) + 1); quals.set(q, (quals.get(q) || 0) + 1);
+    }
+    const shared = sharedCount(ids);
+    $('rosterLabel').textContent = ids.length ? `${ids.length} neurons` : 'no neurons';
+    const sharedText = shared === null ? 'checking shared trials…'
+      : S.policy === 'all_complete' ? `all <b>${shared}</b> complete trials (no stability filter)`
+        : `<b>${shared}</b> stable trials shared by all of them`;
+    $('rosterSummary').innerHTML = ids.length
+      ? `<div class="big"><b>${ids.length}</b> neurons · ${[...areas].map(([a, n]) => `${esc(a)} ${n}`).join(' · ')}</div>` +
+        `<div>${[...quals].map(([q, n]) => `${esc(q)} ${n}`).join(' · ')}</div><div class="${shared === 0 ? 'warn' : ''}">${sharedText}</div>`
+      : '<div>No neurons chosen yet — pick a set below.</div>';
+    $('rosterPresets').innerHTML = rosterPresetList().map(p =>
+      `<button type="button" class="preset" data-rp="${esc(p.id)}" title="${esc(p.hint || `${p.ids.length} neurons`)}">${esc(p.label)}${p.ids ? ` · ${p.ids.length}` : ''}</button>`).join('');
+    const lim = limitingUnits(ids);
+    const zero = D.stab && S.policy === 'verified_stable' ? ids.filter(id => !D.stab.masks.has(id) || C.popcount(D.stab.masks.get(id), D.stab.n) === 0) : [];
+    const trimRow = D.stab && S.policy === 'verified_stable' && ids.length > 2 && shared !== null && shared < 100
+      ? `<div class="limit"><span>Keep the subset of these neurons with the most neurons × shared stable trials</span><button type="button" class="small" data-trim>trim</button></div>` : '';
+    const zeroRow = zero.length ? `<div class="limit"><span>${zero.length} neuron${zero.length === 1 ? ' has' : 's have'} no stable trials at all</span><button type="button" class="small" data-rmzero>remove</button></div>` : '';
+    $('rosterLimits').innerHTML = zeroRow + trimRow + (lim.length ? '<span class="mini-label" style="margin:0 0 2px">Most limiting — trials regained if removed</span>' +
+      lim.map(x => { const u = D.unitMap.get(x.id); return `<div class="limit"><span>${esc(unitShort(u))} · ${esc((u && u.area) || '')}</span><b>+${x.gain}</b><button type="button" class="small" data-rmunit="${x.id}">remove</button></div>`; }).join('') : '');
+  }
+
+  const RF = {q: ['sua', 'mua'], a: [], text: ''};
+  function rosterShown() {
+    const t = RF.text.trim().toLowerCase();
+    return D.units.filter(u => (!RF.q.length || RF.q.includes(String(u.quality).toLowerCase())) && (!RF.a.length || RF.a.includes(u.area)) &&
+      (!t || `${u.id} ch${u.peak_channel} ch ${u.peak_channel} ${u.area} ${u.quality}`.toLowerCase().includes(t)));
+  }
+  function openRosterPicker(anchor) {
+    const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))].sort();
+    const qs = [...new Set(D.units.map(u => String(u.quality).toLowerCase()))];
+    const html = popHead('Choose neurons') +
+      `<div class="pop-search"><input type="search" id="rosterSearch" placeholder="unit id, channel, area…" autocomplete="off" value="${esc(RF.text)}">` +
+      `<div class="chips">${qs.map(q => `<button type="button" class="chip${RF.q.includes(q) ? ' on' : ''}" data-rq="${esc(q)}">${esc(q.toUpperCase())}</button>`).join('')}` +
+      `${areas.map(a => `<button type="button" class="chip${RF.a.includes(a) ? ' on' : ''}" data-ra="${esc(a)}">${esc(a)}</button>`).join('')}</div>` +
+      `<div class="pop-live" id="rosterLive"></div></div><div class="pop-body" id="rosterItems"></div>` +
+      `<div class="pop-foot"><button type="button" class="small" data-rall>Add all listed</button><button type="button" class="small" data-rnone>Remove listed</button><button type="button" class="primary" data-close>Done</button></div>`;
+    openPop(anchor, html, {wide: true});
+    fillRosterItems();
+  }
+  function rosterLive() {
+    const shared = sharedCount(S.roster);
+    const el = $('rosterLive');
+    if (el) el.innerHTML = `<b>${S.roster.length}</b> selected · <b>${shared === null ? '…' : shared}</b> ${S.policy === 'all_complete' ? 'complete' : 'shared stable'} trials · ${rosterShown().length} listed`;
+  }
+  function fillRosterItems() {
+    const set = new Set(S.roster);
+    const list = rosterShown();
+    $('rosterItems').innerHTML = list.slice(0, 900).map(u => {
+      const stable = D.stab && D.stab.masks.has(u.id) ? C.popcount(D.stab.masks.get(u.id), D.stab.n) : null;
+      return `<button type="button" class="item${set.has(u.id) ? ' on' : ''}" data-ru="${u.id}"><span class="check">✓</span><span class="main"><b>${esc(unitShort(u))}</b>` +
+        `<small>${esc(u.area || 'area ?')} · ${C.fmtNum(u.rate, 1)} spikes/s${stable === null ? '' : ` · ${stable} stable trials`}</small></span><span class="q ${esc(String(u.quality).toLowerCase())}">${esc(u.quality)}</span></button>`;
+    }).join('') || '<div class="pop-note">No units match.</div>';
+    rosterLive();
+  }
+
+  function buildPopModel() {
+    const T = D.tables.get(S.align);
+    if (!T) return null;
+    if (!S.roster.length) return {T, needRoster: true};
+    const P = D.popspans.get(popSpansKey());
+    if (!P || P.n !== T.n) return null;
+    const [pre, post] = S.win;
+    clampCw();
+    const elig = C.eligibility(P, pre, post);
+    const fmask = C.filterMask(T, activeFilters(T));
+    const rows = [], excl = {1: 0, 2: 0, 3: 0};
+    let filtered = 0;
+    for (let i = 0; i < T.n; i++) {
+      if (!fmask[i]) { filtered++; continue; }
+      if (elig[i]) excl[elig[i]]++; else rows.push(i);
+    }
+    const grouping = C.groupRows(T, rows, {color: validField(T, S.color), style: validField(T, S.style), panel: null, qbins: S.qbins});
+    grouping.hasMissingColor = grouping.groups.some(g => g.colorKey === C.MISSING);
+    const hidden = new Set(S.hidden);
+    for (const g of grouping.groups) {
+      const own = S.gstyle[g.key] || {};
+      g.hidden = hidden.has(g.key);
+      g.color = own.c ? paint(own.c) : groupColor(g, grouping, T);
+      g.dash = Number.isInteger(own.d) ? DASHES[own.d % DASHES.length] : DASHES[g.styleIndex % DASHES.length];
+    }
+    const markerData = {};
+    for (const m of S.markers) {
+      if (m.off) continue;
+      const start = D.events.get(m.e), end = m.end ? D.events.get(m.end) : null;
+      if (start && (!m.end || end)) markerData[m.id] = C.markerTimes(T, rows, start, m, end);
+    }
+    return {T, raster: P, rows, grouping, visible: grouping.groups.filter(g => !g.hidden), excl, filtered, markerData,
+      pre, post, cw: S.cw, common: P.common_trials, pop: true};
+  }
+
+  function fitRequest(M) {
+    return {session_id: S.session, unit_ids: S.roster.slice(), alignment: S.align, policy: S.policy,
+      pre: S.win[0], post: S.win[1], bin: S.bin, sigma: S.sigma, weight: S.weight, method: S.method,
+      scaling: S.scaling, components: S.ncomp,
+      groups: M.grouping.groups.map(g => ({key: g.key, label: g.label, row_ids: g.rows.map(i => M.T.rowId[i])}))};
+  }
+  function prepareFit(fit) {
+    fit.groupIndex = new Map(fit.groups.map((g, i) => [g.key, i]));
+    const U = fit.active_unit_ids.length, n = fit.times.length;
+    const mu = new Float64Array(U), sd = new Float64Array(U), mx = new Float64Array(U);
+    let count = 0;
+    for (const g of fit.groups) for (const row of g.means) { count++; for (let u = 0; u < U; u++) { mu[u] += row[u]; mx[u] = Math.max(mx[u], row[u]); } }
+    for (let u = 0; u < U; u++) mu[u] /= Math.max(1, count);
+    for (const g of fit.groups) for (const row of g.means) for (let u = 0; u < U; u++) sd[u] += (row[u] - mu[u]) ** 2;
+    for (let u = 0; u < U; u++) sd[u] = Math.sqrt(sd[u] / Math.max(1, count)) || 1;
+    fit.stats = {mu, sd, mx, n};
+  }
+  let fitTimer = 0;
+  function requestFit(req, key) {
+    if (D.fits.has(key) || D.fitErrors.has(key) || D.fitPending === key) return;
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(async () => {
+      D.fitPending = key;
+      schedule();
+      try {
+        const res = await getJSON('/api/explorer/popfit', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req)});
+        prepareFit(res);
+        D.fits.set(key, res);
+        if (D.fits.size > 6) D.fits.delete(D.fits.keys().next().value);
+      } catch (e) { D.fitErrors.set(key, e.message); }
+      finally { if (D.fitPending === key) D.fitPending = null; schedule(); }
+    }, 300);
+  }
+
+  // t = 0 is a circle; reference lines take these shapes in time order, on trajectories and in the cloud.
+  const REF_SHAPES = ['square', 'tri', 'tridown', 'plus'];
+  const SHAPE_GLYPH = {circle: '●', square: '■', tri: '▲', tridown: '▼', plus: '✚'};
+  function shapePath(kind, x, y, r) {
+    const q = v => f1(v);
+    if (kind === 'square') return `M${q(x - r)} ${q(y - r)}h${q(2 * r)}v${q(2 * r)}h${q(-2 * r)}z`;
+    if (kind === 'tri') return `M${q(x)} ${q(y - 1.25 * r)}l${q(1.15 * r)} ${q(2 * r)}h${q(-2.3 * r)}z`;
+    if (kind === 'tridown') return `M${q(x)} ${q(y + 1.25 * r)}l${q(1.15 * r)} ${q(-2 * r)}h${q(-2.3 * r)}z`;
+    if (kind === 'plus') { const a = r * 0.42; return `M${q(x - a)} ${q(y - r)}h${q(2 * a)}v${q(r - a)}h${q(r - a)}v${q(2 * a)}h${q(a - r)}v${q(r - a)}h${q(-2 * a)}v${q(a - r)}h${q(a - r)}v${q(-2 * a)}h${q(r - a)}z`; }
+    return `M${q(x - r)} ${q(y)}a${q(r)} ${q(r)} 0 1 0 ${q(2 * r)} 0a${q(r)} ${q(r)} 0 1 0 ${q(-2 * r)} 0`;
+  }
+  const shapeFor = (t, refTimes) => (t === 0 && !refTimes.includes(0) ? 'circle' : REF_SHAPES[Math.max(0, refTimes.indexOf(t)) % REF_SHAPES.length]);
+
+  /** Times at which single trials are projected: t = 0 (optional) and every reference line in the window. */
+  function cloudTimes(fit) {
+    const [pre, post] = fit.window;
+    const times = S.refs.filter(r => r >= pre && r <= post);
+    if (S.cloudZero && pre <= 0 && post >= 0) times.push(0);
+    return [...new Set(times.map(t => tidy(t, 4)))].sort((a, b) => a - b).slice(0, 12);
+  }
+  let probeTimer = 0;
+  function requestProbe(req, key) {
+    if (D.probes.has(key) || D.probeErrors.has(key) || D.probePending === key) return;
+    clearTimeout(probeTimer);
+    probeTimer = setTimeout(async () => {
+      D.probePending = key;
+      try {
+        const res = await getJSON('/api/explorer/popprobe', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req)});
+        D.probes.set(key, res);
+        if (D.probes.size > 8) D.probes.delete(D.probes.keys().next().value);
+      } catch (e) { D.probeErrors.set(key, e.message); toast(`Single trials: ${e.message}`, true); }
+      finally { if (D.probePending === key) D.probePending = null; schedule(); }
+    }, 150);
+  }
+
+  function neuronOrder(fit, gi) {
+    const U = fit.active_unit_ids.length, idx = [...Array(U).keys()];
+    const [kind, arg] = String(S.nsort).split(':');
+    const units = fit.active_unit_ids.map(id => D.unitMap.get(id) || {id});
+    if (kind === 'loading') { const k = Math.min(Number(arg) || 0, fit.components - 1); idx.sort((a, b) => fit.loadings[b][k] - fit.loadings[a][k]); }
+    else if (kind === 'peak') {
+      const M = fit.groups[gi].means;
+      const peak = idx.map(u => { let best = 0; for (let t = 1; t < M.length; t++) if (M[t][u] > M[best][u]) best = t; return best; });
+      idx.sort((a, b) => peak[a] - peak[b] || a - b);
+    } else if (kind === 'rate') idx.sort((a, b) => fit.stats.mu[b] - fit.stats.mu[a]);
+    else if (kind === 'channel') idx.sort((a, b) => (units[a].peak_channel ?? 1e9) - (units[b].peak_channel ?? 1e9));
+    else if (kind === 'area') idx.sort((a, b) => String(units[a].area).localeCompare(String(units[b].area)) || (units[a].peak_channel ?? 0) - (units[b].peak_channel ?? 0));
+    else idx.sort((a, b) => fit.active_unit_ids[a] - fit.active_unit_ids[b]);
+    return idx;
+  }
+  function heatImage(fit, gi, order) {
+    const key = `${D.popKey}|${gi}|${S.heatNorm}|${S.nsort}|${isDark()}`;
+    if (D.heatCache.has(key)) return D.heatCache.get(key);
+    const M = fit.groups[gi].means, n = M.length, U = order.length;
+    const canvas = document.createElement('canvas');
+    canvas.width = n; canvas.height = U;
+    const ctx = canvas.getContext('2d'), img = ctx.createImageData(n, U), dark = isDark();
+    order.forEach((u, r) => {
+      for (let t = 0; t < n; t++) {
+        const v = S.heatNorm === 'z' ? (M[t][u] - fit.stats.mu[u]) / fit.stats.sd[u] : M[t][u] / (fit.stats.mx[u] || 1);
+        const [R, G, B] = C.heatColor(v, S.heatNorm, dark);
+        const o = (r * n + t) * 4;
+        img.data[o] = R; img.data[o + 1] = G; img.data[o + 2] = B; img.data[o + 3] = 255;
+      }
+    });
+    ctx.putImageData(img, 0, 0);
+    const url = canvas.toDataURL('image/png');
+    D.heatCache.set(key, url);
+    if (D.heatCache.size > 12) D.heatCache.delete(D.heatCache.keys().next().value);
+    return url;
+  }
+  const loadingComp = fit => (String(S.nsort).startsWith('loading:') ? Math.min(Number(S.nsort.split(':')[1]) || 0, fit.components - 1) : 0);
+  function heatGroupIndex(M, fit) {
+    const vis = M.visible.filter(g => fit.groupIndex.has(g.key));
+    const pick = vis.find(g => g.key === S.heatGroup) || vis[0] || M.grouping.groups.find(g => fit.groupIndex.has(g.key));
+    return pick ? {g: pick, gi: fit.groupIndex.get(pick.key)} : null;
+  }
+
+  /** The population figure as one SVG; opts.export adds title and legend. */
+  function popFigureSVG(M, fit, width, opts = {}) {
+    const ink = figVar('--fig-ink'), muted = figVar('--fig-muted'), gridC = figVar('--fig-grid'),
+      axisC = figVar('--fig-axis'), windowC = figVar('--fig-window'), bg = figVar('--fig-bg');
+    const font = '-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif';
+    const f = f1, narrow = width < 760;
+    const K = fit.components, times = fit.times, n = times.length, pre = fit.window[0], post = fit.window[1];
+    const vis = M.visible.filter(g => fit.groupIndex.has(g.key)).map(g => ({g, fg: fit.groups[fit.groupIndex.get(g.key)]}));
+    const pct = k => `${C.fmtNum(100 * fit.component_r2[k], 1)}%`;
+    const out = [];
+    let top = 0;
+    if (opts.export) {
+      const legend = exportLegend({visible: vis.map(({g}) => ({...g, psth: {n: S.weight === 'trial' ? new Set(g.rows.map(i => M.T.trial[i])).size : g.rows.length}}))}, width, font, ink, muted);
+      out.push(`<text x="0" y="16" font-size="14" font-weight="600" fill="${ink}">${esc(opts.title)}</text>`,
+        `<text x="0" y="34" font-size="11.5" fill="${muted}">${esc(opts.subtitle)}</text>`, `<g transform="translate(0,46)">${legend.svg}</g>`);
+      top = 52 + legend.height;
+    }
+    const gap = 26;
+    const trajS = narrow ? Math.min(width, 400) : clamp(Math.round(width * 0.4), 280, 440);
+    const tcPanel = clamp(Math.round((trajS - 34) / K), 56, 110);
+    const tcH = tcPanel * K + 34;
+    const traj = {x: 0, y: top, w: trajS, h: trajS};
+    const tc = narrow ? {x: 0, y: top + trajS + gap, w: width, h: tcH} : {x: trajS + gap, y: top, w: width - trajS - gap, h: tcH};
+    const row1 = narrow ? trajS + gap + tcH : Math.max(trajS, tcH);
+    const U = fit.active_unit_ids.length;
+    const loadW = narrow ? 84 : 150;
+    const heat = {x: 0, y: top + row1 + gap + 20, w: width - loadW - 14, h: clamp(U * 4, 150, 520)};
+    const load = {x: width - loadW, y: heat.y, w: loadW, h: heat.h};
+    const varY = heat.y + heat.h + 44 + gap;
+    const vbox = {x: 0, y: varY, w: narrow ? width : Math.min(440, Math.round(width * 0.45)), h: 136};
+    const dbox = narrow ? {x: 0, y: varY + vbox.h + 18, w: width} : {x: vbox.w + 34, y: varY + 10, w: width - vbox.w - 34};
+    const height = Math.ceil((narrow ? dbox.y + 96 : varY + vbox.h + 8));
+    const layout = {width, height, n, times, pre, post, vis};
+    // A time marks the bin that contains it: the same rule the server uses for single-trial probes.
+    const idxOf = t => clamp(Math.floor((t - pre) / fit.bin + 1e-9), 0, n - 1);
+    const zeroIdx = pre <= 0 && post > 0 ? idxOf(0) : -1;
+    const refTimes = [...new Set(S.refs.filter(r => r >= pre && r <= post))].sort((x, y) => x - y);
+    const cwIdx = times.map((t, j) => (t >= M.cw[0] && t <= M.cw[1] ? j : -1)).filter(j => j >= 0);
+    const markers = S.markers.filter(m => !m.off && M.markerData[m.id]);
+    const medianIdx = (m, rows) => {
+      const med = C.median(rows.map(i => (M.markerData[m.id][i] && M.markerData[m.id][i][0] ? M.markerData[m.id][i][0].t : NaN)));
+      return med >= pre && med <= post ? {t: med, j: idxOf(med)} : null;
+    };
+
+    // ---- trajectory
+    {
+      let [a, b, c3] = S.axes;
+      const three = S.dims === '3' && K >= 3;
+      const pad = 34, inner = traj.w - 2 * pad;
+      const pts = vis.map(({fg}) => fg.coords);
+      const cloud = [];
+      if (D.probeShown && !opts.noCloud) {
+        const byKey = new Map(vis.map(({g}) => [g.key, g]));
+        for (const pr of D.probeShown.probes) for (const pg of pr.groups) {
+          const g = byKey.get(pg.key);
+          if (!g) continue;
+          const keep = C.thin([...pg.points.keys()], 1500);
+          for (const k of keep) cloud.push({g, t: pr.t, centre: pr.bin_centre, id: pg.ids[k], c: pg.points[k]});
+        }
+      }
+      const quantile = (v, q) => { const a = v.filter(Number.isFinite).sort((x, y) => x - y); return a.length ? a[Math.min(a.length - 1, Math.floor(q * a.length))] : NaN; };
+      let project, cx = 0, cy = 0, scale = 1;
+      if (three) {
+        const mean = [0, 0, 0]; let cnt = 0;
+        for (const P of pts) for (const p of P) { mean[0] += p[a]; mean[1] += p[b]; mean[2] += p[c3]; cnt++; }
+        mean.forEach((v, i) => { mean[i] = v / Math.max(1, cnt); });
+        let R = 1e-9;
+        for (const P of pts) for (const p of P) R = Math.max(R, Math.hypot(p[a] - mean[0], p[b] - mean[1], p[c3] - mean[2]));
+        if (cloud.length && S.cloudFit === 'cloud') R = Math.max(R, quantile(cloud.map(({c: p}) => Math.hypot(p[a] - mean[0], p[b] - mean[1], p[c3] - mean[2])), 0.98) || 0);
+        scale = inner / (2.1 * R);
+        project = p => { const q = C.project3d(p[a] - mean[0], p[b] - mean[1], p[c3] - mean[2], D.view3d.yaw, D.view3d.pitch); return [traj.x + traj.w / 2 + q[0] * scale, traj.y + traj.h / 2 - q[1] * scale]; };
+        const axisEnd = R * 0.95;
+        [[1, 0, 0, a], [0, 1, 0, b], [0, 0, 1, c3]].forEach(([ux, uy, uz, k]) => {
+          const q = C.project3d(ux * axisEnd, uy * axisEnd, uz * axisEnd, D.view3d.yaw, D.view3d.pitch);
+          const x2 = traj.x + traj.w / 2 + q[0] * scale, y2 = traj.y + traj.h / 2 - q[1] * scale;
+          out.push(`<line x1="${f(traj.x + traj.w / 2)}" y1="${f(traj.y + traj.h / 2)}" x2="${f(x2)}" y2="${f(y2)}" stroke="${axisC}" stroke-width="1" stroke-dasharray="3 3"/>`,
+            `<text x="${f(x2 + (q[0] >= 0 ? 4 : -4))}" y="${f(y2 - 3)}" font-size="10.5" fill="${muted}" text-anchor="${q[0] >= 0 ? 'start' : 'end'}">${compName(k)}</text>`);
+        });
+      } else {
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+        for (const P of pts) for (const p of P) { x0 = Math.min(x0, p[a]); x1 = Math.max(x1, p[a]); y0 = Math.min(y0, p[b]); y1 = Math.max(y1, p[b]); }
+        if (cloud.length && S.cloudFit === 'cloud') {
+          const xs = cloud.map(({c: p}) => p[a]), ys = cloud.map(({c: p}) => p[b]);
+          x0 = Math.min(x0, quantile(xs, 0.01)); x1 = Math.max(x1, quantile(xs, 0.99));
+          y0 = Math.min(y0, quantile(ys, 0.01)); y1 = Math.max(y1, quantile(ys, 0.99));
+        }
+        const range = Math.max(x1 - x0, y1 - y0, 1e-9) * 1.08;
+        cx = (x0 + x1) / 2; cy = (y0 + y1) / 2; scale = inner / range;
+        project = p => [traj.x + traj.w / 2 + (p[a] - cx) * scale, traj.y + traj.h / 2 - (p[b] - cy) * scale];
+        const zx = traj.x + traj.w / 2 - cx * scale, zy = traj.y + traj.h / 2 + cy * scale;
+        if (zx > traj.x + pad && zx < traj.x + traj.w - pad) out.push(`<line x1="${f(zx)}" x2="${f(zx)}" y1="${f(traj.y + pad)}" y2="${f(traj.y + traj.h - pad)}" stroke="${gridC}"/>`);
+        if (zy > traj.y + pad && zy < traj.y + traj.h - pad) out.push(`<line x1="${f(traj.x + pad)}" x2="${f(traj.x + traj.w - pad)}" y1="${f(zy)}" y2="${f(zy)}" stroke="${gridC}"/>`);
+        out.push(`<text x="${f(traj.x + traj.w / 2)}" y="${f(traj.y + traj.h - 8)}" text-anchor="middle" font-size="11.5" fill="${ink}">${compName(a)} · ${pct(a)}</text>`,
+          `<text transform="translate(${f(traj.x + 12)},${f(traj.y + traj.h / 2)}) rotate(-90)" text-anchor="middle" font-size="11.5" fill="${ink}">${compName(b)} · ${pct(b)}</text>`);
+      }
+      out.push(`<rect x="${f(traj.x + 0.5)}" y="${f(traj.y + 0.5)}" width="${f(traj.w - 1)}" height="${f(traj.h - 1)}" rx="10" fill="none" stroke="${gridC}"/>`);
+      const screen = vis.map(({fg}) => fg.coords.map(project));
+      out.push(`<clipPath id="trajClip"><rect x="${f(traj.x + 1)}" y="${f(traj.y + 1)}" width="${f(traj.w - 2)}" height="${f(traj.h - 2)}" rx="10"/></clipPath><g clip-path="url(#trajClip)">`);
+      const cloudScreen = [];
+      if (cloud.length) {
+        const r = narrow ? 1.9 : 2.4, byGroup = new Map();
+        let outside = 0;
+        for (const pt of cloud) {
+          const [x, y] = project(pt.c);
+          if (x < traj.x || x > traj.x + traj.w || y < traj.y || y > traj.y + traj.h) outside++;
+          cloudScreen.push({...pt, x, y});
+          byGroup.set(pt.g, (byGroup.get(pt.g) || '') + shapePath(shapeFor(pt.t, refTimes), x, y, r));
+        }
+        layout.cloudOutside = outside;
+        for (const [g, d] of byGroup) out.push(`<path d="${d}" fill="${g.color}" fill-opacity="${S.cloudAlpha}"/>`);
+      }
+      vis.forEach(({g}, vi) => {
+        const P = screen[vi];
+        if (cwIdx.length > 1) out.push(`<path d="${cwIdx.map((j, k) => `${k ? 'L' : 'M'}${f(P[j][0])} ${f(P[j][1])}`).join('')}" fill="none" stroke="${g.color}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" opacity="0.28"/>`);
+        out.push(`<path d="${P.map((p, j) => `${j ? 'L' : 'M'}${f(p[0])} ${f(p[1])}`).join('')}" fill="none" stroke="${g.color}" stroke-width="2" stroke-linejoin="round"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/>`);
+        out.push(`<circle cx="${f(P[0][0])}" cy="${f(P[0][1])}" r="3.6" fill="${bg}" stroke="${g.color}" stroke-width="1.6"/>`);
+        if (zeroIdx >= 0) out.push(`<circle cx="${f(P[zeroIdx][0])}" cy="${f(P[zeroIdx][1])}" r="4.2" fill="${g.color}" stroke="${bg}" stroke-width="1.5"/>`);
+        for (const r of refTimes) { const [x, y] = P[idxOf(r)]; out.push(`<path class="refmark" d="${shapePath(shapeFor(r, refTimes), x, y, 4.2)}" fill="${g.color}" stroke="${bg}" stroke-width="1.4"/>`); }
+        for (const m of markers) {
+          const mi = medianIdx(m, g.rows);
+          if (mi) { const [x, y] = P[mi.j]; out.push(`<path d="M${f(x)} ${f(y - 4.5)}l4.5 4.5l-4.5 4.5l-4.5 -4.5z" fill="${paint(m.c)}" stroke="${bg}" stroke-width="1"/>`); }
+        }
+      });
+      out.push('</g>');
+      if (screen.length) {
+        const lab = (t, j) => { const [x, y] = screen[0][j]; return `<text x="${f(x + 7)}" y="${f(y - 6)}" font-size="10" fill="${ink}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${t === 0 ? 't = 0' : `${C.fmtNum(t)} s`}</text>`; };
+        for (const r of refTimes) out.push(lab(r, idxOf(r)));
+      }
+      const unitWord = D.probeShown && D.probeShown.unit === 'event' ? 'events' : 'trials';
+      out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 17)}" font-size="10.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${three ? 'drag to rotate · ' : ''}○ start${zeroIdx >= 0 ? ' · ● t = 0' : ''}${refTimes.map(r => ` · ${SHAPE_GLYPH[shapeFor(r, refTimes)]} ${C.fmtNum(r)} s`).join('')}${markers.length ? ' · ◆ marker median' : ''}</text>`);
+      if (cloud.length) out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 31)}" font-size="10.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">small shapes: single ${unitWord}, centred on the large ones${layout.cloudOutside ? ` · ${layout.cloudOutside} beyond the frame` : ''}</text>`);
+      else if (S.cloud && D.probePending) out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 31)}" font-size="10.5" fill="${muted}">loading single ${S.weight === 'trial' ? 'trials' : 'events'}…</text>`);
+      layout.traj = {box: traj, screen, project, three, cloud: cloudScreen};
+      if (!opts.export) out.push(`<rect class="hit" data-kind="traj" x="${f(traj.x)}" y="${f(traj.y)}" width="${f(traj.w)}" height="${f(traj.h)}" fill="transparent"${three ? ' style="touch-action:none;cursor:grab"' : ''}/>`);
+    }
+
+    // ---- component time courses
+    {
+      const ml = 46, x0 = tc.x + ml, x1 = tc.x + tc.w - 8, pw = x1 - x0;
+      const X = t => x0 + (t - pre) / (post - pre) * pw;
+      const panels = [];
+      for (let k = 0; k < K; k++) {
+        const y0 = tc.y + k * tcPanel, y1 = y0 + tcPanel - 10;
+        let lo = Infinity, hi = -Infinity;
+        for (const {fg} of vis) for (const p of fg.coords) { lo = Math.min(lo, p[k]); hi = Math.max(hi, p[k]); }
+        if (!Number.isFinite(lo)) { lo = -1; hi = 1; }
+        const padY = (hi - lo) * 0.1 || 1; lo -= padY; hi += padY;
+        const Y = v => y1 - (v - lo) / (hi - lo) * (y1 - y0);
+        panels.push({k, y0, y1, Y});
+        out.push(`<rect x="${f(X(Math.max(pre, M.cw[0])))}" y="${f(y0)}" width="${f(X(Math.min(post, M.cw[1])) - X(Math.max(pre, M.cw[0])))}" height="${f(y1 - y0)}" fill="${windowC}" opacity="${isDark() ? 0.5 : 0.55}"/>`);
+        if (lo < 0 && hi > 0) out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(Y(0))}" y2="${f(Y(0))}" stroke="${gridC}" stroke-width="1.2"/>`);
+        if (pre < 0 && post > 0) out.push(`<line x1="${f(X(0))}" x2="${f(X(0))}" y1="${f(y0)}" y2="${f(y1)}" stroke="${ink}" stroke-dasharray="2 3" opacity="0.6"/>`);
+        for (const r of S.refs) if (r > pre && r < post) out.push(`<line x1="${f(X(r))}" x2="${f(X(r))}" y1="${f(y0)}" y2="${f(y1)}" stroke="${muted}" stroke-dasharray="5 3"/>`);
+        if (S.medians) for (const m of markers) {
+          const mi = medianIdx(m, vis.flatMap(({g}) => g.rows));
+          if (mi) out.push(`<line x1="${f(X(mi.t))}" x2="${f(X(mi.t))}" y1="${f(y0)}" y2="${f(y1)}" stroke="${paint(m.c)}" stroke-width="1.1" stroke-dasharray="4 3"/>`);
+        }
+        for (const {g, fg} of vis) out.push(`<path d="${fg.coords.map((p, j) => `${j ? 'L' : 'M'}${f(X(times[j]))} ${f(Y(p[k]))}`).join('')}" fill="none" stroke="${g.color}" stroke-width="1.8" stroke-linejoin="round"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/>`);
+        out.push(`<line x1="${f(x0)}" x2="${f(x0)}" y1="${f(y0)}" y2="${f(y1)}" stroke="${axisC}"/>`);
+        out.push(`<text x="${f(x0 + 6)}" y="${f(y0 + 12)}" font-size="11" font-weight="600" fill="${ink}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${compName(k)} <tspan font-weight="400" fill="${muted}">${pct(k)}</tspan></text>`);
+        for (const v of niceTicks(lo, hi, 2)) out.push(`<text x="${f(x0 - 5)}" y="${f(Y(v) + 3.5)}" text-anchor="end" font-size="9.5" fill="${muted}">${C.fmtNum(v)}</text>`);
+        if (!opts.export) out.push(`<rect class="hit" data-kind="tc" data-k="${k}" x="${f(x0)}" y="${f(y0)}" width="${f(pw)}" height="${f(tcPanel)}" fill="transparent"/>`);
+      }
+      const yb = tc.y + K * tcPanel - 10;
+      out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(yb)}" y2="${f(yb)}" stroke="${axisC}"/>`);
+      for (const v of niceTicks(pre, post, Math.max(3, Math.round(pw / 80)))) out.push(`<text x="${f(X(v))}" y="${f(yb + 14)}" text-anchor="middle" font-size="10" fill="${muted}">${C.fmtNum(v)}</text>`);
+      out.push(`<text x="${f((x0 + x1) / 2)}" y="${f(yb + 29)}" text-anchor="middle" font-size="11.5" fill="${ink}">time from ${esc(eventLabel(S.align))} (s)</text>`);
+      layout.tc = {box: tc, x0, x1, X, panels};
+    }
+
+    // ---- heatmap + loadings
+    const hg = heatGroupIndex(M, fit);
+    if (hg) {
+      const order = neuronOrder(fit, hg.gi);
+      const ml = 50, x0 = heat.x + ml, x1 = heat.x + heat.w, pw = x1 - x0, rowH = heat.h / Math.max(1, U);
+      const X = t => x0 + (t - pre) / (post - pre) * pw;
+      const sortName = {loading: `${compName(loadingComp(fit))} loading`, peak: 'peak time', rate: 'mean rate', id: 'unit ID', channel: 'peak channel', area: 'area'}[String(S.nsort).split(':')[0]] || 'unit ID';
+      out.push(`<text x="${f(heat.x)}" y="${f(heat.y - 8)}" font-size="12" font-weight="600" fill="${ink}">neurons × time · <tspan fill="${hg.g.color}">${esc(hg.g.label)}</tspan><tspan font-weight="400" fill="${muted}"> · ${S.heatNorm === 'z' ? 'z-scored per neuron across all groups' : 'rate / neuron peak'} · sorted by ${sortName}</tspan></text>`);
+      out.push(`<image href="${heatImage(fit, hg.gi, order)}" x="${f(x0)}" y="${f(heat.y)}" width="${f(pw)}" height="${f(heat.h)}" preserveAspectRatio="none" style="image-rendering:pixelated"/>`);
+      let runStart = 0;
+      for (let r = 1; r <= U; r++) {
+        const area = r < U ? (D.unitMap.get(fit.active_unit_ids[order[r]]) || {}).area : null;
+        const prev = (D.unitMap.get(fit.active_unit_ids[order[runStart]]) || {}).area;
+        if (r === U || area !== prev) {
+          out.push(`<rect x="${f(x0 - 8)}" y="${f(heat.y + runStart * rowH)}" width="5" height="${f(Math.max(0.6, (r - runStart) * rowH))}" fill="${areaColor(prev)}"/>`);
+          runStart = r;
+        }
+      }
+      if (pre < 0 && post > 0) out.push(`<line x1="${f(X(0))}" x2="${f(X(0))}" y1="${f(heat.y)}" y2="${f(heat.y + heat.h)}" stroke="${ink}" stroke-dasharray="2 3" opacity="0.7"/>`);
+      for (const t of M.cw) if (t > pre && t < post) out.push(`<line x1="${f(X(t))}" x2="${f(X(t))}" y1="${f(heat.y)}" y2="${f(heat.y + heat.h)}" stroke="${ink}" stroke-width="0.8" opacity="0.45"/>`);
+      const yb = heat.y + heat.h;
+      for (const v of niceTicks(pre, post, Math.max(3, Math.round(pw / 80)))) out.push(`<line x1="${f(X(v))}" x2="${f(X(v))}" y1="${f(yb)}" y2="${f(yb + 4)}" stroke="${axisC}"/><text x="${f(X(v))}" y="${f(yb + 16)}" text-anchor="middle" font-size="10" fill="${muted}">${C.fmtNum(v)}</text>`);
+      out.push(`<text x="${f((x0 + x1) / 2)}" y="${f(yb + 31)}" text-anchor="middle" font-size="11.5" fill="${ink}">time from ${esc(eventLabel(S.align))} (s)</text>`);
+      out.push(`<text transform="translate(${f(heat.x + 14)},${f(heat.y + heat.h / 2)}) rotate(-90)" text-anchor="middle" font-size="11" fill="${muted}">${U} neurons</text>`);
+      // colour bar and area key
+      const cbW = Math.min(120, pw * 0.3), cbX = x1 - cbW, cbY = yb + 22;
+      const stops = [0, 0.25, 0.5, 0.75, 1].map(s => { const v = S.heatNorm === 'z' ? -2.5 + 5 * s : s; const [R, G, B] = C.heatColor(v, S.heatNorm, isDark()); return `<stop offset="${s}" stop-color="rgb(${R},${G},${B})"/>`; }).join('');
+      out.push(`<defs><linearGradient id="heatbar">${stops}</linearGradient></defs><rect x="${f(cbX)}" y="${f(cbY)}" width="${f(cbW)}" height="7" rx="2" fill="url(#heatbar)"/>`,
+        `<text x="${f(cbX - 4)}" y="${f(cbY + 7)}" text-anchor="end" font-size="9.5" fill="${muted}">${S.heatNorm === 'z' ? '−2.5 z' : '0'}</text><text x="${f(x1)}" y="${f(cbY + 18)}" text-anchor="end" font-size="9.5" fill="${muted}">${S.heatNorm === 'z' ? '+2.5 z' : 'peak'}</text>`);
+      const areas = [...new Set(fit.active_unit_ids.map(id => (D.unitMap.get(id) || {}).area))];
+      let ax = x0;
+      for (const a of areas) { out.push(`<rect x="${f(ax)}" y="${f(cbY)}" width="8" height="8" rx="2" fill="${areaColor(a)}"/><text x="${f(ax + 11)}" y="${f(cbY + 7.5)}" font-size="10" fill="${muted}">${esc(a || '?')}</text>`); ax += 22 + String(a || '?').length * 6; }
+      // loadings aligned to heatmap rows
+      const k = loadingComp(fit);
+      const lmax = Math.max(1e-9, ...fit.loadings.map(l => Math.abs(l[k])));
+      const mid = load.x + load.w / 2, half = load.w / 2 - 4;
+      out.push(`<text x="${f(mid)}" y="${f(load.y - 8)}" text-anchor="middle" font-size="11" font-weight="600" fill="${ink}">${compName(k)} loading</text>`);
+      let pos = '', neg = '';
+      order.forEach((u, r) => {
+        const l = fit.loadings[u][k] / lmax * half, y = load.y + r * rowH;
+        const d = `M${f(mid)} ${f(y)}h${f(l)}v${f(Math.max(0.6, rowH * 0.86))}h${f(-l)}z`;
+        if (l >= 0) pos += d; else neg += d;
+      });
+      out.push(`<path d="${pos}" fill="${paint('#e03131')}" opacity="0.8"/><path d="${neg}" fill="${paint('#1c7ed6')}" opacity="0.8"/>`,
+        `<line x1="${f(mid)}" x2="${f(mid)}" y1="${f(load.y)}" y2="${f(load.y + load.h)}" stroke="${axisC}"/>`);
+      layout.heat = {box: heat, x0, x1, X, rowH, order, gi: hg.gi, group: hg.g};
+      layout.load = {box: load, rowH, order, k};
+      if (!opts.export) out.push(`<rect class="hit" data-kind="heat" x="${f(x0)}" y="${f(heat.y)}" width="${f(pw)}" height="${f(heat.h)}" fill="transparent"/>`,
+        `<rect class="hit" data-kind="load" x="${f(load.x)}" y="${f(load.y)}" width="${f(load.w)}" height="${f(load.h)}" fill="transparent"/>`);
+    }
+
+    // ---- variance explained and diagnostics
+    {
+      const ml = 34, x0 = vbox.x + ml, x1 = vbox.x + vbox.w, yb = vbox.y + vbox.h - 20, h = vbox.h - 44;
+      const r2 = fit.component_r2, maxv = Math.max(0.05, ...r2) * 1.15, step = (x1 - x0) / K, bw = Math.min(34, step * 0.62);
+      out.push(`<text x="${f(vbox.x)}" y="${f(vbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">${S.method === 'pca' ? 'variance explained' : 'variance explained by each component alone'}</text>`);
+      r2.forEach((v, k) => {
+        const cx = x0 + (k + 0.5) * step, y = yb - v / maxv * h;
+        out.push(`<rect x="${f(cx - bw / 2)}" y="${f(y)}" width="${f(bw)}" height="${f(yb - y)}" rx="2" fill="${paint('#3b5bdb')}" opacity="${0.9 - 0.05 * k}"/>`,
+          `<text x="${f(cx)}" y="${f(y - 3)}" text-anchor="middle" font-size="9.5" fill="${muted}">${C.fmtNum(100 * v, 0)}%</text>`,
+          `<text x="${f(cx)}" y="${f(yb + 13)}" text-anchor="middle" font-size="10" fill="${muted}">${compName(k)}</text>`);
+      });
+      out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(yb)}" y2="${f(yb)}" stroke="${axisC}"/>`);
+      const dropped = fit.dropped_constant_units.length;
+      const lines = [
+        `${fit.fit_rows} fit rows = ${fit.groups.length} group${fit.groups.length === 1 ? '' : 's'} × ${n} bins · ${fit.active_unit_ids.length} neurons${dropped ? ` (${dropped} constant, left out)` : ''}`,
+        `all ${K} components together explain ${C.fmtNum(100 * fit.reconstruction_r2, 1)}% · rank ${fit.rank}${fit.converged ? '' : ' · did not converge'}`,
+        `means: ${fit.weighting}`,
+        'descriptive in-sample fit; no held-out prediction or significance test',
+      ];
+      if (fit.warnings && fit.warnings.length) lines.push(`warning: ${String(fit.warnings[0]).slice(0, 110)}`);
+      lines.forEach((t, i) => out.push(`<text x="${f(dbox.x)}" y="${f(dbox.y + 12 + i * 16)}" font-size="11" fill="${i === 4 ? paint('#e8590c') : i < 2 ? ink : muted}">${esc(t)}</text>`));
+    }
+    const meta = opts.export ? `<metadata>${esc(JSON.stringify(popProvenance(M, fit)))}</metadata>` : '';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="${font}">${meta}` +
+      (opts.export ? `<rect x="-20" y="-20" width="${width + 40}" height="${height + 40}" fill="${bg}"/>` : '') + out.join('') +
+      (opts.export ? '' : '<g id="cursorLayer" pointer-events="none"></g><g id="hoverLayer" pointer-events="none"></g>') + '</svg>';
+    return {svg, layout};
+  }
+
+  function drawCursor() {
+    const L = D.popLayout, layer = document.getElementById('cursorLayer');
+    if (!L || !layer) return;
+    const j = D.cursor;
+    if (j === null || j === undefined || j >= L.n) { layer.innerHTML = ''; $('cursorOut').textContent = 't —'; return; }
+    const bg = figVar('--fig-bg'), t = L.times[j];
+    let html = '';
+    L.vis.forEach(({g}, vi) => { const p = L.traj.screen[vi][j]; html += `<circle cx="${f1(p[0])}" cy="${f1(p[1])}" r="5.2" fill="${g.color}" stroke="${bg}" stroke-width="2"/>`; });
+    const x = L.tc.X(t);
+    html += `<line x1="${f1(x)}" x2="${f1(x)}" y1="${f1(L.tc.box.y)}" y2="${f1(L.tc.box.y + L.tc.panels.length * (L.tc.panels[0].y1 - L.tc.panels[0].y0 + 10) - 10)}" stroke="${figVar('--accent')}" stroke-width="1.4"/>`;
+    if (L.heat) html += `<line x1="${f1(L.heat.X(t))}" x2="${f1(L.heat.X(t))}" y1="${f1(L.heat.box.y)}" y2="${f1(L.heat.box.y + L.heat.box.h)}" stroke="${figVar('--accent')}" stroke-width="1.4"/>`;
+    layer.innerHTML = html;
+    $('cursorOut').textContent = `t ${t >= 0 ? '+' : ''}${C.fmtNum(t, 2)} s`;
+  }
+  function stopPlay() { clearInterval(D.playTimer); D.playTimer = 0; const b = $('playBtn'); if (b) b.textContent = '▶'; }
+  function togglePlay() {
+    if (D.playTimer) { stopPlay(); return; }
+    const L = D.popLayout; if (!L) return;
+    if (D.cursor === null || D.cursor >= L.n - 1) D.cursor = 0;
+    $('playBtn').textContent = '❚❚';
+    D.playTimer = setInterval(() => {
+      const L2 = D.popLayout; if (!L2) { stopPlay(); return; }
+      D.cursor = D.cursor + 1;
+      if (D.cursor >= L2.n) { D.cursor = L2.n - 1; stopPlay(); }
+      $('cursor').value = D.cursor; drawCursor();
+    }, 55);
+  }
+
+  function syncPopToolbar(fit, M) {
+    const K = fit.components;
+    let [a, b, c] = S.axes.map(x => clamp(Number(x) || 0, 0, K - 1));
+    if (b === a) b = (a + 1) % K;
+    if (c === a || c === b) c = [0, 1, 2, 3].find(x => x < K && x !== a && x !== b) ?? 0;
+    S.axes = [a, b, c];
+    const opt = sel => [...Array(K).keys()].map(k => `<option value="${k}"${k === sel ? ' selected' : ''}>${compName(k)} · ${C.fmtNum(100 * fit.component_r2[k], 0)}%</option>`).join('');
+    $('axX').innerHTML = opt(a); $('axY').innerHTML = opt(b); $('axZ').innerHTML = opt(c);
+    $('axZWrap').hidden = !(S.dims === '3' && K >= 3);
+    const n = fit.times.length;
+    $('cursor').max = n - 1;
+    if (D.cursor !== null && D.cursor >= n) D.cursor = n - 1;
+    if (D.cursor !== null) $('cursor').value = D.cursor;
+    const vis = M.visible.filter(g => fit.groupIndex.has(g.key));
+    const hg = heatGroupIndex(M, fit);
+    $('heatGroup').innerHTML = vis.map(g => `<option value="${esc(g.key)}"${hg && hg.g.key === g.key ? ' selected' : ''}>${esc(g.label)}</option>`).join('');
+  }
+
+  function popEmpty(title, lines, buttons) {
+    $('figure').innerHTML = ''; $('figure').classList.remove('stale');
+    D.popLayout = null;
+    $('empty').innerHTML = `<h3>${esc(title)}</h3>${lines.map(l => `<p>${l}</p>`).join('')}<div class="chips" style="justify-content:center;margin-top:12px">${buttons}</div>`;
+    $('empty').hidden = false;
+  }
+  function renderPopulation() {
+    const fig = $('figure');
+    $('bars').innerHTML = '';
+    document.querySelector('.figure-wrap').classList.add('stacked');
+    renderRosterSection();
+    const M = buildPopModel();
+    if (!M) { if (fig.querySelector('svg')) fig.classList.add('stale'); else showLoading('Loading…', ''); return; }
+    const presetButtons = rosterPresetList().slice(0, 5).map((p, i) => `<button type="button" class="${i ? 'small' : 'primary'}" data-act="rp:${esc(p.id)}">${esc(p.label)}${p.ids ? ` · ${p.ids.length}` : ''}</button>`).join('') +
+      '<button type="button" class="small" data-act="choose">Choose neurons…</button>';
+    if (M.needRoster) {
+      $('title').textContent = 'Population'; $('subtitle').textContent = eventLabel(S.align); $('support').innerHTML = ''; $('legend').innerHTML = '';
+      renderQuickFilters({T: M.T, raster: {n: M.T.n, span: new Array(M.T.n).fill([-1e9, 1e9]), status: []}, pre: S.win[0], post: S.win[1]});
+      popEmpty('Choose neurons for the population', ['The population view fits one PCA / ICA / factor-analysis basis to the condition means of many neurons, using the same alignment, filters, groups and window as the raster view.',
+        '<b>Shared-stable SUA + MUA</b> picks the most neurons that share many stable trials — the usual starting point.'], presetButtons);
+      return;
+    }
+    D.popModel = M;
+    const areas = [...new Set(S.roster.map(id => (D.unitMap.get(id) || {}).area).filter(Boolean))];
+    $('title').textContent = `Population · ${S.roster.length} neurons${areas.length ? ` · ${areas.join(' + ')}` : ''}`;
+    $('subtitle').textContent = `${eventLabel(S.align)} · ${S.policy === 'verified_stable' ? 'trials stable for every neuron' : 'all complete trials'} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.method.toUpperCase()} (${S.scaling === 'zscore' ? 'z-scored' : 'centred'}) · ${S.ncomp} components · ${S.weight === 'trial' ? 'trial' : 'event'}-weighted means`;
+    const shown = M.visible.reduce((acc, g) => acc + g.rows.length, 0);
+    const trials = new Set(); M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
+    const detail = [];
+    if (M.filtered) detail.push(`${M.filtered} filtered out`);
+    if (M.excl[1] + M.excl[2]) detail.push(`${M.excl[1] + M.excl[2]} outside the ${M.common} ${S.policy === 'verified_stable' ? 'shared stable' : 'complete'} trials`);
+    if (M.excl[3]) detail.push(`${M.excl[3]} whose window leaves the shared run`);
+    $('support').innerHTML = `<b>${shown}</b> events · <b>${trials.size}</b> trials · <b>${S.roster.length}</b> neurons` + (detail.length ? `<br>${esc(detail.join(' · '))}` : '');
+    renderLegend(M);
+    renderQuickFilters(M);
+    if (S.roster.length < 2) { popEmpty('Add at least one more neuron', ['A population fit needs two or more neurons.'], presetButtons); return; }
+    if (!M.rows.length) {
+      const lines = [];
+      if (M.excl[1] + M.excl[2]) lines.push(`${esc(String(M.excl[1] + M.excl[2]))} events fall outside the <b>${M.common}</b> trials that ${S.policy === 'verified_stable' ? 'are stable for all' : 'are complete for'} these ${S.roster.length} neurons.`);
+      if (M.excl[3]) lines.push(`${M.excl[3]} events have a window (plus the 0.4 s guard) that leaves the shared run — try a shorter window.`);
+      if (M.filtered === M.T.n) lines.push('The filters exclude every event.');
+      popEmpty('No events to fit', lines, (S.policy === 'verified_stable' ? '<button type="button" class="primary" data-act="all-complete">Use all complete trials</button><button type="button" class="small" data-act="rp:stable">Shared-stable SUA + MUA</button>' : '') +
+        (S.filters.length ? '<button type="button" class="small" data-act="clear-filters">Clear filters</button>' : ''));
+      return;
+    }
+    if (S.ncomp > S.roster.length) { popEmpty('Too many components', [`${S.ncomp} components need at least ${S.ncomp} neurons; this roster has ${S.roster.length}.`], ''); return; }
+    const req = fitRequest(M), key = C.hash(JSON.stringify(req));
+    const fit = D.fits.get(key);
+    if (!fit) {
+      const err = D.fitErrors.get(key);
+      if (err) { popEmpty('The fit did not run', [esc(err)], '<button type="button" class="small" data-act="refit">Try again</button>'); return; }
+      requestFit(req, key);
+      if (fig.querySelector('svg') && D.popLayout) fig.classList.add('stale');
+      else showLoading(`Fitting ${S.method.toUpperCase()} to ${S.roster.length} neurons…`, `${M.grouping.groups.length} groups · ${M.rows.length} events`);
+      return;
+    }
+    fig.classList.remove('stale');
+    $('empty').hidden = true;
+    D.popFit = fit; D.popKey = key; D.popReq = req;
+    D.probeShown = null;
+    if (S.cloud) {
+      const probeTimes = cloudTimes(fit);
+      if (probeTimes.length) {
+        const pkey = `${key}|${probeTimes.join(',')}`;
+        if (D.probes.has(pkey)) D.probeShown = D.probes.get(pkey);
+        else requestProbe({...req, probe_times: probeTimes}, pkey);
+      }
+    }
+    syncPopToolbar(fit, M);
+    const width = Math.max(300, Math.floor(document.querySelector('.figure-wrap').clientWidth || ($('stage').clientWidth - 36)));
+    const {svg, layout} = popFigureSVG(M, fit, width);
+    fig.innerHTML = svg;
+    D.popLayout = layout;
+    D.figMeta = {title: $('title').textContent, subtitle: $('subtitle').textContent, width};
+    drawCursor();
+    $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · condition means per group, one joint ${S.method.toUpperCase()} basis (sklearn, as the classic workspace) · component signs set so each component's largest loading is positive · electro_gui ${VERSION}`;
+  }
+  function rerenderPopFigure() {
+    const M = D.popModel, fit = D.popFit;
+    if (!M || !fit || S.mode !== 'population') return;
+    const width = D.figMeta ? D.figMeta.width : 800;
+    const {svg, layout} = popFigureSVG(M, fit, width);
+    $('figure').innerHTML = svg; D.popLayout = layout; drawCursor();
+  }
+
+  // hover and 3D rotation in the population figure
+  function popPoint(evt) {
+    const svg = $('figure').querySelector('svg'), r = svg.getBoundingClientRect(), L = D.popLayout;
+    return {x: (evt.clientX - r.left) * (L.width / r.width), y: (evt.clientY - r.top) * (L.height / r.height)};
+  }
+  function popHover(kind, hit, p, evt) {
+    const L = D.popLayout, fit = D.popFit, hl = document.getElementById('hoverLayer');
+    if (!L || !fit || !hl) return;
+    const names = fit.method;
+    if (kind === 'traj') {
+      let near = null;
+      for (const pt of L.traj.cloud || []) { const d = (pt.x - p.x) ** 2 + (pt.y - p.y) ** 2; if (d < 42 && (!near || d < near.d)) near = {...pt, d}; }
+      if (near) {
+        hl.innerHTML = `<circle cx="${f1(near.x)}" cy="${f1(near.y)}" r="5" fill="none" stroke="${near.g.color}" stroke-width="2"/>`;
+        const unit = D.probeShown && D.probeShown.unit === 'event' ? 'event row' : 'trial';
+        tooltip(`<div class="tr" style="--c:${near.g.color}"><i></i><span><b>${esc(near.g.label)}</b></span></div><div class="kv"><span>${unit}</span><b>${near.id}</b><span>at</span><b>${near.t === 0 ? 't = 0' : `${C.fmtNum(near.t)} s`} (bin ${C.fmtNum(near.centre, 3)} s)</b>${S.axes.slice(0, S.dims === '3' ? 3 : 2).map(k => `<span>${compName(k, names)}</span><b>${C.fmtNum(near.c[k], 2)}</b>`).join('')}</div>`, evt.clientX, evt.clientY);
+        return;
+      }
+      let best = null;
+      L.vis.forEach(({g, fg}, vi) => L.traj.screen[vi].forEach((q, j) => { const d = (q[0] - p.x) ** 2 + (q[1] - p.y) ** 2; if (!best || d < best.d) best = {d, g, fg, j, q}; }));
+      if (!best || best.d > 900) { hl.innerHTML = ''; $('tooltip').hidden = true; return; }
+      hl.innerHTML = `<circle cx="${f1(best.q[0])}" cy="${f1(best.q[1])}" r="6" fill="none" stroke="${best.g.color}" stroke-width="2"/>`;
+      const c = best.fg.coords[best.j];
+      tooltip(`<div class="tr" style="--c:${best.g.color}"><i></i><span><b>${esc(best.g.label)}</b></span></div><div class="kv"><span>time</span><b>${C.fmtNum(fit.times[best.j], 3)} s</b>${S.axes.slice(0, S.dims === '3' ? 3 : 2).map(k => `<span>${compName(k, names)}</span><b>${C.fmtNum(c[k], 2)}</b>`).join('')}</div>`, evt.clientX, evt.clientY);
+    } else if (kind === 'tc') {
+      const k = Number(hit.dataset.k), t = D.popLayout.pre + (p.x - L.tc.x0) / (L.tc.x1 - L.tc.x0) * (L.post - L.pre);
+      const j = clamp(Math.floor((t - L.pre) / fit.bin), 0, L.n - 1), x = L.tc.X(fit.times[j]);
+      const last = L.tc.panels[L.tc.panels.length - 1];
+      hl.innerHTML = `<line x1="${f1(x)}" x2="${f1(x)}" y1="${f1(L.tc.panels[0].y0)}" y2="${f1(last.y1)}" stroke="${figVar('--fig-muted')}"/>`;
+      tooltip(`<b>${compName(k, names)} · t = ${C.fmtNum(fit.times[j], 3)} s</b>${L.vis.map(({g, fg}) => `<div class="tr" style="--c:${g.color}"><i></i><span>${esc(g.label)}</span><em>${C.fmtNum(fg.coords[j][k], 2)}</em></div>`).join('')}`, evt.clientX, evt.clientY);
+    } else if (kind === 'heat' || kind === 'load') {
+      const box = kind === 'heat' ? L.heat : L.load, rowH = box.rowH;
+      const r = clamp(Math.floor((p.y - box.box.y) / rowH), 0, box.order.length - 1), u = box.order[r];
+      const id = fit.active_unit_ids[u], unit = D.unitMap.get(id) || {id};
+      const kv = [['area · quality', `${unit.area || '?'} · ${String(unit.quality || '').toUpperCase()}`]];
+      if (kind === 'heat') {
+        const t = L.pre + (p.x - L.heat.x0) / (L.heat.x1 - L.heat.x0) * (L.post - L.pre);
+        const j = clamp(Math.floor((t - L.pre) / fit.bin), 0, L.n - 1), v = fit.groups[L.heat.gi].means[j][u];
+        kv.push(['time', `${C.fmtNum(fit.times[j], 3)} s`], ['rate', `${C.fmtNum(v, 1)} spikes/s`], ['z (all groups)', C.fmtNum((v - fit.stats.mu[u]) / fit.stats.sd[u], 2)]);
+      }
+      for (let k = 0; k < fit.components; k++) kv.push([`${compName(k, names)} loading`, C.fmtNum(fit.loadings[u][k], 3)]);
+      hl.innerHTML = `<rect x="${f1(L.heat ? L.heat.x0 : 0)}" y="${f1(box.box.y + r * rowH)}" width="${f1(L.width - (L.heat ? L.heat.x0 : 0))}" height="${f1(Math.max(rowH, 1.5))}" fill="${figVar('--accent')}" opacity="0.18"/>`;
+      tooltip(`<b>${esc(unitShort(unit))}</b><div class="kv">${kv.map(([a, v]) => `<span>${esc(a)}</span><b>${esc(v)}</b>`).join('')}</div>`, evt.clientX, evt.clientY);
+    }
+  }
+  let rotate = null;
+  function bindPopFigure(fig) {
+    fig.addEventListener('pointerdown', evt => {
+      if (S.mode !== 'population' || !D.popLayout) return;
+      const hit = evt.target.closest && evt.target.closest('.hit');
+      if (hit && hit.dataset.kind === 'traj' && D.popLayout.traj.three) {
+        rotate = {x: evt.clientX, y: evt.clientY, yaw: D.view3d.yaw, pitch: D.view3d.pitch};
+        fig.setPointerCapture(evt.pointerId); hideTip(); evt.preventDefault();
+      } else if (hit && evt.pointerType !== 'mouse') {
+        popHover(hit.dataset.kind, hit, popPoint(evt), evt);
+        clearTimeout(tipTimer); tipTimer = setTimeout(hideTip, 3500);
+      }
+    });
+    fig.addEventListener('pointermove', evt => {
+      if (S.mode !== 'population' || !D.popLayout) return;
+      if (rotate) {
+        D.view3d.yaw = rotate.yaw + (evt.clientX - rotate.x) * 0.01;
+        D.view3d.pitch = clamp(rotate.pitch + (evt.clientY - rotate.y) * 0.01, -1.45, 1.45);
+        if (!D.rotFrame) D.rotFrame = requestAnimationFrame(() => { D.rotFrame = 0; rerenderPopFigure(); });
+        return;
+      }
+      const hit = evt.target.closest && evt.target.closest('.hit');
+      if (!hit) { if (evt.pointerType === 'mouse') hideTip(); return; }
+      popHover(hit.dataset.kind, hit, popPoint(evt), evt);
+    });
+    const end = () => { rotate = null; };
+    fig.addEventListener('pointerup', end);
+    fig.addEventListener('pointercancel', end);
+  }
+
+  function popProvenance(M, fit) {
+    return {tool: `electro_gui ${VERSION} explorer · population`, generated: new Date().toISOString(), session_id: D.summary.session_id,
+      source: D.summary.source, alignment: S.align, policy: S.policy, unit_ids: S.roster.slice(),
+      active_unit_ids: fit.active_unit_ids, dropped_constant_units: fit.dropped_constant_units, method: fit.method, scaling: fit.scaling,
+      components: fit.components, component_r2: fit.component_r2, explained_variance_ratio: fit.explained_variance_ratio,
+      reconstruction_r2: fit.reconstruction_r2, rank: fit.rank, fit_rows: fit.fit_rows, converged: fit.converged, warnings: fit.warnings,
+      weighting: fit.weighting, window: fit.window, bin: fit.bin, sigma: fit.sigma, common_trials: fit.common_trials,
+      groups: fit.groups.map(g => ({key: g.key, label: g.label, events: g.events, trials: g.trials})), scope: fit.scope, state: S};
+  }
+  function popExportSVG() {
+    const width = Math.max(900, D.figMeta.width);
+    return popFigureSVG(D.popModel, D.popFit, width, {export: true, title: D.figMeta.title, subtitle: `${D.summary.session_id} · ${D.figMeta.subtitle}`}).svg;
+  }
+  async function popExport(kind) {
+    const M = D.popModel, fit = D.popFit;
+    if (!M || !fit || S.mode !== 'population' || !D.popLayout) { toast('Nothing to export yet.', true); return; }
+    const stem = `${D.summary.session_id}_population_${S.roster.length}neurons_${S.align}_${S.method}`;
+    const names = [...Array(fit.components).keys()].map(k => compName(k, fit.method));
+    if (kind === 'svg') download(`${stem}.svg`, new Blob([popExportSVG()], {type: 'image/svg+xml'}));
+    else if (kind === 'png') await pngFromSVG(popExportSVG(), `${stem}.png`);
+    else if (kind === 'coords') {
+      const lines = [['group', 'time_s', ...names].join(',')];
+      for (const g of fit.groups) g.coords.forEach((c, j) => lines.push([csv(g.label), tidy(fit.times[j], 4), ...c.map(v => tidy(v, 5))].join(',')));
+      download(`${stem}_coordinates.csv`, new Blob([`# ${JSON.stringify(popProvenance(M, fit))}\n` + lines.join('\n')], {type: 'text/csv'}));
+    } else if (kind === 'loadings') {
+      const lines = [['unit_id', 'peak_channel', 'area', 'quality', ...names.map(n => `${n}_loading`)].join(',')];
+      fit.active_unit_ids.forEach((id, u) => { const x = D.unitMap.get(id) || {}; lines.push([id, x.peak_channel ?? '', csv(x.area), csv(x.quality), ...fit.loadings[u].map(v => tidy(v, 6))].join(',')); });
+      download(`${stem}_loadings.csv`, new Blob([`# ${JSON.stringify(popProvenance(M, fit))}\n` + lines.join('\n')], {type: 'text/csv'}));
+    } else if (kind === 'cloud' && D.probeShown) {
+      const lines = [['group', 'time_s', 'bin_centre_s', 'unit', 'id', ...names].join(',')];
+      for (const pr of D.probeShown.probes) for (const pg of pr.groups) {
+        const label = (fit.groups.find(g => g.key === pg.key) || {}).label || pg.key;
+        pg.points.forEach((c, k) => lines.push([csv(label), tidy(pr.t, 4), tidy(pr.bin_centre, 4), D.probeShown.unit, pg.ids[k], ...c.map(v => tidy(v, 5))].join(',')));
+      }
+      download(`${stem}_single_trials.csv`, new Blob([`# ${JSON.stringify(popProvenance(M, fit))}\n# ${D.probeShown.note}\n` + lines.join('\n')], {type: 'text/csv'}));
+    } else if (kind === 'json') download(`${stem}_settings.json`, new Blob([JSON.stringify(popProvenance(M, fit), null, 2)], {type: 'application/json'}));
+  }
+  function setMode(mode) {
+    if (S.mode === mode) return;
+    stopPlay(); hideTip();
+    S.mode = mode;
+    applyMode(); closeSheet();
+    $('empty').hidden = true;
+    $('figure').innerHTML = '';
+    renderStructure();
+    changed({data: true});
+  }
+  function applyMode() {
+    document.documentElement.dataset.mode = S.mode;
+    document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === S.mode));
+  }
+
+  // --------------------------------------------------------------- export
+  function provenance(M) {
+    return {tool: `electro_gui ${VERSION} explorer`, generated: new Date().toISOString(), session_id: D.summary.session_id,
+      source: D.summary.source, unit: M.unit, alignment: S.align, policy: S.policy, guard_s: C.GUARD_S,
+      events_shown: M.visible.reduce((a, g) => a + g.rows.length, 0), state: S};
+  }
+  function download(name, blob) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+  function fileStem() {
+    const u = D.model && D.model.unit;
+    return `${D.summary.session_id}_unit${String(S.unit).padStart(4, '0')}${u && u.peak_channel !== null && u.peak_channel !== undefined ? `_ch${u.peak_channel}` : ''}_${S.align}`;
+  }
+  function exportSVG() {
+    const M = D.model;
+    const width = Math.max(720, D.figMeta.width);
+    const {svg, layout} = figureSVG(M, width, {export: true, title: D.figMeta.title, subtitle: `${D.summary.session_id} · ${D.figMeta.subtitle}`});
+    if (!S.bars) return svg;
+    const bw = 230, bh = Math.min(360, Math.max(240, layout.height * 0.5));
+    const bars = barsSVG(M, bw, bh).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '');
+    const W = width + bw + 16, H = Math.max(layout.height, bh);
+    return svg.replace(/^<svg[^>]*>/, `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${Math.ceil(H)}" viewBox="0 0 ${W} ${Math.ceil(H)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif"><rect x="-20" y="-20" width="${W + 40}" height="${Math.ceil(H) + 40}" fill="${figVar('--fig-bg')}"/>`)
+      .replace(/<\/svg>$/, `<g transform="translate(${width + 16},${Math.max(0, layout.panels[0].pTop - 40)})">${bars}</g></svg>`);
+  }
+  async function doExport(kind) {
+    if (!D.model || !D.model.rows.length) { toast('Nothing to export yet.', true); return; }
+    const M = D.model, stem = fileStem();
+    if (kind === 'svg') download(`${stem}.svg`, new Blob([exportSVG()], {type: 'image/svg+xml'}));
+    else if (kind === 'png') await pngFromSVG(exportSVG(), `${stem}.png`);
+    else if (kind === 'psth') {
+      const lines = [['group', 'panel', 'time_s', 'mean_hz', `${S.err === 'ci' ? 'sem' : 'sem'}_hz`, 'n_units', 'weighting', 'n_events', 'n_trials'].join(',')];
+      for (const g of M.visible) M.grid.times.forEach((t, j) => lines.push([csv(g.label), csv(g.panelLabel), tidy(t, 4), tidy(g.psth.mean[j], 4), tidy(g.psth.sem[j], 4), g.psth.n, S.weight, g.psth.events, g.psth.trials].join(',')));
+      download(`${stem}_psth.csv`, new Blob([`# ${JSON.stringify(provenance(M))}\n` + lines.join('\n')], {type: 'text/csv'}));
+    } else if (kind === 'rows') {
+      const fields = [...new Set(['world', 'role', 'action', 'outcome', 'order', 'previous_role', S.color, S.style, S.panel, ...S.filters.map(f => f.k)].filter(k => k && M.T.byKey.has(k)))];
+      const markers = S.markers.filter(m => M.markerData[m.id]);
+      const head = ['row_id', 'trial', 't_session_s', 'event', 'group', 'panel', 'count_window_spikes', 'count_window_rate_hz', ...markers.map(m => `marker_${m.label || m.e}_s`), ...fields];
+      const lines = [head.map(csv).join(',')];
+      for (const g of M.visible) for (const i of g.sorted) {
+        const n = C.countIn(M.spikes[i], M.cw[0], M.cw[1]);
+        lines.push([M.T.rowId[i], M.T.trial[i], tidy(M.T.t[i], 6), csv(M.T.event ? M.T.event[i] : S.align), csv(g.label), csv(g.panelLabel), n, tidy(n / (M.cw[1] - M.cw[0]), 4),
+          ...markers.map(m => { const h = M.markerData[m.id][i]; return h && h[0] ? tidy(h[0].t, 5) : ''; }),
+          ...fields.map(k => csv(C.rawValue(M.T.byKey.get(k), i)))].join(','));
+      }
+      download(`${stem}_rows.csv`, new Blob([`# ${JSON.stringify(provenance(M))}\n` + lines.join('\n')], {type: 'text/csv'}));
+    } else if (kind === 'json') download(`${stem}_settings.json`, new Blob([JSON.stringify(provenance(M), null, 2)], {type: 'application/json'}));
+  }
+  async function pngFromSVG(svg, name) {
+    const img = new Image();
+    const url = URL.createObjectURL(new Blob([svg], {type: 'image/svg+xml'}));
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width * 2; canvas.height = img.height * 2;
+    const ctx = canvas.getContext('2d'); ctx.scale(2, 2); ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    canvas.toBlob(b => download(name, b), 'image/png');
+  }
+  const csv = v => { if (v === null || v === undefined) return ''; const s = String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+
+  // ---------------------------------------------------------- interaction
+  function tooltip(html, x, y) {
+    const tip = $('tooltip');
+    tip.innerHTML = html; tip.hidden = false;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    let left = x + 14, top = y + 14;
+    if (left + w > innerWidth - 8) left = x - w - 14;
+    if (top + h > innerHeight - 8) top = y - h - 14;
+    tip.style.left = `${Math.max(8, left)}px`; tip.style.top = `${Math.max(8, top)}px`;
+  }
+  const hideTip = () => { $('tooltip').hidden = true; const h = document.getElementById('hoverLayer'); if (h) h.innerHTML = ''; };
+  function svgPoint(evt) {
+    const svg = $('figure').querySelector('svg');
+    const r = svg.getBoundingClientRect();
+    return {x: (evt.clientX - r.left) * (D.layout.width / r.width), y: (evt.clientY - r.top) * (D.layout.height / r.height)};
+  }
+  function timeAt(L, x) { return D.layout.pre + (x - L.x0) / L.plotW * (D.layout.post - D.layout.pre); }
+  function hoverPsth(L, p, evt) {
+    const M = D.model, t = timeAt(L, p.x);
+    const j = clamp(Math.floor((t - M.grid.pre) / M.grid.bin), 0, M.grid.n - 1);
+    const x = L.x0 + (M.grid.times[j] - D.layout.pre) / (D.layout.post - D.layout.pre) * L.plotW;
+    const hl = document.getElementById('hoverLayer');
+    if (hl) hl.innerHTML = `<line x1="${f1(x)}" x2="${f1(x)}" y1="${f1(L.rTop)}" y2="${f1(L.pBot)}" stroke="${figVar('--fig-muted')}" stroke-width="1"/>` +
+      L.groups.map(g => { const v = g.psth.mean[j]; const y = L.pBot - clamp(v / M.ymax, 0, 1.02) * (L.pBot - L.pTop); return `<circle cx="${f1(x)}" cy="${f1(y)}" r="3.5" fill="${g.color}" stroke="${figVar('--fig-bg')}" stroke-width="1.5"/>`; }).join('');
+    const rows = L.groups.map(g => `<div class="tr" style="--c:${g.color}"><i></i><span>${esc(g.label)}</span><em>${C.fmtNum(g.psth.mean[j], 1)}${M.errMul ? ` ± ${C.fmtNum(M.errMul * g.psth.sem[j], 1)}` : ''}</em></div>`).join('');
+    tooltip(`<b>t = ${C.fmtNum(M.grid.times[j], 3)} s</b> <span style="opacity:.7">spikes/s</span>${rows}`, evt.clientX, evt.clientY);
+  }
+  function hoverRaster(L, p, evt) {
+    const M = D.model;
+    const b = L.blocks.find(x => p.y >= x.top && p.y < x.top + x.height);
+    if (!b) { hideTip(); return; }
+    const k = clamp(Math.floor((p.y - b.top) / b.rowH), 0, b.rows.length - 1);
+    const i = b.rows[k], g = b.g || b.owner.get(i);
+    const T = M.T;
+    const kv = [['trial', T.trial[i]], ['event time', `${C.fmtNum(T.t[i], 2)} s`]];
+    if (T.event) kv.push(['event', eventLabel(T.event[i])]);
+    for (const key of ['world', 'role', 'action', 'order', 'previous_role', 'correct', S.color, S.style, S.panel]) {
+      const col = key && T.byKey.get(key);
+      if (!col || kv.some(([a]) => a === col.label)) continue;
+      const v = C.rawValue(col, i);
+      kv.push([col.label, typeof v === 'number' ? C.fmtNum(v) : C.formatLevel(key, v)]);
+    }
+    kv.push(['spikes in count window', C.countIn(M.spikes[i], M.cw[0], M.cw[1])]);
+    for (const m of S.markers) { const h = M.markerData[m.id] && M.markerData[m.id][i]; if (h && h.length) kv.push([m.label || eventLabel(m.e), `${h.map(x => C.fmtNum(x.t, 3)).join(', ')} s`]); }
+    const hl = document.getElementById('hoverLayer');
+    const yc = b.top + (k + 0.5) * b.rowH;
+    if (hl) hl.innerHTML = `<rect x="${f1(L.x0)}" y="${f1(yc - Math.max(b.rowH, 2) / 2)}" width="${f1(L.plotW)}" height="${f1(Math.max(b.rowH, 2))}" fill="${g.color}" opacity="0.18"/>`;
+    tooltip(`<div class="tr" style="--c:${g.color}"><i></i><span><b>${esc(g.label)}</b></span></div><div class="kv">${kv.map(([a, v]) => `<span>${esc(a)}</span><b>${esc(v)}</b>`).join('')}</div>`, evt.clientX, evt.clientY);
+  }
+
+  let brush = null, tipTimer = 0;
+  function bindFigure() {
+    const fig = $('figure');
+    fig.addEventListener('pointermove', evt => {
+      if (!D.layout || !D.model) return;
+      const p = svgPoint(evt);
+      if (brush) {
+        const L = D.layout.panels[brush.p];
+        const a = clamp(Math.min(brush.x, p.x), L.x0, L.x1), z = clamp(Math.max(brush.x, p.x), L.x0, L.x1);
+        const hl = document.getElementById('hoverLayer');
+        if (hl) hl.innerHTML = `<rect x="${f1(a)}" y="${f1(L.rTop)}" width="${f1(z - a)}" height="${f1(L.pBot - L.rTop)}" fill="${figVar('--accent')}" opacity="0.15"/>`;
+        return;
+      }
+      const hit = evt.target.closest && evt.target.closest('.hit');
+      if (!hit) { if (evt.pointerType === 'mouse') hideTip(); return; }
+      const L = D.layout.panels[Number(hit.dataset.p)];
+      hit.dataset.kind === 'psth' ? hoverPsth(L, p, evt) : hoverRaster(L, p, evt);
+    });
+    fig.addEventListener('pointerleave', evt => { if (evt.pointerType === 'mouse' && !brush) hideTip(); });
+    fig.addEventListener('pointerdown', evt => {
+      const hit = evt.target.closest && evt.target.closest('.hit');
+      if (!hit || !D.layout) return;
+      if (evt.pointerType === 'mouse' && evt.button === 0 && hit.dataset.kind === 'psth') {
+        brush = {p: Number(hit.dataset.p), x: svgPoint(evt).x, moved: false};
+        fig.setPointerCapture(evt.pointerId);
+        hideTip();
+      } else if (evt.pointerType !== 'mouse') {
+        const L = D.layout.panels[Number(hit.dataset.p)], p = svgPoint(evt);
+        hit.dataset.kind === 'psth' ? hoverPsth(L, p, evt) : hoverRaster(L, p, evt);
+        clearTimeout(tipTimer); tipTimer = setTimeout(hideTip, 3500);
+      }
+    });
+    fig.addEventListener('pointerup', evt => {
+      if (!brush) return;
+      const L = D.layout.panels[brush.p], x = svgPoint(evt).x;
+      if (Math.abs(x - brush.x) > 4) {
+        const snap = v => Math.round(v / 0.01) * 0.01;
+        const a = snap(timeAt(L, clamp(Math.min(brush.x, x), L.x0, L.x1))), z = snap(timeAt(L, clamp(Math.max(brush.x, x), L.x0, L.x1)));
+        if (z - a >= 0.01) { S.cw = [tidy(a), tidy(z)]; changed(); toast(`Count window [${C.fmtNum(S.cw[0])}, ${C.fmtNum(S.cw[1])}) s`); }
+      }
+      brush = null; hideTip();
+    });
+    fig.addEventListener('pointercancel', () => { brush = null; hideTip(); });
+    bindPopFigure(fig);
+  }
+
+  function stepUnit(delta) {
+    const list = unitList();
+    if (!list.length) return;
+    let idx = list.findIndex(u => u.id === S.unit);
+    if (idx < 0) idx = delta > 0 ? -1 : 0;
+    S.unit = list[(idx + delta + list.length) % list.length].id;
+    changed({data: true});
+  }
+
+  function bindControls() {
+    $('sessionSelect').addEventListener('change', e => selectSession(e.target.value).then(renderStructure));
+    $('prevUnit').addEventListener('click', () => stepUnit(-1));
+    $('nextUnit').addEventListener('click', () => stepUnit(1));
+    $('unitBtn').addEventListener('click', () => D.units.length && openUnitPicker());
+    $('alignBtn').addEventListener('click', () => D.summary && openAlignPicker());
+    $('viewsBtn').addEventListener('click', openViews);
+    $('exportBtn').addEventListener('click', openExport);
+    $('menuBtn').addEventListener('click', openMenu);
+    $('scrim').addEventListener('click', closePop);
+    addEventListener('keydown', e => {
+      if (e.key === 'Escape') { closePop(); hideTip(); closeSheet(); }
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (['input', 'select', 'textarea'].includes(tag) || e.metaKey || e.ctrlKey || e.altKey || !$('popover').hidden) return;
+      if (S.mode === 'population') {
+        if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && D.popLayout) {
+          e.preventDefault(); stopPlay();
+          D.cursor = clamp((D.cursor ?? -1) + (e.key === 'ArrowRight' ? 1 : -1), 0, D.popLayout.n - 1);
+          $('cursor').value = D.cursor; drawCursor();
+        }
+        if (e.key === ' ' && D.popLayout) { e.preventDefault(); togglePlay(); }
+        return;
+      }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); stepUnit(-1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); stepUnit(1); }
+    });
+
+    // popover delegation
+    const pop = $('popover');
+    pop.addEventListener('click', e => {
+      const t = e.target.closest('button, [data-close]');
+      if (!t) return;
+      if (t.hasAttribute('data-close')) { closePop(); return; }
+      if (t.dataset.menu) { closePop(); if (t.dataset.menu.startsWith('mode:')) setMode(t.dataset.menu.slice(5)); else (t.dataset.menu === 'views' ? openViews : openExport)(); return; }
+      if (t.dataset.ru) {
+        const id = Number(t.dataset.ru), set = new Set(S.roster);
+        set.has(id) ? set.delete(id) : set.add(id);
+        S.roster = [...set].sort((a, b) => a - b);
+        t.classList.toggle('on', set.has(id)); rosterLive(); rosterChanged(450); return;
+      }
+      if (t.dataset.rq) { const q = t.dataset.rq; RF.q = RF.q.includes(q) ? RF.q.filter(x => x !== q) : [...RF.q, q]; t.classList.toggle('on'); fillRosterItems(); return; }
+      if (t.dataset.ra) { const a = t.dataset.ra; RF.a = RF.a.includes(a) ? RF.a.filter(x => x !== a) : [...RF.a, a]; t.classList.toggle('on'); fillRosterItems(); return; }
+      if (t.hasAttribute('data-rall')) { S.roster = [...new Set([...S.roster, ...rosterShown().map(u => u.id)])].sort((a, b) => a - b); fillRosterItems(); rosterChanged(300); return; }
+      if (t.hasAttribute('data-rnone')) { const drop = new Set(rosterShown().map(u => u.id)); S.roster = S.roster.filter(id => !drop.has(id)); fillRosterItems(); rosterChanged(300); return; }
+      if (t.dataset.unit) { S.unit = Number(t.dataset.unit); closePop(); changed({data: true}); return; }
+      if (t.dataset.align) {
+        const old = S.align; S.align = t.dataset.align; closePop();
+        if (old !== S.align) { S.hidden = []; if (S.sort.startsWith('field:')) S.sort = 'session'; }
+        renderHeader(); changed({data: true, structure: true}); ensureData().then(renderStructure); return;
+      }
+      if (t.dataset.uq) { const q = t.dataset.uq; S.unitQ = S.unitQ.includes(q) ? S.unitQ.filter(x => x !== q) : [...S.unitQ, q]; t.classList.toggle('on'); fillUnitItems($('unitSearch').value); saveState(); return; }
+      if (t.dataset.ua) { const a = t.dataset.ua; S.unitArea = S.unitArea.includes(a) ? S.unitArea.filter(x => x !== a) : [...S.unitArea, a]; t.classList.toggle('on'); fillUnitItems($('unitSearch').value); saveState(); return; }
+      if (t.dataset.tpl) { closePop(); applyTemplate(TEMPLATES[Number(t.dataset.tpl)]); return; }
+      if (t.dataset.view) { closePop(); applyView(D.views[t.dataset.view]); return; }
+      if (t.dataset.vdel) { if (confirm(`Delete saved view “${t.dataset.vdel}”?`)) getJSON('/api/views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: t.dataset.vdel, delete: true})}).then(openViews).catch(err => toast(err.message, true)); return; }
+      if (t.hasAttribute('data-saveview')) { openSaveView(); return; }
+      if (t.hasAttribute('data-copylink')) { saveState(); setTimeout(() => navigator.clipboard.writeText(location.href).then(() => toast('Link copied — it restores this exact view.'), () => toast(location.href)), 300); return; }
+      if (t.dataset.exp) { closePop(); (S.mode === 'population' ? popExport : doExport)(t.dataset.exp).catch(err => toast(err.message, true)); return; }
+      if (t.dataset.mdel) { S.markers = S.markers.filter(m => m.id !== t.dataset.mdel); if (S.sort === `marker:${t.dataset.mdel}`) S.sort = 'session'; closePop(); renderStructure(); changed(); return; }
+    });
+    pop.addEventListener('input', e => {
+      if (e.target.id === 'unitSearch') fillUnitItems(e.target.value);
+      if (e.target.id === 'rosterSearch') { RF.text = e.target.value; fillRosterItems(); }
+      if (e.target.id === 'alignSearch') fillAlignItems(e.target.value);
+    });
+    pop.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || !['unitSearch', 'alignSearch'].includes(e.target.id)) return;
+      const first = pop.querySelector(e.target.id === 'unitSearch' ? '[data-unit]' : '[data-align]');
+      if (first) first.click();
+    });
+    addEventListener('resize', () => { placePop(); schedule(); });
+
+    // filters
+    $('quickFilters').addEventListener('click', e => {
+      const b = e.target.closest('[data-qf]');
+      if (!b) return;
+      const key = b.dataset.qf, level = b.dataset.level;
+      let f = S.filters.find(x => x.k === key && x.v);
+      if (!f) { f = {k: key, v: []}; S.filters.push(f); }
+      f.v = f.v.includes(level) ? f.v.filter(x => x !== level) : [...f.v, level];
+      if (!f.v.length) S.filters = S.filters.filter(x => x !== f);
+      changed();
+    });
+    $('otherFilters').addEventListener('click', e => {
+      const x = e.target.closest('[data-fx]');
+      if (x) { S.filters.splice(Number(x.dataset.fx), 1); renderFilterChips(); changed(); return; }
+      const chip = e.target.closest('[data-f]');
+      if (chip) { const f = S.filters[Number(chip.dataset.f)]; if (D.tables.get(S.align)?.byKey.has(f.k)) openFilterEditor(chip, f.k); }
+    });
+    $('addFilter').addEventListener('click', e => openFieldPicker(e.currentTarget, key => openFilterEditor($('addFilter'), key)));
+    $('clearFilters').addEventListener('click', () => { S.filters = []; renderFilterChips(); changed(); });
+
+    // grouping
+    const regroup = () => { S.hidden = []; changed({structure: false}); syncControls(); };
+    $('colorBy').addEventListener('change', e => { S.color = e.target.value || null; regroup(); });
+    $('styleBy').addEventListener('change', e => { S.style = e.target.value || null; regroup(); });
+    $('panelBy').addEventListener('change', e => { S.panel = e.target.value || null; regroup(); });
+    $('qbins').addEventListener('change', e => { S.qbins = Number(e.target.value); regroup(); });
+    $('groupPresets').addEventListener('click', e => { const b = e.target.closest('[data-gp]'); if (!b) return; const [a, c] = b.dataset.gp.split('|'); S.color = a; S.style = c || null; regroup(); });
+    $('sortBy').addEventListener('change', e => { if (S.mode === 'population') S.nsort = e.target.value; else S.sort = e.target.value; changed(); });
+    $('modes').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
+    $('rosterBtn').addEventListener('click', e => D.units.length && openRosterPicker(e.currentTarget));
+    $('chooseNeurons').addEventListener('click', e => D.units.length && openRosterPicker(e.currentTarget));
+    $('clearRoster').addEventListener('click', () => { S.roster = []; rosterChanged(); });
+    $('rosterPresets').addEventListener('click', e => { const b = e.target.closest('[data-rp]'); if (b) applyRosterPreset(b.dataset.rp); });
+    $('rosterLimits').addEventListener('click', e => {
+      const b = e.target.closest('[data-rmunit]');
+      if (b) { S.roster = S.roster.filter(id => id !== Number(b.dataset.rmunit)); rosterChanged(); return; }
+      if (e.target.closest('[data-trim]') && D.stab) {
+        const masks = S.roster.map(id => D.stab.masks.get(id) || new Uint8Array((D.stab.n + 7) >> 3));
+        const best = C.bestSubset(masks, D.stab.n);
+        if (!best.indices.length) { toast('None of these neurons has stable trials.', true); return; }
+        const before = S.roster.length;
+        S.roster = best.indices.map(i => S.roster[i]);
+        toast(`Kept ${S.roster.length} of ${before} neurons, sharing ${best.trials} stable trials (greedy heuristic).`);
+        rosterChanged(); return;
+      }
+      if (e.target.closest('[data-rmzero]') && D.stab) { S.roster = S.roster.filter(id => D.stab.masks.has(id) && C.popcount(D.stab.masks.get(id), D.stab.n) > 0); rosterChanged(); }
+    });
+    $('ncomp').addEventListener('input', e => { S.ncomp = Number(e.target.value); $('ncompOut').textContent = String(S.ncomp); renderStructure(); changed(); });
+    for (const [id, i] of [['axX', 0], ['axY', 1], ['axZ', 2]]) $(id).addEventListener('change', e => { S.axes[i] = Number(e.target.value); saveState(); rerenderPopFigure(); });
+    $('heatGroup').addEventListener('change', e => { S.heatGroup = e.target.value; saveState(); rerenderPopFigure(); });
+    $('cursor').addEventListener('input', e => { stopPlay(); D.cursor = Number(e.target.value); drawCursor(); });
+    $('playBtn').addEventListener('click', togglePlay);
+    $('cloudOn').addEventListener('change', e => { S.cloud = e.target.checked; changed(); });
+    $('cloudZero').addEventListener('change', e => { S.cloudZero = e.target.checked; changed(); });
+    $('cloudAlpha').addEventListener('input', e => { S.cloudAlpha = Number(e.target.value) / 100; $('cloudAlphaOut').textContent = `${Math.round(S.cloudAlpha * 100)}%`; saveState(); rerenderPopFigure(); });
+    $('sortDir').addEventListener('click', () => { S.dir = -S.dir; changed(); });
+    $('grouped').addEventListener('change', e => { S.grouped = e.target.checked; changed(); });
+    $('legend').addEventListener('click', e => {
+      const b = e.target.closest('[data-g]');
+      if (!b) return;
+      if (b.dataset.g === '__all') S.hidden = [];
+      else S.hidden = S.hidden.includes(b.dataset.g) ? S.hidden.filter(k => k !== b.dataset.g) : [...S.hidden, b.dataset.g];
+      changed();
+    });
+    $('legend').addEventListener('contextmenu', e => {
+      const b = e.target.closest('[data-g]');
+      if (!b || b.dataset.g === '__all') return;
+      e.preventDefault(); openGroupStyle(b, b.dataset.g);
+    });
+    let press = null;
+    $('legend').addEventListener('pointerdown', e => {
+      const b = e.target.closest('[data-g]');
+      if (!b || e.pointerType === 'mouse' || b.dataset.g === '__all') return;
+      press = setTimeout(() => { press = 'fired'; openGroupStyle(b, b.dataset.g); }, 520);
+    });
+    const cancelPress = () => { if (press && press !== 'fired') clearTimeout(press); };
+    $('legend').addEventListener('pointerup', cancelPress);
+    $('legend').addEventListener('pointercancel', cancelPress);
+    $('legend').addEventListener('click', e => { if (press === 'fired') { press = null; e.stopImmediatePropagation(); } }, true);
+    $('legend').addEventListener('dblclick', e => {
+      const b = e.target.closest('[data-g]');
+      if (!b || !D.model || b.dataset.g === '__all') return;
+      S.hidden = D.model.grouping.groups.map(g => g.key).filter(k => k !== b.dataset.g);
+      changed();
+    });
+
+    // markers
+    $('addMarker').addEventListener('click', e => openMarkerEditor(e.currentTarget, null));
+    $('markerPresets').addEventListener('click', e => { const b = e.target.closest('[data-mp]'); if (!b) return; const [ev, match, occ, label] = b.dataset.mp.split('|'); addMarker(ev, match, occ, label); });
+    $('markerList').addEventListener('click', e => {
+      const ed = e.target.closest('[data-medit]'); if (ed) { openMarkerEditor(ed, ed.dataset.medit); return; }
+      const del = e.target.closest('[data-mdel]');
+      if (del) { S.markers = S.markers.filter(m => m.id !== del.dataset.mdel); if (S.sort === `marker:${del.dataset.mdel}`) S.sort = 'session'; renderStructure(); changed(); }
+    });
+    $('refForm').addEventListener('submit', e => { e.preventDefault(); const v = Number($('refInput').value); if ($('refInput').value !== '' && Number.isFinite(v)) { S.refs.push(v); $('refInput').value = ''; renderMarkers(); changed(); } });
+    $('refList').addEventListener('click', e => { const b = e.target.closest('[data-rdel]'); if (b) { S.refs.splice(Number(b.dataset.rdel), 1); renderMarkers(); changed(); } });
+    $('showMedians').addEventListener('change', e => { S.medians = e.target.checked; changed(); });
+
+    // display knobs
+    const winChanged = () => { clampCw(); changed({data: !rasterCovers(D.rasters.get(rasterKey()))}); };
+    $('winLo').addEventListener('input', e => { S.win[0] = tidy(Number(e.target.value), 2); winChanged(); });
+    $('winHi').addEventListener('input', e => { S.win[1] = tidy(Number(e.target.value), 2); winChanged(); });
+    $('winLoN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v < S.win[1] && v >= -10) { S.win[0] = v; winChanged(); } else syncControls(); });
+    $('winHiN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v > S.win[0] && v <= 10) { S.win[1] = v; winChanged(); } else syncControls(); });
+    $('cwLo').addEventListener('input', e => { S.cw[0] = Math.min(Number(e.target.value), S.cw[1] - 0.01); changed(); });
+    $('cwHi').addEventListener('input', e => { S.cw[1] = Math.max(Number(e.target.value), S.cw[0] + 0.01); changed(); });
+    $('cwLoN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v < S.cw[1]) S.cw[0] = v; changed(); });
+    $('cwHiN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v > S.cw[0]) S.cw[1] = v; changed(); });
+    $('bin').addEventListener('input', e => { S.bin = Number(e.target.value) / 1000; changed(); });
+    $('sigma').addEventListener('input', e => { S.sigma = Number(e.target.value) / 1000; changed(); });
+    $('rasterH').addEventListener('input', e => { S.rasterH = Number(e.target.value); changed(); });
+    $('ylock').addEventListener('change', e => { S.ylock = e.target.checked ? (D.model ? tidy(D.model.ymax, 1) : 20) : null; changed(); });
+    $('ymax').addEventListener('change', e => { const v = Number(e.target.value); if (v > 0) { S.ylock = v; changed(); } });
+    $('showBars').addEventListener('change', e => { S.bars = e.target.checked; changed(); });
+    document.querySelectorAll('.seg[data-key]').forEach(seg => seg.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      const key = seg.dataset.key;
+      S[key] = b.dataset.v;
+      changed({data: key === 'policy'});
+    }));
+    $('resetDisplay').addEventListener('click', () => { Object.assign(S, clone(DISPLAY_DEFAULTS)); changed({data: true}); });
+    $('empty').addEventListener('click', e => {
+      const b = e.target.closest('[data-act]'); if (!b) return;
+      if (b.dataset.act === 'all-complete') { S.policy = 'all_complete'; changed({data: true}); }
+      if (b.dataset.act === 'clear-filters') { S.filters = []; renderFilterChips(); changed(); }
+      if (b.dataset.act.startsWith('rp:')) applyRosterPreset(b.dataset.act.slice(3));
+      if (b.dataset.act === 'choose') openRosterPicker(b);
+      if (b.dataset.act === 'refit') { D.fitErrors.clear(); schedule(); }
+    });
+
+    // bottom sheet (tablet / phone)
+    $('bottomTabs').addEventListener('click', e => {
+      const b = e.target.closest('[data-tab]'); if (!b) return;
+      const ctl = $('controls');
+      if (ctl.classList.contains('open') && ctl.dataset.tab === b.dataset.tab) closeSheet();
+      else { ctl.dataset.tab = b.dataset.tab; ctl.classList.add('open'); ctl.scrollTop = 0; document.querySelectorAll('#bottomTabs button').forEach(x => x.classList.toggle('on', x === b)); }
+    });
+    $('sheetHandle').addEventListener('click', closeSheet);
+    let sheetY = null;
+    $('sheetHandle').addEventListener('touchstart', e => { sheetY = e.touches[0].clientY; }, {passive: true});
+    $('sheetHandle').addEventListener('touchend', e => { if (sheetY !== null && e.changedTouches[0].clientY - sheetY > 30) closeSheet(); sheetY = null; });
+    bindFigure();
+    new ResizeObserver(() => schedule()).observe($('stage'));
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+  }
+  function closeSheet() { $('controls').classList.remove('open'); document.querySelectorAll('#bottomTabs button').forEach(x => x.classList.remove('on')); }
+
+  function applyTheme() {
+    const pref = localStorage.getItem('eg-theme') || 'auto';
+    const dark = pref === 'dark' || (pref === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    if (D.model) { renderQuickFilters(D.model); renderMarkers(); }
+    schedule();
+  }
+
+  let toastTimer = 0;
+  function toast(message, error = false) {
+    const t = $('toast');
+    t.textContent = message; t.hidden = false; t.classList.toggle('error', error);
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, error ? 6000 : 2600);
+  }
+
+  async function start() {
+    // Drop a one-time ?token= from the address bar once the cookie is set.
+    if (location.search.includes('token=')) history.replaceState(null, '', location.pathname + location.hash);
+    applyTheme();
+    loadState();
+    bindControls();
+    syncControls();
+    try {
+      const cat = await getJSON('/api/catalog');
+      D.catalog = cat.sessions;
+      $('sessionSelect').innerHTML = D.catalog.map(s => `<option value="${esc(s.id)}" title="${esc(s.id)}">${esc(shortSession(s.id))}</option>`).join('') || '<option>No sessions</option>';
+      const sid = D.catalog.some(s => s.id === S.session) ? S.session : cat.default_session;
+      if (!sid) { showEmpty('No assembled sessions found', 'Mount the results drive (for example /Volumes/T7) or start electro_gui with --session-file.'); return; }
+      await selectSession(sid);
+      renderStructure();
+    } catch (e) {
+      showEmpty('Cannot reach electro_gui', esc(e.message));
+    }
+  }
+  // Read-only hooks for QA scripts and the browser console.
+  window.EGDebug = {state: () => clone(S), model: () => D.model, exportSVG: () => exportSVG(), layout: () => D.layout,
+    popExportSVG: () => popExportSVG(), popFit: () => D.popFit, popLayout: () => D.popLayout};
+  addEventListener('hashchange', () => {
+    const m = location.hash.match(/[#&]s=([^&]+)/);
+    if (!m) return;
+    try {
+      const next = sanitize(C.decodeState(m[1]));
+      if (JSON.stringify(next) === JSON.stringify(S)) return;
+      const sessionChanged = next.session !== S.session;
+      S = next;
+      if (sessionChanged) selectSession(S.session).then(renderStructure); else afterBigChange();
+    } catch (e) { /* ignore foreign hashes */ }
+  });
+  start();
+})();

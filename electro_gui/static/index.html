@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="electro_gui — raster and PSTH explorer for assembled NWB sessions">
+  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#101217" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>electro · raster explorer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b5bdb'/%3E%3Cpath d='M5 19h5l3-10 4 16 3-9h7' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/explorer.css">
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <a class="brand" href="/" title="electro_gui">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M5 19h5l3-10 4 16 3-9h7"/></svg>
+      <span>electro</span>
+    </a>
+    <nav class="modes" id="modes" aria-label="Workspace">
+      <button type="button" data-mode="raster" title="One unit: raster over PSTH">Rasters</button>
+      <button type="button" data-mode="population" title="Many units: heatmap, components and trajectories">Population</button>
+    </nav>
+    <div class="pickers">
+      <label class="pick session-pick" title="Session"><select id="sessionSelect" aria-label="Session"><option>Loading…</option></select></label>
+      <button class="pick roster-btn" id="rosterBtn" type="button" data-only="population" aria-haspopup="dialog" title="Choose the neurons in the population"><strong id="rosterLabel">no neurons</strong><span class="pick-label">▾</span></button>
+      <div class="unit-pick" data-only="raster">
+        <button class="icon-btn" id="prevUnit" type="button" aria-label="Previous unit" title="Previous unit (←)">‹</button>
+        <button class="pick unit-btn" id="unitBtn" type="button" aria-haspopup="dialog"><span class="pick-label">unit</span><strong id="unitLabel">—</strong></button>
+        <button class="icon-btn" id="nextUnit" type="button" aria-label="Next unit" title="Next unit (→)">›</button>
+      </div>
+      <button class="pick align-btn" id="alignBtn" type="button" aria-haspopup="dialog"><span class="pick-label">aligned to</span><strong id="alignLabel">—</strong></button>
+    </div>
+    <div class="actions">
+      <button class="ghost" id="viewsBtn" type="button" aria-haspopup="dialog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12v14l-6-4-6 4z"/></svg><span>Views</span></button>
+      <button class="ghost" id="exportBtn" type="button" aria-haspopup="dialog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M6 9l4 4 4-4M4 16h12"/></svg><span>Export</span></button>
+      <button class="icon-btn" id="menuBtn" type="button" aria-label="More" aria-haspopup="dialog">⋯</button>
+    </div>
+  </header>
+  <div class="busy" id="busy" hidden><span></span></div>
+
+  <div class="body">
+    <aside class="controls" id="controls" aria-label="Plot controls">
+      <div class="sheet-handle" id="sheetHandle" aria-hidden="true"><span></span></div>
+
+      <section class="section" data-section="neurons" data-only="population">
+        <header><h2>Neurons</h2><button class="link" type="button" id="clearRoster">Clear</button></header>
+        <div id="rosterSummary" class="roster-summary"></div>
+        <div class="presets" id="rosterPresets"></div>
+        <button class="add" type="button" id="chooseNeurons">Choose neurons…</button>
+        <div id="rosterLimits" class="limits"></div>
+      </section>
+
+      <section class="section" data-section="filter">
+        <header><h2>Filter</h2><button class="link" type="button" id="clearFilters">Clear</button></header>
+        <div id="quickFilters" class="quick-filters"></div>
+        <div id="otherFilters" class="chip-row"></div>
+        <button class="add" type="button" id="addFilter">+ Filter on any field</button>
+      </section>
+
+      <section class="section" data-section="group">
+        <header><h2>Group &amp; sort</h2></header>
+        <div class="field-grid">
+          <label><span>Colour</span><select id="colorBy"></select></label>
+          <label><span>Line style</span><select id="styleBy"></select></label>
+          <label data-only="raster"><span>Panels</span><select id="panelBy"></select></label>
+          <label id="qbinsField" hidden><span>Number bins</span><select id="qbins"><option value="2">2 (median split)</option><option value="3">3 (terciles)</option><option value="4">4 (quartiles)</option><option value="5">5 (quintiles)</option></select></label>
+        </div>
+        <div class="presets" id="groupPresets"></div>
+        <div class="sort-row">
+          <label><span id="sortLabel">Sort rows by</span><select id="sortBy"></select></label>
+          <button class="icon-btn dir" id="sortDir" type="button" data-only="raster" title="Reverse order" aria-label="Reverse sort order">↑</button>
+        </div>
+        <label class="switch" data-only="raster"><input type="checkbox" id="grouped" checked><span></span>Keep groups together in the raster</label>
+        <p class="note" data-only="population">Every group enters one joint fit. Hiding a group in the legend only hides it from the plots; use filters to leave it out of the fit.</p>
+      </section>
+
+      <section class="section" data-section="markers">
+        <header><h2>Markers</h2></header>
+        <div id="markerList" class="marker-list"></div>
+        <div class="presets" id="markerPresets"></div>
+        <button class="add" type="button" id="addMarker">+ Marker from any event</button>
+        <div class="refs"><span class="mini-label">Reference lines</span><div id="refList" class="chip-row"></div>
+          <form id="refForm" class="ref-form"><input id="refInput" type="number" step="0.05" placeholder="t (s)" aria-label="Reference line time"><button type="submit" class="small">Add</button></form></div>
+        <div class="cloud" data-only="population">
+          <p class="note">t = 0 (●) and each reference line (■ ▲ ▼ ✚, in time order) are marked on every trajectory.</p>
+          <label class="switch"><input type="checkbox" id="cloudOn"><span></span>Show single trials at those times</label>
+          <div class="knob cloud-knob" id="cloudKnob"><div class="knob-head"><span>Trial cloud opacity</span><output id="cloudAlphaOut"></output></div><input type="range" id="cloudAlpha" min="5" max="100" step="5" aria-label="Trial cloud opacity"></div>
+          <label class="switch" id="cloudZeroWrap"><input type="checkbox" id="cloudZero" checked><span></span>Include t = 0 in the cloud</label>
+          <div class="seg-field cloud-fit" id="cloudFitWrap"><span>Fit axes to</span><div class="seg" data-key="cloudFit"><button data-v="traj">trajectories</button><button data-v="cloud">trial cloud</button></div></div>
+        </div>
+        <label class="switch"><input type="checkbox" id="showMedians" checked><span></span>Median marker lines on the PSTH</label>
+      </section>
+
+      <section class="section" data-section="display">
+        <header><h2><span data-only="raster">Display</span><span data-only="population">Model &amp; display</span></h2><button class="link" type="button" id="resetDisplay">Reset</button></header>
+        <div class="model" data-only="population">
+          <div class="seg-field"><span>Method</span><div class="seg" data-key="method"><button data-v="pca">PCA</button><button data-v="ica">ICA</button><button data-v="fa">FA</button></div></div>
+          <div class="seg-field"><span>Scaling</span><div class="seg" data-key="scaling"><button data-v="zscore">z-score</button><button data-v="center">center</button></div></div>
+          <div class="knob"><div class="knob-head"><span>Components</span><output id="ncompOut"></output></div><input type="range" id="ncomp" min="2" max="10" step="1" aria-label="Number of components"></div>
+          <div class="seg-field"><span>Trajectory</span><div class="seg" data-key="dims"><button data-v="2">2D</button><button data-v="3">3D</button></div></div>
+          <div class="seg-field"><span>Heatmap</span><div class="seg" data-key="heatNorm"><button data-v="z">z-score</button><button data-v="peak">peak = 1</button></div></div>
+        </div>
+        <div class="knob"><div class="knob-head"><span>Window</span><span class="nums"><input type="number" id="winLoN" step="0.1" aria-label="Window start (s)"><i>to</i><input type="number" id="winHiN" step="0.1" aria-label="Window end (s)"><i>s</i></span></div>
+          <div class="dual"><input type="range" id="winLo" min="-5" max="-0.1" step="0.1" aria-label="Window start"><input type="range" id="winHi" min="0.1" max="5" step="0.1" aria-label="Window end"></div></div>
+        <div class="knob"><div class="knob-head"><span>Count window <small>(or drag on the PSTH)</small></span><span class="nums"><input type="number" id="cwLoN" step="0.05" aria-label="Count window start (s)"><i>to</i><input type="number" id="cwHiN" step="0.05" aria-label="Count window end (s)"><i>s</i></span></div>
+          <div class="dual"><input type="range" id="cwLo" step="0.05" aria-label="Count window start"><input type="range" id="cwHi" step="0.05" aria-label="Count window end"></div></div>
+        <div class="knob"><div class="knob-head"><span>Bin width</span><output id="binOut"></output></div><input type="range" id="bin" min="5" max="200" step="5" aria-label="Bin width (ms)"></div>
+        <div class="knob"><div class="knob-head"><span>Smoothing σ</span><output id="sigmaOut"></output></div><input type="range" id="sigma" min="0" max="100" step="5" aria-label="Gaussian smoothing sigma (ms)"></div>
+        <div class="seg-field" data-only="raster"><span>Error band</span><div class="seg" data-key="err"><button data-v="sem">SEM</button><button data-v="ci">95% CI</button><button data-v="none">None</button></div></div>
+        <div class="seg-field"><span>Average over</span><div class="seg" data-key="weight"><button data-v="event">events</button><button data-v="trial">trials</button></div></div>
+        <div class="seg-field"><span>Trials</span><div class="seg" data-key="policy"><button data-v="verified_stable">stable for unit</button><button data-v="all_complete">all complete</button></div></div>
+        <div class="seg-field" data-only="raster"><span>Raster ticks</span><div class="seg" data-key="tick"><button data-v="line">lines</button><button data-v="dot">dots</button></div></div>
+        <div class="knob" data-only="raster"><div class="knob-head"><span>Raster height</span><output id="rasterHOut"></output></div><input type="range" id="rasterH" min="80" max="700" step="10" aria-label="Raster height"></div>
+        <div class="seg-field" data-only="raster"><span>Y axis</span><div class="ylock"><label class="switch"><input type="checkbox" id="ylock"><span></span>lock at</label><input type="number" id="ymax" min="1" step="1" aria-label="Y maximum (spikes/s)"><small>spikes/s</small></div></div>
+        <label class="switch" data-only="raster"><input type="checkbox" id="showBars" checked><span></span>Window-rate bars beside the plot</label>
+      </section>
+    </aside>
+
+    <main class="stage" id="stage">
+      <div class="fig-card">
+        <div class="fig-head">
+          <div><h1 id="title">Loading…</h1><p id="subtitle"></p></div>
+          <div class="support" id="support"></div>
+        </div>
+        <div class="legend" id="legend" role="group" aria-label="Groups (tap to hide or show)"></div>
+        <div class="pop-toolbar" id="popToolbar" data-only="population">
+          <div class="tb-axes"><label>X <select id="axX" aria-label="Trajectory x component"></select></label><label>Y <select id="axY" aria-label="Trajectory y component"></select></label><label id="axZWrap">Z <select id="axZ" aria-label="Trajectory z component"></select></label></div>
+          <div class="tb-cursor"><button class="icon-btn play" id="playBtn" type="button" aria-label="Play through time">▶</button><input type="range" id="cursor" min="0" max="0" value="0" aria-label="Time cursor"><output id="cursorOut">t —</output></div>
+          <label class="tb-heat">Heatmap <select id="heatGroup" aria-label="Group shown in the heatmap"></select></label>
+        </div>
+        <div class="figure-wrap"><div class="figure" id="figure"></div><div class="bars" id="bars"></div></div>
+        <div class="empty" id="empty" hidden></div>
+      </div>
+      <p class="foot" id="foot"></p>
+    </main>
+  </div>
+
+  <nav class="bottom-tabs" id="bottomTabs" aria-label="Controls">
+    <button type="button" data-tab="neurons" data-only="population"><svg viewBox="0 0 20 20"><circle cx="6" cy="7" r="2.2"/><circle cx="14" cy="7" r="2.2"/><circle cx="10" cy="13.5" r="2.2"/><path d="M6 7l4 6.5L14 7"/></svg><span>Neurons</span></button>
+    <button type="button" data-tab="filter"><svg viewBox="0 0 20 20"><path d="M3 4h14l-5.5 6.5V16l-3 1.5v-7z"/></svg><span>Filter</span></button>
+    <button type="button" data-tab="group"><svg viewBox="0 0 20 20"><circle cx="6" cy="7" r="2.6"/><circle cx="14" cy="7" r="2.6"/><path d="M3 15h14M3 12h8"/></svg><span>Group</span></button>
+    <button type="button" data-tab="markers"><svg viewBox="0 0 20 20"><path d="M7 3v14M13 3v14M4 7h6M10 12h7"/></svg><span>Markers</span></button>
+    <button type="button" data-tab="display"><svg viewBox="0 0 20 20"><path d="M3 6h9M15 6h2M3 14h3M9 14h8"/><circle cx="13.5" cy="6" r="1.8"/><circle cx="7.5" cy="14" r="1.8"/></svg><span>Display</span></button>
+  </nav>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <div class="popover" id="popover" role="dialog" aria-modal="false" hidden></div>
+  <div class="tooltip" id="tooltip" hidden></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</div>
+<script src="/core.js"></script>
+<script src="/explorer.js"></script>
+</body>
+</html>
