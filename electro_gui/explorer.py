@@ -238,6 +238,58 @@ def event_times(loaded: Any, event: str) -> dict:
     return cache[event]
 
 
+def behavior_timeline(loaded: Any) -> dict:
+    """Every trial's span and every resolved object's outcome, for the behavior timeline.
+
+    One entry per object with a recorded outcome (bars included and flagged),
+    at its outcome time; ``onset`` is its recorded ``object_visible_onset``.
+    Times follow :func:`event_times`: finite, inside the ephys recording and
+    the sync-fit window.  Objects without an outcome (an aborted trial) are
+    not listed.  Nothing here is inferred: role, action, correctness, bar and
+    image identity are the joined fields every explorer row already carries.
+    """
+    cache = _cache(loaded)
+    if "behavior" in cache:
+        return cache["behavior"]
+
+    def valid(r):
+        return (r.get("trial") is not None and _finite(r.get("t")) and not missing(r.get("object_uid"))
+                and r.get("within_ephys_recording", True) is not False and r.get("within_sync_fit_window", True) is not False)
+
+    onsets: dict = {}
+    for r in loaded.rows:
+        if r.get("event") == "object_visible_onset" and valid(r):
+            key = (int(r["trial"]), str(r["object_uid"]))
+            onsets[key] = min(float(r["t"]), onsets.get(key, math.inf))
+    objects, seen = [], set()
+    for r in sorted((r for r in loaded.rows if r.get("event") in OUTCOMES and valid(r)), key=lambda r: (float(r["t"]), int(r["row_id"]))):
+        key = (int(r["trial"]), str(r["object_uid"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        objects.append((key, r))
+    trials = [t for t in loaded.trials if _finite(t.get("start")) and _finite(t.get("stop"))]
+    trials.sort(key=lambda t: (float(t["start"]), int(t["id"])))
+    text = lambda v: None if missing(v) else str(v)
+    flag = lambda v: v if isinstance(v, bool) else None
+    out = {
+        "session_id": loaded.session_id, "duration_s": getattr(loaded, "duration_s", None),
+        "trials": {"id": [int(t["id"]) for t in trials], "start": [round(float(t["start"]), 6) for t in trials],
+                   "stop": [round(float(t["stop"]), 6) for t in trials], "complete": [flag(t.get("complete")) for t in trials],
+                   "world": [text(t.get("world")) for t in trials], "intention": [text(t.get("intention")) for t in trials],
+                   "success": [flag(t.get("success")) for t in trials]},
+        "objects": {"trial": [k[0] for k, _ in objects], "uid": [k[1] for k, _ in objects],
+                    "row_id": [int(r["row_id"]) for _, r in objects], "t": [round(float(r["t"]), 6) for _, r in objects],
+                    "onset": [round(onsets[k], 6) if k in onsets else None for k, _ in objects],
+                    "role": [text(r.get("role")) for _, r in objects], "action": [text(r.get("action")) for _, r in objects],
+                    "outcome": [str(r["event"]) for _, r in objects], "correct": [flag(r.get("correct")) for _, r in objects],
+                    "bar": [flag(r.get("bar")) for _, r in objects], "image_id": [text(r.get("image_id")) for _, r in objects],
+                    "order": [int(r["order"]) if _finite(r.get("order")) else None for _, r in objects]},
+    }
+    cache["behavior"] = out
+    return out
+
+
 def session_summary(loaded: Any) -> dict:
     """What the explorer needs to populate its pickers."""
     counts = alignment_counts(loaded)

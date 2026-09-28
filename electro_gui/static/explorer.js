@@ -112,6 +112,7 @@
     tick: 'line', rasterH: 260, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
     mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, dims: '2', heatNorm: 'z',
     nsort: 'loading:0', axes: [0, 1, 2], heatGroup: null, cloud: false, cloudAlpha: 0.3, cloudZero: true, cloudFit: 'traj',
+    bt: true, btN: 16, pin: null, yoke: false,
   };
   const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, ylock: null, bars: true};
   let S = clone(DEFAULTS);
@@ -145,6 +146,7 @@
     unitMap: new Map(), popspans: new Map(), stab: null, fits: new Map(), fitErrors: new Map(), fitPending: null,
     heatCache: new Map(), view3d: {yaw: -0.6, pitch: 0.35}, cursor: null, playTimer: 0, popLayout: null, popFit: null, popModel: null,
     probes: new Map(), probeErrors: new Map(), probePending: null, probeShown: null, popReq: null,
+    behavior: null, behaviorError: null, btC: null, btLayout: null, btDrag: null,
   };
 
   function sanitize(raw) {
@@ -171,6 +173,13 @@
     if (typeof s.nsort !== 'string') s.nsort = DEFAULTS.nsort;
     s.cloud = s.cloud === true; s.cloudZero = s.cloudZero !== false;
     s.cloudAlpha = Number.isFinite(s.cloudAlpha) ? clamp(s.cloudAlpha, 0.05, 1) : DEFAULTS.cloudAlpha;
+    s.bt = s.bt !== false;
+    s.yoke = s.yoke === true;
+    s.btN = Number.isInteger(s.btN) ? clamp(s.btN, 3, 5000) : DEFAULTS.btN;
+    const p = s.pin;
+    s.pin = p && typeof p === 'object' && Number.isInteger(p.trial)
+      ? {trial: p.trial, uid: typeof p.uid === 'string' ? p.uid : null, row: Number.isInteger(p.row) ? p.row : null, t: Number.isFinite(p.t) ? p.t : null}
+      : null;
     return s;
   }
   function clampCw() {
@@ -260,6 +269,17 @@
         if (D.rasters.size > 8) D.rasters.delete(D.rasters.keys().next().value);
       }));
     }
+    if (S.mode === 'raster' && S.bt && !D.behavior && !D.behaviorError) {
+      jobs.push(once('behavior', async () => {
+        try {
+          const raw = await getJSON(`/api/explorer/behavior?${query({session: sid})}`);
+          if (token === D.sessionToken) D.behavior = C.prepareBehavior(raw);
+        } catch (e) {
+          if (token === D.sessionToken) { D.behaviorError = e.message; renderBehavior(); }
+          throw e;
+        }
+      }));
+    }
     for (const m of S.markers) for (const e of [m.e, m.end]) {
       if (!e || D.events.has(e)) continue;
       jobs.push(once(`e|${e}`, async () => {
@@ -277,10 +297,12 @@
 
   async function selectSession(sid) {
     const token = ++D.sessionToken;
+    if (S.session !== sid) S.pin = null;   // trial IDs belong to one session
     S.session = sid;
     D.summary = null; D.tables.clear(); D.rasters.clear(); D.events.clear(); D.model = null;
     D.popspans.clear(); D.stab = null; D.fits.clear(); D.fitErrors.clear(); D.heatCache.clear(); D.popFit = null; D.popLayout = null; stopPlay();
     D.probes.clear(); D.probeErrors.clear(); D.probeShown = null;
+    D.behavior = null; D.behaviorError = null; D.btC = null; D.btLayout = null;
     $('sessionSelect').value = sid;
     showLoading(`Opening ${sid}`, 'The first open of a session verifies the whole NWB file — about 1–2 minutes for a 3 GB recording. After that, units, alignments and knobs respond immediately.');
     try {
@@ -323,14 +345,17 @@
     const R = D.rasters.get(rasterKey());
     if (!T || !rasterCovers(R) || R.data.n !== T.n) return null;
     const raster = R.data;
+    if (yokeWanted() && !D.behavior && !D.behaviorError) return null;   // the yoked trials come from the timeline
+    const yoke = yokeRange();
     const [pre, post] = S.win;
     clampCw();
     const elig = C.eligibility(raster, pre, post);
     const fmask = C.filterMask(T, activeFilters(T));
     const rows = [], excl = {1: 0, 2: 0, 3: 0};
-    let filtered = 0;
+    let filtered = 0, yoked = 0;
     for (let i = 0; i < T.n; i++) {
       if (!fmask[i]) { filtered++; continue; }
+      if (yoke && !yoke.ids.has(T.trial[i])) { yoked++; continue; }
       if (elig[i]) excl[elig[i]]++; else rows.push(i);
     }
     const spec = {color: validField(T, S.color), style: validField(T, S.style), panel: validField(T, S.panel), qbins: S.qbins};
@@ -376,7 +401,8 @@
     }
     ymax = S.ylock || niceMax(Math.max(1, ymax * 1.06));
     const unit = D.units.find(u => u.id === S.unit) || raster.unit;
-    return {T, raster, rows, grouping, visible, grid, cw, excl, filtered, markerData, ctx, ymax, errMul, unit, pre, post, spikes};
+    return {T, raster, rows, grouping, visible, grid, cw, excl, filtered, markerData, ctx, ymax, errMul, unit, pre, post, spikes, elig, fmask,
+      yoke, yoked, yokeKey: yoke ? yoke.key : null};
   }
   function niceMax(v) {
     const p = Math.pow(10, Math.floor(Math.log10(v)));
@@ -583,7 +609,7 @@
     const meta = opts.export ? `<metadata>${esc(JSON.stringify(provenance(M)))}</metadata>` : '';
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${Math.ceil(height)}" viewBox="0 0 ${width} ${Math.ceil(height)}" font-family="${font}">` +
       meta + (opts.export ? `<rect x="-20" y="-20" width="${width + 40}" height="${Math.ceil(height) + 40}" fill="${bg}"/>` : '') +
-      header + out.join('') + (opts.export ? '' : '<g id="hoverLayer" pointer-events="none"></g>') + '</svg>';
+      header + out.join('') + (opts.export ? '' : '<g id="pinLayer" pointer-events="none"></g><g id="hoverLayer" pointer-events="none"></g>') + '</svg>';
     return {svg, layout};
   }
 
@@ -679,6 +705,11 @@
     if (D.fatal) return;
     if (!D.summary) return;
     if (S.mode === 'population') { D.layout = null; renderPopulation(); return; }
+    renderRaster();
+    drawPin();
+    renderBehavior();
+  }
+  function renderRaster() {
     const M = buildModel();
     const fig = $('figure');
     if (!M) {
@@ -691,7 +722,7 @@
     $('empty').hidden = true;
     const u = M.unit;
     const title = `${unitName(u)} · ${u.area || 'area ?'} · ${String(u.quality || '').toUpperCase()}`;
-    const subtitle = `${eventLabel(S.align)} · ${policyText()} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.weight === 'trial' ? 'trial-weighted' : 'event-weighted'} mean ± ${S.err === 'none' ? '—' : S.err === 'ci' ? '95% CI' : 'SEM'}`;
+    const subtitle = `${eventLabel(S.align)} · ${policyText()}${M.yoke ? ` · trials ${M.yoke.from}–${M.yoke.to}` : ''} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.weight === 'trial' ? 'trial-weighted' : 'event-weighted'} mean ± ${S.err === 'none' ? '—' : S.err === 'ci' ? '95% CI' : 'SEM'}`;
     $('title').textContent = title;
     $('subtitle').textContent = subtitle;
     renderSupport(M);
@@ -727,6 +758,7 @@
     const bits = [`<b>${shown}</b> events · <b>${trials.size}</b> trials`];
     const detail = [];
     if (M.filtered) detail.push(`${M.filtered} filtered out`);
+    if (M.yoke) detail.push(`${M.yoked} outside trials ${M.yoke.from}–${M.yoke.to} (yoked to behavior)`);
     if (M.excl[1] + M.excl[2]) detail.push(`${M.excl[1] + M.excl[2]} in trials not ${S.policy === 'verified_stable' ? 'stable for this unit' : 'complete'}`);
     if (M.excl[3]) detail.push(`${M.excl[3]} whose window leaves the stable run`);
     const hiddenRows = M.grouping.groups.filter(g => g.hidden).reduce((a, g) => a + g.rows.length, 0);
@@ -741,6 +773,7 @@
     if (stab) reasons.push(`${stab} events are in trials that are not ${S.policy === 'verified_stable' ? 'stable for this unit' : 'complete'}.`);
     if (M.excl[3]) reasons.push(`${M.excl[3]} events have a window (plus the 0.4 s guard) that leaves the unit's stable run — try a shorter window.`);
     if (M.filtered === M.T.n) reasons.push('The filters exclude every event.');
+    if (M.yoke && M.yoked) reasons.push(`The rasters are yoked to behavior trials ${M.yoke.from}–${M.yoke.to}; widen the behavior window or turn yoking off.`);
     e.innerHTML = `<h3>No events to show</h3>${reasons.map(r => `<p>${esc(r)}</p>`).join('')}` +
       (S.policy === 'verified_stable' && stab ? '<button class="primary" type="button" data-act="all-complete">Use all complete trials</button> ' : '') +
       (S.filters.length ? '<button class="small" type="button" data-act="clear-filters">Clear filters</button>' : '');
@@ -868,7 +901,7 @@
       const others = activeFilters(T).filter(f => f.k !== key);
       const mask = C.filterMask(T, others);
       const counts = new Map();
-      for (let i = 0; i < T.n; i++) if (mask[i] && !elig[i]) { const k = C.levelKey(C.rawValue(col, i)); counts.set(k, (counts.get(k) || 0) + 1); }
+      for (let i = 0; i < T.n; i++) if (mask[i] && !elig[i] && !(M && M.yoke && !M.yoke.ids.has(T.trial[i]))) { const k = C.levelKey(C.rawValue(col, i)); counts.set(k, (counts.get(k) || 0) + 1); }
       const f = S.filters.find(x => x.k === key && x.v);
       const on = new Set(f ? f.v : []);
       const sem = SEM[key] || {};
@@ -1042,7 +1075,7 @@
       let body = '';
       if (levels) {
         const counts = new Map();
-        for (let i = 0; i < T.n; i++) if (mask[i] && !elig[i]) { const k = C.levelKey(C.rawValue(col, i)); counts.set(k, (counts.get(k) || 0) + 1); }
+        for (let i = 0; i < T.n; i++) if (mask[i] && !elig[i] && !(M && M.yoke && !M.yoke.ids.has(T.trial[i]))) { const k = C.levelKey(C.rawValue(col, i)); counts.set(k, (counts.get(k) || 0) + 1); }
         const on = new Set(f.v);
         body = `<div class="editor"><div class="chips">${levels.map(l => `<button type="button" class="chip${on.has(l.key) ? ' on' : ''}" data-lv="${esc(l.key)}">${esc(l.key === C.MISSING ? 'missing' : l.label)} <small>${counts.get(l.key) || 0}</small></button>`).join('')}</div>` +
           `<div class="chips"><button type="button" class="preset" data-lvall>all</button><button type="button" class="preset" data-lvnone>none</button><button type="button" class="preset" data-lvinv>invert</button></div>` +
@@ -2032,6 +2065,7 @@
   function provenance(M) {
     return {tool: `electro_gui ${VERSION} explorer`, generated: new Date().toISOString(), session_id: D.summary.session_id,
       source: D.summary.source, unit: M.unit, alignment: S.align, policy: S.policy, guard_s: C.GUARD_S,
+      yoked_trials: M.yoke ? {first: M.yoke.from, last: M.yoke.to, n: M.yoke.last - M.yoke.first + 1} : null,
       events_shown: M.visible.reduce((a, g) => a + g.rows.length, 0), state: S};
   }
   function download(name, blob) {
@@ -2100,7 +2134,10 @@
     if (top + h > innerHeight - 8) top = y - h - 14;
     tip.style.left = `${Math.max(8, left)}px`; tip.style.top = `${Math.max(8, top)}px`;
   }
-  const hideTip = () => { $('tooltip').hidden = true; const h = document.getElementById('hoverLayer'); if (h) h.innerHTML = ''; };
+  const hideTip = () => {
+    $('tooltip').hidden = true;
+    for (const id of ['hoverLayer', 'btHover']) { const h = document.getElementById(id); if (h) h.innerHTML = ''; }
+  };
   function svgPoint(evt) {
     const svg = $('figure').querySelector('svg');
     const r = svg.getBoundingClientRect();
@@ -2117,27 +2154,21 @@
     const rows = L.groups.map(g => `<div class="tr" style="--c:${g.color}"><i></i><span>${esc(g.label)}</span><em>${C.fmtNum(g.psth.mean[j], 1)}${M.errMul ? ` ± ${C.fmtNum(M.errMul * g.psth.sem[j], 1)}` : ''}</em></div>`).join('');
     tooltip(`<b>t = ${C.fmtNum(M.grid.times[j], 3)} s</b> <span style="opacity:.7">spikes/s</span>${rows}`, evt.clientX, evt.clientY);
   }
-  function hoverRaster(L, p, evt) {
-    const M = D.model;
+  /** The drawn raster row under a point of panel L: {b, k, i} or null. */
+  function rowAt(L, p) {
     const b = L.blocks.find(x => p.y >= x.top && p.y < x.top + x.height);
-    if (!b) { hideTip(); return; }
+    if (!b || !b.rows.length) return null;
     const k = clamp(Math.floor((p.y - b.top) / b.rowH), 0, b.rows.length - 1);
-    const i = b.rows[k], g = b.g || b.owner.get(i);
-    const T = M.T;
-    const kv = [['trial', T.trial[i]], ['event time', `${C.fmtNum(T.t[i], 2)} s`]];
-    if (T.event) kv.push(['event', eventLabel(T.event[i])]);
-    for (const key of ['world', 'role', 'action', 'order', 'previous_role', 'correct', S.color, S.style, S.panel]) {
-      const col = key && T.byKey.get(key);
-      if (!col || kv.some(([a]) => a === col.label)) continue;
-      const v = C.rawValue(col, i);
-      kv.push([col.label, typeof v === 'number' ? C.fmtNum(v) : C.formatLevel(key, v)]);
-    }
-    kv.push(['spikes in count window', C.countIn(M.spikes[i], M.cw[0], M.cw[1])]);
-    for (const m of S.markers) { const h = M.markerData[m.id] && M.markerData[m.id][i]; if (h && h.length) kv.push([m.label || eventLabel(m.e), `${h.map(x => C.fmtNum(x.t, 3)).join(', ')} s`]); }
+    return {b, k, i: b.rows[k]};
+  }
+  function hoverRaster(L, p, evt) {
+    const r = rowAt(L, p);
+    if (!r) { hideTip(); return; }
+    const {b, k, i} = r, g = b.g || b.owner.get(i);
     const hl = document.getElementById('hoverLayer');
     const yc = b.top + (k + 0.5) * b.rowH;
     if (hl) hl.innerHTML = `<rect x="${f1(L.x0)}" y="${f1(yc - Math.max(b.rowH, 2) / 2)}" width="${f1(L.plotW)}" height="${f1(Math.max(b.rowH, 2))}" fill="${g.color}" opacity="0.18"/>`;
-    tooltip(`<div class="tr" style="--c:${g.color}"><i></i><span><b>${esc(g.label)}</b></span></div><div class="kv">${kv.map(([a, v]) => `<span>${esc(a)}</span><b>${esc(v)}</b>`).join('')}</div>`, evt.clientX, evt.clientY);
+    tooltip(rowTip(D.model.T, i), evt.clientX, evt.clientY);
   }
 
   let brush = null, tipTimer = 0;
@@ -2183,7 +2214,465 @@
       brush = null; hideTip();
     });
     fig.addEventListener('pointercancel', () => { brush = null; hideTip(); });
+    fig.addEventListener('click', evt => {
+      const hit = evt.target.closest && evt.target.closest('.hit');
+      if (!hit || hit.dataset.kind !== 'raster' || !D.layout || !D.model) return;
+      const r = rowAt(D.layout.panels[Number(hit.dataset.p)], svgPoint(evt));
+      if (r) setPin(pinFromRow(D.model.T, r.i));
+    });
     bindPopFigure(fig);
+  }
+
+  // ---------------------------------------------------- behavior timeline
+  // Session time on x; predator (−) and prey (+) rows; filled = touched, empty =
+  // avoided, red × = incorrect, outline = the object's displayed colour.  A click
+  // on a raster row, an object, an event tick or a trial pins that trial: it stays
+  // highlighted in every raster panel and the timeline centres on it.
+  const ERROR_COLOR = '#d62728';
+  let btPending = false;
+  function scheduleBehavior() {
+    if (btPending) return;
+    btPending = true;
+    const run = () => { if (!btPending) return; btPending = false; renderBehavior(); };
+    requestAnimationFrame(run);
+    setTimeout(run, 80);
+  }
+  function btCentre(B) {
+    if (D.btC === null) {
+      const p = S.pin ? B.trials.pos.get(S.pin.trial) : undefined;
+      D.btC = p !== undefined ? p + 0.5 : S.btN / 2;
+    }
+    return D.btC;
+  }
+  /** Index of each table row's visible group in the current model (-1: not in the raster). */
+  function rowOwners(M) {
+    if (!M) return null;
+    if (!M.owner) {
+      M.owner = new Int16Array(M.T.n).fill(-1);
+      M.visible.forEach((g, gi) => g.rows.forEach(i => { M.owner[i] = gi; }));
+    }
+    return M.owner;
+  }
+  const tableFor = () => (D.model && D.model.T && D.model.T.alignment === S.align ? D.model.T : D.tables.get(S.align));
+
+  // Yoked, the rasters keep only the timeline's trials: at least YOKE_MIN of them (or every
+  // trial there is), centred on the pinned trial as far as covering the whole view allows.
+  const YOKE_MIN = 20;
+  const yokeWanted = () => S.yoke && S.bt && S.mode === 'raster';
+  function yokeRange() {
+    const B = D.behavior;
+    if (!yokeWanted() || !B || !B.trials.n) return null;
+    const V = C.behaviorView(B, btCentre(B), S.btN);
+    const pinPos = S.pin ? B.trials.pos.get(S.pin.trial) : undefined;
+    const {first, last} = C.yokedTrials(B, V, pinPos !== undefined ? pinPos : Math.floor((V.a + V.b) / 2), YOKE_MIN);
+    const ids = new Set();
+    for (let p = first; p <= last; p++) ids.add(B.trials.id[p]);
+    return {first, last, ids, key: `${first}|${last}`, from: B.trials.id[first], to: B.trials.id[last]};
+  }
+  /** True when the rasters were drawn for a different yoked range than the timeline now implies. */
+  function yokeStale() {
+    const y = yokeRange();
+    return (y ? y.key : null) !== (D.model && D.model.yokeKey ? D.model.yokeKey : null);
+  }
+  /** The timeline moved: redraw it, and the rasters too when their yoked trials changed. */
+  function behaviorMoved() {
+    if (yokeStale()) schedule(); else scheduleBehavior();
+  }
+
+  function renderBehavior() {
+    const host = $('behavior');
+    if (!host || S.mode !== 'raster') return;
+    host.classList.toggle('collapsed', !S.bt);
+    $('btToggle').setAttribute('aria-expanded', String(S.bt));
+    renderPinInfo();
+    if (!S.bt) { D.btLayout = null; return; }
+    const fig = $('btFig'), B = D.behavior;
+    if (!B) {
+      fig.innerHTML = D.behaviorError
+        ? `<p class="bt-note">Behavior timeline unavailable: ${esc(D.behaviorError)}. A server started before this feature needs a restart.</p>`
+        : '<p class="bt-note">Loading behavior…</p>';
+      D.btLayout = null; return;
+    }
+    if (!B.trials.n) { fig.innerHTML = '<p class="bt-note">No trials with recorded times in this session.</p>'; D.btLayout = null; return; }
+    const width = Math.max(260, Math.floor(fig.clientWidth || $('stage').clientWidth - 36));
+    const {svg, layout} = behaviorSVG(B, width);
+    fig.innerHTML = svg;
+    D.btLayout = layout;
+    const n = B.trials.n;
+    $('btN').max = String(n);
+    $('btN').value = String(Math.min(S.btN, n));
+    const {first, last} = C.viewTrials(B, layout.view);
+    $('btNOut').textContent = S.btN >= n ? `all ${n} trials` : `${last - first + 1} trials · ${B.trials.id[first]}–${B.trials.id[last]}`;
+    $('btYoke').checked = S.yoke;
+    drawBehaviorPin();
+  }
+
+  function behaviorSVG(B, width) {
+    const ink = figVar('--fig-ink'), muted = figVar('--fig-muted'), gridC = figVar('--fig-grid'), axisC = figVar('--fig-axis'), bg = figVar('--fig-bg');
+    const narrow = width < 560, f = f1;
+    const ml = narrow ? 52 : 88, mr = 10, x0 = ml, x1 = width - mr, plotW = x1 - x0;
+    const labH = 16, rowH = 36, evH = 18, axH = 26, ovGap = 6, ovH = 14;
+    const yPred = labH + rowH / 2, yPrey = labH + rowH * 1.5, eTop = labH + 2 * rowH + 4, eBot = eTop + evH;
+    const axY = eBot + 2, ovTop = axY + axH + ovGap, height = ovTop + ovH + 5;
+    const T = B.trials, O = B.objects;
+    const V = C.behaviorView(B, btCentre(B), S.btN);
+    D.btC = (V.a + V.b) / 2;
+    const span = Math.max(1e-6, V.t1 - V.t0);
+    const X = t => x0 + (t - V.t0) / span * plotW;
+    const s0 = T.start[0], s1 = Math.max(T.stop[T.n - 1], s0 + 1e-6);
+    const XO = t => x0 + (t - s0) / (s1 - s0) * plotW;
+    const worldC = w => (SEM.world[w] ? paint(SEM.world[w]) : muted);
+    const out = [];
+    const firstP = clamp(Math.floor(V.a) - 1, 0, T.n - 1), lastP = clamp(Math.ceil(V.b), 0, T.n - 1);
+    out.push(`<clipPath id="btClip"><rect x="${f(x0)}" y="0" width="${f(plotW)}" height="${f(axY)}"/></clipPath><g clip-path="url(#btClip)">`);
+    // trial bands, world transitions, trial IDs
+    let lastLabel = -Infinity;
+    for (let p = firstP; p <= lastP; p++) {
+      const a = X(T.start[p]), z = X(T.stop[p]);
+      if (z < x0 - 2 || a > x1 + 2) continue;
+      const w = T.world[p], done = T.complete[p] === true;
+      out.push(`<rect x="${f(a)}" y="${labH}" width="${f(Math.max(0.5, z - a))}" height="${f(eBot - labH)}" fill="${done ? worldC(w) : muted}" opacity="${done ? (isDark() ? 0.16 : 0.09) : 0.05}"/>`);
+      const change = p > 0 && T.world[p - 1] && w && T.world[p - 1] !== w;
+      if (change) out.push(`<line x1="${f(a)}" x2="${f(a)}" y1="${labH - 2}" y2="${f(eBot)}" stroke="${ink}" stroke-width="1" stroke-dasharray="4 3" opacity="0.7"/>`);
+      const cx = Math.max(a, x0) + 2;
+      if (change) { out.push(`<text x="${f(cx)}" y="11" font-size="10.5" font-weight="650" fill="${worldC(w)}">${esc(w)} ${T.id[p]}</text>`); lastLabel = cx + 40; }
+      else if (cx > lastLabel + 4 && z - a > 16) { out.push(`<text x="${f(cx)}" y="11" font-size="10" fill="${muted}">${T.id[p]}${done ? '' : ' ✕'}</text>`); lastLabel = cx + 6 * String(T.id[p]).length + 8; }
+    }
+    // row guides
+    out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(labH + rowH)}" y2="${f(labH + rowH)}" stroke="${gridC}"/>`);
+    const yoke = yokeRange();
+    if (yoke) {   // the rasters' trials
+      const a = X(T.start[yoke.first]), z = X(T.stop[yoke.last]);
+      out.push(`<rect x="${f(a)}" y="${labH - 3}" width="${f(Math.max(1, z - a))}" height="2.5" rx="1" fill="${figVar('--accent')}"/>`);
+    }
+    // objects: on-screen span, then the glyph at the outcome
+    const k0 = C.lowerBound(O.t, V.t0 - 4), k1 = C.lowerBound(O.t, V.t1 + 0.5);
+    const sq = narrow ? 7.5 : 8.5, lane = narrow ? 5 : 5.5;
+    const glyphs = [];
+    let life = '';
+    for (let k = k0; k < k1; k++) {
+      const yc = (O.role[k] === 'predator' ? yPred : yPrey) + (O.lane[k] - (O.lanes[k] - 1) / 2) * lane;
+      const x = X(O.t[k]);
+      glyphs.push({k, x, y: yc});
+      if (Number.isFinite(O.onset[k])) {
+        const c = O.color[k] || muted;
+        life += `<line x1="${f(X(O.onset[k]))}" x2="${f(x)}" y1="${f(yc)}" y2="${f(yc)}" stroke="${c}"/>`;
+      }
+    }
+    if (life) out.push(`<g stroke-width="1.3" opacity="${isDark() ? 0.5 : 0.42}">${life}</g>`);
+    const touchFill = isDark() ? '#9aa1ad' : '#777777', errC = isDark() ? '#ff6b6b' : ERROR_COLOR;
+    for (const g of glyphs) {
+      const k = g.k, bar = O.bar[k] === true;
+      const w = bar ? sq * 2.1 : sq, h = bar ? sq * 0.7 : sq;
+      const stroke = O.color[k] || muted;
+      out.push(`<rect x="${f(g.x - w / 2)}" y="${f(g.y - h / 2)}" width="${f(w)}" height="${f(h)}" fill="${O.action[k] === 'touch' ? touchFill : bg}" stroke="${stroke}" stroke-width="1.6"/>`);
+      if (O.correct[k] === false) {
+        const r = Math.min(w, h) * 0.34;
+        out.push(`<path d="M${f(g.x - r)} ${f(g.y - r)}l${f(2 * r)} ${f(2 * r)}M${f(g.x - r)} ${f(g.y + r)}l${f(2 * r)} ${f(-2 * r)}" stroke="${errC}" stroke-width="1.4" stroke-linecap="round"/>`);
+      }
+    }
+    // this alignment's rows: ticks coloured by raster group, faint when not in the raster
+    const Tab = tableFor(), owner = rowOwners(D.model && D.model.T === Tab ? D.model : null);
+    const ticks = [];
+    if (Tab) {
+      const i0 = C.lowerBound(Tab.t, V.t0), i1 = C.lowerBound(Tab.t, V.t1);
+      const stride = Math.max(1, Math.ceil((i1 - i0) / (plotW * 1.5)));
+      const paths = new Map();
+      for (let i = i0; i < i1; i += stride) {
+        const gi = owner ? owner[i] : -1, x = X(Tab.t[i]);
+        ticks.push({i, x});
+        const c = gi >= 0 ? D.model.visible[gi].color : null;
+        paths.set(c, (paths.get(c) || '') + (c ? `M${f(x)} ${f(eTop + 1)}v${evH - 2}` : `M${f(x)} ${f(eTop + 5)}v${evH - 10}`));
+      }
+      for (const [c, d] of paths) out.push(c ? `<path d="${d}" stroke="${c}" stroke-width="1.2"/>` : `<path d="${d}" stroke="${muted}" stroke-width="1" opacity="0.45"/>`);
+    }
+    out.push('</g>');
+    // labels and axis
+    const lab = (y, text, sub) => out.push(`<text x="${f(x0 - 8)}" y="${f(y + 3.5)}" text-anchor="end" font-size="${narrow ? 10.5 : 11.5}" fill="${ink}">${esc(text)}${sub ? `<tspan fill="${muted}" font-size="10"> ${esc(sub)}</tspan>` : ''}</text>`);
+    lab(yPred, narrow ? 'pred −' : 'Predator', narrow ? '' : '(−)');
+    lab(yPrey, narrow ? 'prey +' : 'Prey', narrow ? '' : '(+)');
+    out.push(`<text x="${f(x0 - 8)}" y="${f((eTop + eBot) / 2 + 3.5)}" text-anchor="end" font-size="10" fill="${muted}">events</text>`);
+    out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(axY)}" y2="${f(axY)}" stroke="${axisC}"/>`);
+    for (const v of niceTicks(V.t0, V.t1, Math.max(3, Math.round(plotW / 90)))) {
+      if (v < V.t0 || v > V.t1) continue;
+      out.push(`<line x1="${f(X(v))}" x2="${f(X(v))}" y1="${f(axY)}" y2="${f(axY + 4)}" stroke="${axisC}"/>`);
+      out.push(`<text x="${f(X(v))}" y="${f(axY + 15)}" text-anchor="middle" font-size="10" fill="${muted}">${C.fmtNum(v)}</text>`);
+    }
+    out.push(`<text x="${f(x0 - 8)}" y="${f(axY + 15)}" text-anchor="end" font-size="10" fill="${muted}">time (s)</text>`);
+    // whole-session overview with the visible window
+    let ov = '';
+    for (let p = 0; p < T.n; p++) {
+      const a = XO(T.start[p]), z = XO(T.stop[p]);
+      ov += `<rect x="${f(a)}" y="${f(ovTop)}" width="${f(Math.max(0.6, z - a))}" height="${ovH}" fill="${T.complete[p] === true ? worldC(T.world[p]) : muted}"/>`;
+    }
+    out.push(`<g opacity="${isDark() ? 0.55 : 0.4}">${ov}</g>`);
+    if (yoke) {
+      const a = XO(T.start[yoke.first]), z = XO(T.stop[yoke.last]);
+      out.push(`<rect x="${f(a)}" y="${f(ovTop + ovH + 2)}" width="${f(Math.max(2, z - a))}" height="2.5" rx="1" fill="${figVar('--accent')}"/>`);
+    }
+    const va = XO(V.t0), vz = XO(V.t1);
+    out.push(`<rect x="${f(va)}" y="${f(ovTop - 2)}" width="${f(Math.max(3, vz - va))}" height="${ovH + 4}" rx="2" fill="${figVar('--accent')}" fill-opacity="0.12" stroke="${figVar('--accent')}" stroke-width="1.5"/>`);
+    out.push(`<text x="${f(x0 - 8)}" y="${f(ovTop + ovH / 2 + 3.5)}" text-anchor="end" font-size="10" fill="${muted}">session</text>`);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${Math.ceil(height)}" viewBox="0 0 ${width} ${Math.ceil(height)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">` +
+      out.join('') + '<g id="btPinLayer" pointer-events="none"></g><g id="btHover" pointer-events="none"></g></svg>';
+    return {svg, layout: {width, height, x0, x1, plotW, labH, rowH, eTop, eBot, axY, ovTop, ovH, yPred, yPrey, sq, view: V, X, XO, s0, s1, glyphs, ticks, T: Tab}};
+  }
+
+  /** What is under a point of the timeline. */
+  function behaviorHit(p) {
+    const L = D.btLayout, B = D.behavior;
+    if (!L || !B) return null;
+    if (p.y >= L.ovTop - 4 && p.y <= L.ovTop + L.ovH + 4) return p.x >= L.x0 - 4 && p.x <= L.x1 + 4 ? {kind: 'overview'} : null;
+    if (p.x < L.x0 || p.x > L.x1 || p.y > L.axY) return null;
+    if (p.y < L.eTop - 2) {
+      let best = null, bd = 9;
+      for (const g of L.glyphs) { const d = Math.max(Math.abs(g.x - p.x), Math.abs(g.y - p.y)); if (d < bd) { bd = d; best = g; } }
+      if (best) return {kind: 'object', k: best.k, x: best.x, y: best.y};
+    } else if (L.ticks.length) {
+      let best = null, bd = 4;
+      for (const tk of L.ticks) { const d = Math.abs(tk.x - p.x); if (d < bd) { bd = d; best = tk; } }
+      if (best) return {kind: 'row', i: best.i, x: best.x};
+    }
+    const t = L.view.t0 + (p.x - L.x0) / L.plotW * (L.view.t1 - L.view.t0);
+    const q = C.upperBound(B.trials.start, t) - 1;
+    if (q >= 0 && t <= B.trials.stop[q]) return {kind: 'trial', p: q};
+    return null;
+  }
+  function btPoint(evt) {
+    const svg = $('btFig').querySelector('svg');
+    const r = svg.getBoundingClientRect();
+    return {x: (evt.clientX - r.left) * (D.btLayout.width / r.width), y: (evt.clientY - r.top) * (D.btLayout.height / r.height)};
+  }
+  const yesNo = v => (v === true ? 'yes' : v === false ? 'no' : '—');
+  function objectTip(k) {
+    const B = D.behavior, O = B.objects, p = O.tpos[k];
+    const kv = [['trial', O.trial[k]], ['world', p >= 0 ? B.trials.world[p] || '—' : '—'], ['outcome', eventLabel(O.outcome[k])],
+      ['correct', yesNo(O.correct[k])], ['object #', O.order[k] ?? '—'], ['bar object', yesNo(O.bar[k])],
+      ['outcome at', `${C.fmtNum(O.t[k], 2)} s`]];
+    if (Number.isFinite(O.onset[k])) kv.push(['visible at', `${C.fmtNum(O.onset[k], 2)} s (${C.fmtNum(O.t[k] - O.onset[k], 2)} s before)`]);
+    if (O.image[k]) kv.push(['image', O.image[k]]);
+    const c = O.color[k] || figVar('--fig-muted');
+    return `<div class="tr" style="--c:${c}"><i></i><span><b>${esc(O.role[k] || 'object')} · ${esc(O.action[k] ? C.formatLevel('action', O.action[k]) : '—')}</b></span></div>` +
+      `<div class="kv">${kv.map(([a, v]) => `<span>${esc(a)}</span><b>${esc(v)}</b>`).join('')}</div><div class="hint">click to pin this trial</div>`;
+  }
+  function trialTip(p) {
+    const B = D.behavior, T = B.trials, objs = B.byTrial[p], O = B.objects;
+    const errors = objs.filter(k => O.correct[k] === false).length;
+    const kv = [['world', T.world[p] || '—'], ['strategy', T.intention[p] || '—'], ['success', yesNo(T.success[p])], ['complete', yesNo(T.complete[p])],
+      ['time', `${C.fmtNum(T.start[p], 1)}–${C.fmtNum(T.stop[p], 1)} s (${C.fmtNum(T.stop[p] - T.start[p], 1)} s)`],
+      ['objects', `${objs.length}${errors ? ` · ${errors} incorrect` : ''}`]];
+    return `<b>trial ${T.id[p]}</b><div class="kv">${kv.map(([a, v]) => `<span>${esc(a)}</span><b>${esc(v)}</b>`).join('')}</div><div class="hint">click to pin this trial</div>`;
+  }
+  function btHover(hit, evt) {
+    const L = D.btLayout, layer = document.getElementById('btHover');
+    if (!layer) return;
+    const muted = figVar('--fig-muted');
+    if (!hit || hit.kind === 'overview') { layer.innerHTML = ''; $('tooltip').hidden = true; return; }
+    if (hit.kind === 'object') {
+      const s = L.sq + 6;
+      layer.innerHTML = `<rect x="${f1(hit.x - s / 2 - (D.behavior.objects.bar[hit.k] ? L.sq * 0.55 : 0))}" y="${f1(hit.y - s / 2)}" width="${f1(s + (D.behavior.objects.bar[hit.k] ? L.sq * 1.1 : 0))}" height="${f1(s)}" rx="2.5" fill="none" stroke="${muted}" stroke-width="1.4"/>`;
+      tooltip(objectTip(hit.k), evt.clientX, evt.clientY);
+    } else if (hit.kind === 'row') {
+      layer.innerHTML = `<line x1="${f1(hit.x)}" x2="${f1(hit.x)}" y1="${f1(L.labH)}" y2="${f1(L.eBot)}" stroke="${muted}" stroke-width="1"/>`;
+      tooltip(rowTip(L.T, hit.i), evt.clientX, evt.clientY);
+    } else {
+      const T = D.behavior.trials, a = L.X(T.start[hit.p]), z = L.X(T.stop[hit.p]);
+      layer.innerHTML = `<rect x="${f1(a)}" y="${f1(L.labH)}" width="${f1(Math.max(1, z - a))}" height="${f1(L.eBot - L.labH)}" fill="none" stroke="${muted}" stroke-width="1.2"/>`;
+      tooltip(trialTip(hit.p), evt.clientX, evt.clientY);
+    }
+  }
+  /** Row tooltip body shared by the raster and the timeline's event ticks. */
+  function rowTip(T, i) {
+    const M = D.model && D.model.T === T ? D.model : null;
+    const owner = rowOwners(M), g = M && owner[i] >= 0 ? M.visible[owner[i]] : null;
+    const kv = [['trial', T.trial[i]], ['event time', `${C.fmtNum(T.t[i], 2)} s`]];
+    if (T.event) kv.push(['event', eventLabel(T.event[i])]);
+    for (const key of ['world', 'role', 'action', 'order', 'previous_role', 'correct', S.color, S.style, S.panel]) {
+      const col = key && T.byKey.get(key);
+      if (!col || kv.some(([a]) => a === col.label)) continue;
+      const v = C.rawValue(col, i);
+      kv.push([col.label, typeof v === 'number' ? C.fmtNum(v) : C.formatLevel(key, v)]);
+    }
+    if (M) {
+      kv.push(['spikes in count window', g ? C.countIn(M.spikes[i], M.cw[0], M.cw[1]) : '—']);
+      for (const m of S.markers) { const h = M.markerData[m.id] && M.markerData[m.id][i]; if (h && h.length) kv.push([m.label || eventLabel(m.e), `${h.map(x => C.fmtNum(x.t, 3)).join(', ')} s`]); }
+    }
+    const head = g ? `<div class="tr" style="--c:${g.color}"><i></i><span><b>${esc(g.label)}</b></span></div>` : `<b>${esc(eventLabel(S.align))}</b> <span style="opacity:.7">not in the raster</span>`;
+    return `${head}<div class="kv">${kv.map(([a, v]) => `<span>${esc(a)}</span><b>${esc(v)}</b>`).join('')}</div><div class="hint">click to pin this trial</div>`;
+  }
+
+  /** Pin a trial (and optionally one of its objects / rows), or clear with null. */
+  function setPin(pin) {
+    S.pin = pin;
+    const B = D.behavior;
+    if (pin && B && B.trials.pos.has(pin.trial)) D.btC = B.trials.pos.get(pin.trial) + 0.5;
+    saveState();
+    if (yokeStale()) { render(); return; }
+    drawPin();
+    renderBehavior();
+  }
+  function pinFromRow(T, i) {
+    const code = T.objectCodes[i];
+    return {trial: T.trial[i], uid: code >= 0 ? T.objectLevels[code] : null, row: T.rowId[i], t: T.t[i]};
+  }
+  function pinFromObject(k) {
+    const O = D.behavior.objects, T = tableFor();
+    let row = null;
+    if (T) {
+      // the row of this object in the current alignment, preferring the one nearest its outcome
+      let best = Infinity;
+      for (let i = 0; i < T.n; i++) {
+        if (T.trial[i] !== O.trial[k] || T.objectCodes[i] < 0 || T.objectLevels[T.objectCodes[i]] !== O.uid[k]) continue;
+        const d = Math.abs(T.t[i] - O.t[k]);
+        if (d < best) { best = d; row = T.rowId[i]; }
+      }
+    }
+    return {trial: O.trial[k], uid: O.uid[k], row, t: O.t[k]};
+  }
+
+  /** The pinned trial in every raster panel; the pinned row outlined. */
+  function drawPin() {
+    const layer = document.getElementById('pinLayer');
+    if (!layer) return;
+    const L = D.layout, M = D.model, pin = S.pin;
+    if (!pin || !L || !M) { layer.innerHTML = ''; return; }
+    const accent = figVar('--accent'), T = M.T, out = [];
+    for (const P of L.panels) for (const b of P.blocks) {
+      b.rows.forEach((i, k) => {
+        if (T.trial[i] !== pin.trial) return;
+        const h = Math.max(b.rowH, 3), y = b.top + (k + 0.5) * b.rowH - h / 2;
+        const exact = pin.row !== null && T.rowId[i] === pin.row;
+        out.push(`<rect x="${f1(P.x0)}" y="${f1(y)}" width="${f1(P.plotW)}" height="${f1(h)}" fill="${accent}" fill-opacity="${exact ? 0.42 : 0.28}"${exact ? ` stroke="${accent}" stroke-width="1.2"` : ''}/>`);
+        const tx = S.grouped ? P.x1 + 28 : P.x1 + 1;   // clear of the group counts
+        out.push(`<path d="M${f1(tx)} ${f1(y + h / 2)}l6 -4v8z" fill="${accent}"/>`);
+      });
+    }
+    layer.innerHTML = out.join('');
+  }
+  function drawBehaviorPin() {
+    const layer = document.getElementById('btPinLayer'), L = D.btLayout, B = D.behavior, pin = S.pin;
+    if (!layer || !L || !B) return;
+    if (!pin || !B.trials.pos.has(pin.trial)) { layer.innerHTML = ''; return; }
+    const accent = figVar('--accent'), p = B.trials.pos.get(pin.trial), out = [];
+    const a = clamp(L.X(B.trials.start[p]), L.x0, L.x1), z = clamp(L.X(B.trials.stop[p]), L.x0, L.x1);
+    if (z > a) out.push(`<rect x="${f1(a)}" y="${f1(L.labH - 1)}" width="${f1(Math.max(1.5, z - a))}" height="${f1(L.eBot - L.labH + 1)}" fill="${accent}" fill-opacity="0.08" stroke="${accent}" stroke-width="1.6" rx="2"/>`);
+    if (pin.t !== null && pin.t >= L.view.t0 && pin.t <= L.view.t1) {
+      const x = L.X(pin.t);
+      out.push(`<line x1="${f1(x)}" x2="${f1(x)}" y1="${f1(L.labH)}" y2="${f1(L.axY)}" stroke="${accent}" stroke-width="1.2" stroke-dasharray="3 2"/>`);
+    }
+    const k = pin.uid !== null ? B.key.get(`${pin.trial}|${pin.uid}`) : undefined;
+    const g = k !== undefined && L.glyphs.find(x => x.k === k);
+    if (g) {
+      const bar = B.objects.bar[k] === true, w = (bar ? L.sq * 2.1 : L.sq) + 8, h = (bar ? L.sq * 0.7 : L.sq) + 8;
+      out.push(`<rect x="${f1(g.x - w / 2)}" y="${f1(g.y - h / 2)}" width="${f1(w)}" height="${f1(h)}" rx="3" fill="none" stroke="${accent}" stroke-width="2.2"/>`);
+    }
+    const xo = L.XO((B.trials.start[p] + B.trials.stop[p]) / 2);
+    out.push(`<path d="M${f1(xo)} ${f1(L.ovTop - 3)}l-4 -5h8z" fill="${accent}"/>`);
+    layer.innerHTML = out.join('');
+  }
+  function renderPinInfo() {
+    const el = $('btPin');
+    if (!el) return;
+    const pin = S.pin;
+    if (!pin) { el.innerHTML = '<span class="bt-hint">click a raster row, object or trial to pin it</span>'; return; }
+    const B = D.behavior, M = D.model;
+    const bits = [`<b>trial ${pin.trial}</b>`];
+    const p = B ? B.trials.pos.get(pin.trial) : undefined;
+    if (p !== undefined && B.trials.world[p]) bits.push(esc(B.trials.world[p]));
+    const k = B && pin.uid !== null ? B.key.get(`${pin.trial}|${pin.uid}`) : undefined;
+    if (k !== undefined) bits.push(esc(eventLabel(B.objects.outcome[k])));
+    if (M) {
+      const T = M.T, owner = rowOwners(M), why = {filtered: 0, yoked: 0, unstable: 0, window: 0, hidden: 0};
+      let all = 0, shown = 0;
+      for (let i = 0; i < T.n; i++) {
+        if (T.trial[i] !== pin.trial) continue;
+        all++;
+        if (owner[i] >= 0) shown++;
+        else if (!M.fmask[i]) why.filtered++;
+        else if (M.yoke && !M.yoke.ids.has(T.trial[i])) why.yoked++;
+        else if (M.elig[i] === 1 || M.elig[i] === 2) why.unstable++;
+        else if (M.elig[i] === 3) why.window++;
+        else why.hidden++;
+      }
+      const reason = why.unstable ? (S.policy === 'verified_stable' ? 'trial not stable for this unit' : 'trial not complete')
+        : why.window ? 'window leaves the stable run' : why.filtered ? 'filtered out' : why.yoked ? 'outside the yoked trials' : why.hidden ? 'in hidden groups' : '';
+      bits.push(!all ? `no ${esc(eventLabel(S.align))} rows` : shown === all ? `${all} row${all > 1 ? 's' : ''} in raster`
+        : `${shown} of ${all} rows in raster${reason ? ` <span class="why">(${esc(reason)})</span>` : ''}`);
+    }
+    el.innerHTML = `<span class="pin-chip" title="Show the pinned trial"><i></i><span class="pin-text">${bits.join(' · ')}</span><button type="button" class="x" id="btUnpin" aria-label="Unpin trial" title="Unpin (Esc)">×</button></span>`;
+  }
+
+  function bindBehavior() {
+    const fig = $('btFig');
+    const act = (hit, evt) => {
+      if (!hit) return;
+      if (hit.kind === 'object') setPin(pinFromObject(hit.k));
+      else if (hit.kind === 'row') setPin(pinFromRow(D.btLayout.T, hit.i));
+      else if (hit.kind === 'trial') setPin({trial: D.behavior.trials.id[hit.p], uid: null, row: null, t: null});
+      if (evt.pointerType !== 'mouse') btHover(behaviorHit(btPoint(evt)), evt);
+    };
+    const overviewTo = evt => {
+      const L = D.btLayout, x = clamp(btPoint(evt).x, L.x0, L.x1);
+      D.btC = C.posAtTime(D.behavior, L.s0 + (x - L.x0) / L.plotW * (L.s1 - L.s0));
+      behaviorMoved();
+    };
+    fig.addEventListener('pointerdown', evt => {
+      if (!D.btLayout || (evt.pointerType === 'mouse' && evt.button !== 0)) return;
+      const p = btPoint(evt), hit = behaviorHit(p);
+      if (hit && hit.kind === 'overview') { D.btDrag = {overview: true}; fig.setPointerCapture(evt.pointerId); overviewTo(evt); return; }
+      D.btDrag = {x: p.x, c: D.btC, moved: false, hit, id: evt.pointerId};
+    });
+    fig.addEventListener('pointermove', evt => {
+      if (!D.btLayout) return;
+      const drag = D.btDrag;
+      if (drag && drag.overview) { overviewTo(evt); return; }
+      const p = btPoint(evt);
+      if (drag && (drag.moved || Math.abs(p.x - drag.x) > 5)) {
+        if (!drag.moved) { drag.moved = true; try { fig.setPointerCapture(drag.id); } catch (e) { /* released */ } btHover(null); }
+        const V = D.btLayout.view;
+        D.btC = drag.c - (p.x - drag.x) / D.btLayout.plotW * (V.b - V.a);
+        behaviorMoved();
+        return;
+      }
+      if (evt.pointerType === 'mouse') btHover(behaviorHit(p), evt);
+    });
+    const end = evt => {
+      const drag = D.btDrag;
+      D.btDrag = null;
+      if (!drag || drag.overview || drag.moved || evt.type === 'pointercancel') return;
+      act(drag.hit, evt);
+    };
+    fig.addEventListener('pointerup', end);
+    fig.addEventListener('pointercancel', end);
+    fig.addEventListener('pointerleave', evt => { if (evt.pointerType === 'mouse' && !D.btDrag) btHover(null); });
+    // Trackpad: horizontal swipe pans, pinch (ctrl + wheel) zooms; a vertical wheel still scrolls the page.
+    fig.addEventListener('wheel', evt => {
+      const L = D.btLayout, B = D.behavior;
+      if (!L || !B) return;
+      const V = L.view, count = V.b - V.a;
+      if (evt.ctrlKey) {
+        evt.preventDefault();
+        const x = clamp(btPoint(evt).x, L.x0, L.x1), anchor = V.a + (x - L.x0) / L.plotW * count;
+        const n = clamp(Math.round(count * Math.exp(evt.deltaY * 0.01)), 3, B.trials.n);
+        S.btN = n;
+        D.btC = anchor - (anchor - V.a) * n / count + n / 2;
+        saveState(); behaviorMoved();
+      } else if (Math.abs(evt.deltaX) > Math.abs(evt.deltaY)) {
+        evt.preventDefault();
+        D.btC += evt.deltaX / L.plotW * count;
+        behaviorMoved();
+      }
+    }, {passive: false});
+    $('btToggle').addEventListener('click', () => { S.bt = !S.bt; changed({data: S.bt}); });
+    $('btYoke').addEventListener('change', e => { S.yoke = e.target.checked; changed({data: S.yoke}); });
+    $('btN').addEventListener('input', e => { S.btN = Number(e.target.value); saveState(); behaviorMoved(); });
+    const pan = dir => { if (!D.btLayout) return; const V = D.btLayout.view; D.btC += dir * Math.max(1, (V.b - V.a) / 2); behaviorMoved(); };
+    $('btPrev').addEventListener('click', () => pan(-1));
+    $('btNext').addEventListener('click', () => pan(1));
+    $('btPin').addEventListener('click', e => {
+      if (e.target.closest('#btUnpin')) { setPin(null); return; }
+      if (e.target.closest('.pin-chip') && S.pin && D.behavior && D.behavior.trials.pos.has(S.pin.trial)) { D.btC = D.behavior.trials.pos.get(S.pin.trial) + 0.5; behaviorMoved(); }
+    });
   }
 
   function stepUnit(delta) {
@@ -2206,7 +2695,11 @@
     $('menuBtn').addEventListener('click', openMenu);
     $('scrim').addEventListener('click', closePop);
     addEventListener('keydown', e => {
-      if (e.key === 'Escape') { closePop(); hideTip(); closeSheet(); }
+      if (e.key === 'Escape') {
+        const quiet = $('popover').hidden && !$('controls').classList.contains('open');
+        closePop(); hideTip(); closeSheet();
+        if (quiet && S.pin && S.mode === 'raster') setPin(null);
+      }
       const tag = (e.target.tagName || '').toLowerCase();
       if (['input', 'select', 'textarea'].includes(tag) || e.metaKey || e.ctrlKey || e.altKey || !$('popover').hidden) return;
       if (S.mode === 'population') {
@@ -2409,6 +2902,7 @@
     $('sheetHandle').addEventListener('touchstart', e => { sheetY = e.touches[0].clientY; }, {passive: true});
     $('sheetHandle').addEventListener('touchend', e => { if (sheetY !== null && e.changedTouches[0].clientY - sheetY > 30) closeSheet(); sheetY = null; });
     bindFigure();
+    bindBehavior();
     new ResizeObserver(() => schedule()).observe($('stage'));
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
   }
@@ -2450,7 +2944,8 @@
   }
   // Read-only hooks for QA scripts and the browser console.
   window.EGDebug = {state: () => clone(S), model: () => D.model, exportSVG: () => exportSVG(), layout: () => D.layout,
-    popExportSVG: () => popExportSVG(), popFit: () => D.popFit, popLayout: () => D.popLayout};
+    popExportSVG: () => popExportSVG(), popFit: () => D.popFit, popLayout: () => D.popLayout,
+    behavior: () => D.behavior, btLayout: () => D.btLayout, pin: p => (p === undefined ? S.pin : setPin(p))};
   addEventListener('hashchange', () => {
     const m = location.hash.match(/[#&]s=([^&]+)/);
     if (!m) return;

@@ -111,6 +111,52 @@ with Filter / Group / Markers / Display tabs.
 Hovering (or tapping) the PSTH shows every group's rate at that bin; hovering a
 raster row shows its trial, time, fields, window count and marker times.
 
+### Behavior timeline and pinned trials
+
+Below the raster, **Behavior** draws the session's objects on session time, in
+the style of imitation's `plot_trial_object_actions`: predator (−) row on top,
+prey (+) below, one square per object at its outcome time — filled grey when
+touched, empty when passed, a red × when incorrect, a wide bar for a bar
+object — outlined in the object's displayed colour, with a faint line back to
+its recorded `object_visible_onset`.  Same-role objects of one trial sit on
+separate lanes by ordinal.  Trials are shaded by world (PP / PM / MM; faint
+grey with ✕ after the number if incomplete), a dashed line and label mark each world change, and an
+*events* strip shows every row of the current alignment: coloured by its raster
+group when it is in the raster, faint grey when it is filtered, ineligible or
+hidden.  The strip below is the whole session with the visible window boxed.
+
+- **Zoom** with the *trials* slider (3 to all), pinch or ctrl-scroll on the
+  timeline; **pan** by dragging, swiping sideways, `‹ ›`, or clicking/dragging
+  the session strip.  A vertical wheel still scrolls the page.
+- **Pin** by clicking a raster row, an object, an event tick or a trial.  The
+  trial stays highlighted in every raster panel (the clicked row outlined, ▸ at
+  the right) until another trial is clicked, and the timeline centres on it with
+  the trial boxed, the object ringed and the event time dashed.  The pin chip
+  says how many of the trial's rows are in the raster, or why none are (not
+  stable for this unit, filtered, window leaves the stable run, hidden group).
+  It follows alignment changes (it is a trial, not a row), survives reloads and
+  links, and clears on `Esc`, its `×`, or a session change.  Clicking the chip
+  re-centres the timeline.
+- **Yoke to rasters** (the switch left of the slider) makes the rasters, PSTHs,
+  window-rate bars, quick-filter counts and exports use only the timeline's
+  trials — those whose centre is in view — widened to at least 20 (or every
+  trial there is), as close to centred on the pinned trial as covering the whole
+  view allows (on the view's centre when nothing is pinned).  An accent bar
+  under the trial numbers and under the session strip marks those trials; the
+  subtitle and support line name them, and exports record them as
+  `yoked_trials` in their provenance.  Panning or zooming redraws the rasters
+  only when that range changes.  Yoking is inactive while the timeline is
+  collapsed; off, the rasters show every trial.
+
+Displayed colours come from the image ID: `<shape>equalum_<i>_…` is colour *i*
+of mworks/imitation's `generate_equal_luminosity_stimuli.py` (hue 0.99 *i* on
+its 0–100 scale, the most saturated HSV colour at luma 0.5), which `core.js`
+recomputes exactly; it matches the pixels of the stimulus PNGs.  An image ID
+outside that convention is outlined grey.  The timeline reads only the
+assembled NWB's joined outcome rows and visible onsets; an object without a
+recorded outcome (an aborted trial) is not drawn.  Collapse the section with its
+header when it is not needed.
+
 ## Population (the Population switch)
 
 The same page, with a **Neurons** section added (first in the sidebar; a
@@ -217,7 +263,10 @@ counts, event names), `/api/explorer/table?session=&alignment=` (columnar joined
 fields; `*_t` times become seconds from the row's event),
 `/api/explorer/raster?session=&alignment=&unit=&policy=&lo=&hi=` (spike times in
 `[t+lo, t+hi)` per row, eligible spans and status codes) and
-`/api/explorer/events?session=&event=`; for Population,
+`/api/explorer/events?session=&event=`,
+`/api/explorer/behavior?session=` (every trial's span and world, every resolved
+object's outcome time, visible onset, role, action, correctness, bar flag and
+image ID, for the behavior timeline); for Population,
 `/api/explorer/popspans?session=&alignment=&units=1,2,…&policy=` (eligible spans
 under the common-trial rule), `/api/explorer/stability?session=` (every unit's
 stable trials as base64 bitmasks over complete trials),

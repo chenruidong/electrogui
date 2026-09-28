@@ -566,7 +566,143 @@
     return JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))));
   }
 
+  // ------------------------------------------------------ behavior timeline
+  /**
+   * Displayed colour of an equal-luminance stimulus, from its image ID.  The
+   * MWorks generator (mworks/imitation/generate_equal_luminosity_stimuli.py)
+   * names image <shape>equalum_<i>_<size>_<texture> after colour i, whose hue
+   * is 0.99 i on its 0-100 scale, drawn at the most saturated HSV colour that
+   * reaches luma 0.5 (0.299 R + 0.587 G + 0.114 B).  This ports that search
+   * exactly.  Returns '#rrggbb', or null for an ID outside that convention.
+   */
+  const stimulusCache = new Map();
+  function stimulusColor(imageId) {
+    const m = /^(squar|bars)equalum_(\d+)_/.exec(String(imageId ?? ''));
+    if (!m || Number(m[2]) > 99) return null;
+    const idx = Number(m[2]);
+    if (stimulusCache.has(idx)) return stimulusCache.get(idx);
+    const h = (idx * 99 / 100) / 100;
+    let best = null, bestSat = 0;
+    for (let k = 0; k < 200; k++) {
+      const sat = 1 + k * (-1 / 199);   // the generator's linspace(1, 0, 200)
+      let lo = 0, hi = 1;
+      for (let it = 0; it < 50; it++) {
+        const val = (lo + hi) / 2;
+        const rgb = hsvToRgb(h, sat, val);
+        const luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+        if (Math.abs(luma - 0.5) < 0.001) { if (sat > bestSat) { bestSat = sat; best = rgb; } break; }
+        if (luma < 0.5) lo = val; else hi = val;
+      }
+      if (bestSat > 0.8) break;
+    }
+    const rgb = best ? best.map(c => Math.trunc(c * 255)) : [127, 127, 127];
+    const hex = '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
+    stimulusCache.set(idx, hex);
+    return hex;
+  }
+  function hsvToRgb(h, s, v) {   // Python colorsys.hsv_to_rgb
+    if (s === 0) return [v, v, v];
+    const i = Math.trunc(h * 6), f = h * 6 - i, p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f));
+    return [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i % 6];
+  }
+
+  /**
+   * Index the behavior payload: trials in session order, each object's trial
+   * position and its lane (its rank among same-role objects of that trial, by
+   * ordinal, as in imitation's plot_trial_object_actions).
+   */
+  function prepareBehavior(json) {
+    const tr = json.trials, ob = json.objects;
+    const nT = tr.id.length, nO = ob.t.length;
+    const pos = new Map(tr.id.map((id, i) => [id, i]));
+    const trials = {n: nT, id: Int32Array.from(tr.id), start: Float64Array.from(tr.start), stop: Float64Array.from(tr.stop),
+      complete: tr.complete, world: tr.world, intention: tr.intention, success: tr.success, pos};
+    const objects = {n: nO, trial: Int32Array.from(ob.trial), uid: ob.uid, rowId: Int32Array.from(ob.row_id),
+      t: Float64Array.from(ob.t), onset: Float64Array.from(ob.onset, v => (v === null ? NaN : v)),
+      role: ob.role, action: ob.action, outcome: ob.outcome, correct: ob.correct, bar: ob.bar, image: ob.image_id, order: ob.order,
+      tpos: new Int32Array(nO), lane: new Int8Array(nO), lanes: new Int8Array(nO), color: ob.image_id.map(stimulusColor)};
+    const byTrial = Array.from({length: nT}, () => []);
+    const key = new Map();
+    for (let k = 0; k < nO; k++) {
+      const p = pos.has(ob.trial[k]) ? pos.get(ob.trial[k]) : -1;
+      objects.tpos[k] = p;
+      if (p >= 0) byTrial[p].push(k);
+      key.set(`${ob.trial[k]}|${ob.uid[k]}`, k);
+    }
+    for (const list of byTrial) {
+      list.sort((a, b) => (ob.order[a] ?? 1e9) - (ob.order[b] ?? 1e9) || ob.t[a] - ob.t[b]);
+      for (const role of ['prey', 'predator']) {
+        const same = list.filter(k => ob.role[k] === role);
+        same.forEach((k, r) => { objects.lane[k] = r; objects.lanes[k] = same.length; });
+      }
+    }
+    // Objects in time order (the payload order) for range queries.
+    return {sessionId: json.session_id, trials, objects, byTrial, key};
+  }
+
+  /** Session time at a fractional trial position: linear between consecutive trial starts. */
+  function timeAtPos(B, p) {
+    const T = B.trials, n = T.n;
+    if (!n) return 0;
+    if (p <= 0) return T.start[0] + p * (n > 1 ? T.start[1] - T.start[0] : T.stop[0] - T.start[0]);
+    if (p >= n) return T.stop[n - 1] + (p - n) * (T.stop[n - 1] - T.start[n - 1]);
+    const i = Math.floor(p), f = p - i;
+    const next = i + 1 < n ? T.start[i + 1] : T.stop[n - 1];
+    return T.start[i] + f * (next - T.start[i]);
+  }
+  /** Inverse of timeAtPos. */
+  function posAtTime(B, t) {
+    const T = B.trials, n = T.n;
+    if (!n) return 0;
+    if (t <= T.start[0]) return (t - T.start[0]) / Math.max(1e-9, n > 1 ? T.start[1] - T.start[0] : T.stop[0] - T.start[0]);
+    const i = Math.min(n - 1, upperBound(T.start, t) - 1);
+    const next = i + 1 < n ? T.start[i + 1] : T.stop[n - 1];
+    if (t >= next && i === n - 1) return n + (t - T.stop[n - 1]) / Math.max(1e-9, T.stop[n - 1] - T.start[n - 1]);
+    return i + (t - T.start[i]) / Math.max(1e-9, next - T.start[i]);
+  }
+  function upperBound(arr, x) {
+    let lo = 0, hi = arr.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] <= x) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+  /**
+   * The visible span of the timeline: `count` trials centred on trial position
+   * `centre`, clamped to the session (or the whole session when it is shorter).
+   */
+  function behaviorView(B, centre, count) {
+    const n = B.trials.n, c = Math.max(1, Math.min(count, n));
+    let a = centre - c / 2;
+    a = Math.max(0, Math.min(a, n - c));
+    return {a, b: a + c, t0: timeAtPos(B, a), t1: timeAtPos(B, a + c)};
+  }
+
+  /** Trial positions first..last (inclusive) whose centre p + 0.5 lies in the view's [a, b). */
+  function viewTrials(B, V) {
+    const n = B.trials.n;
+    const first = Math.min(n - 1, Math.max(0, Math.ceil(V.a - 0.5 - 1e-6)));
+    const last = Math.min(n - 1, Math.max(first, Math.ceil(V.b - 0.5 - 1e-6) - 1));
+    return {first, last};
+  }
+  /**
+   * The trials a raster yoked to the timeline keeps: the view's trials, widened to
+   * at least `min` (or every trial there is) and placed as close to centred on
+   * trial position `centre` as covering the whole view allows.
+   */
+  function yokedTrials(B, V, centre, min) {
+    const n = B.trials.n;
+    let {first, last} = viewTrials(B, V);
+    const m = Math.min(min, n);
+    if (last - first + 1 < m) {
+      let s = Math.round(centre) - Math.floor((m - 1) / 2);
+      s = Math.min(first, Math.max(last - m + 1, s));
+      s = Math.min(n - m, Math.max(0, s));
+      first = s; last = s + m - 1;
+    }
+    return {first, last};
+  }
+
   return {GUARD_S, MISSING, SEP, FIELD_LABELS, LEVEL_ORDER, fieldLabel, formatLevel, fmtNum, humanize, levelKey,
+    stimulusColor, prepareBehavior, timeAtPos, posAtTime, behaviorView, viewTrials, yokedTrials, upperBound,
     prepareTable, rawValue, fieldLevels, filterMask, eligibility, quantileEdges, groupRows, indexEvents,
     markerTimes, median, countIn, lowerBound, psthGrid, rowCurve, psth, psthFromCurves, thin, windowRates, sortRows, encodeState, decodeState,
     decodeMask, andMask, andCount, popcount, fullMask, bestSubset, heatColor, project3d, hash};

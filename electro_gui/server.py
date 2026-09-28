@@ -195,6 +195,8 @@ class Application:
                 return explorer.unit_raster(loaded, one("alignment"), unit, policy, one("lo"), one("hi"))
             if what == "events":
                 return explorer.event_times(loaded, one("event"))
+            if what == "behavior":
+                return explorer.behavior_timeline(loaded)
             if what == "popspans":
                 try:
                     ids = [int(x) for x in one("units").split(",") if x.strip()]

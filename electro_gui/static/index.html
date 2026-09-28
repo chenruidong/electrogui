@@ -132,6 +132,29 @@
         </div>
         <div class="figure-wrap"><div class="figure" id="figure"></div><div class="bars" id="bars"></div></div>
         <div class="empty" id="empty" hidden></div>
+        <section class="behavior" id="behavior" data-only="raster" aria-label="Behavior timeline">
+          <header class="bt-head">
+            <button class="bt-toggle" id="btToggle" type="button" aria-expanded="true" aria-controls="btBody"><span class="chev" aria-hidden="true">▾</span><h2>Behavior</h2></button>
+            <div class="bt-pin" id="btPin"></div>
+            <div class="bt-zoom">
+              <label class="switch bt-yoke" title="Show only these trials in the rasters: at least 20 (or every trial there is), centred on the pinned trial"><input type="checkbox" id="btYoke"><span></span>yoke to rasters</label>
+              <button class="icon-btn sm" id="btPrev" type="button" aria-label="Earlier trials" title="Earlier trials">‹</button>
+              <label class="bt-n" title="Trials shown (pinch or ctrl-scroll on the timeline also zooms; drag or swipe pans)"><input type="range" id="btN" min="3" max="400" step="1" aria-label="Trials shown"><output id="btNOut"></output></label>
+              <button class="icon-btn sm" id="btNext" type="button" aria-label="Later trials" title="Later trials">›</button>
+            </div>
+          </header>
+          <div class="bt-body" id="btBody">
+            <div class="bt-legend" aria-hidden="true">
+              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-touch"/></svg>touched</span>
+              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/></svg>passed</span>
+              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/><path d="M3.8 3.8l4.4 4.4M3.8 8.2l4.4-4.4" class="g-x"/></svg>incorrect</span>
+              <span><svg viewBox="0 0 22 12"><rect x="2" y="3.5" width="18" height="5" class="g-avoid"/></svg>bar</span>
+              <span class="bt-legend-note">outline = displayed colour · line = time on screen · shading = world</span>
+              <span class="bt-worlds"><i style="--c:#2b8a3e"></i>PP<i style="--c:#6741d9"></i>PM<i style="--c:#e03131"></i>MM</span>
+            </div>
+            <div class="bt-fig" id="btFig"></div>
+          </div>
+        </section>
       </div>
       <p class="foot" id="foot"></p>
     </main>

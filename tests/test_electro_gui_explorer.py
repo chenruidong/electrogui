@@ -102,6 +102,85 @@ class ExplorerPayloadTests(unittest.TestCase):
         counts = {a["key"]: a["n"] for a in summary["alignments"]}
         self.assertEqual(counts["object_outcome"], explorer.alignment_table(self.loaded, "object_outcome")["n"])
 
+    def test_behavior_timeline_lists_every_resolved_object_once(self):
+        behavior = explorer.behavior_timeline(self.loaded)
+        outcome_rows = {}
+        for r in sorted((r for r in self.loaded.rows if r["event"] in explorer.OUTCOMES), key=lambda r: (r["t"], r["row_id"])):
+            outcome_rows.setdefault((r["trial"], str(r["object_uid"])), r)
+        objects = behavior["objects"]
+        self.assertEqual(len(objects["t"]), len(outcome_rows))
+        self.assertEqual(objects["t"], sorted(objects["t"]))
+        for k, (trial, uid) in enumerate(zip(objects["trial"], objects["uid"])):
+            row = outcome_rows[(trial, uid)]
+            self.assertEqual(objects["row_id"][k], row["row_id"])
+            self.assertAlmostEqual(objects["t"][k], row["t"], places=6)
+            self.assertEqual(objects["outcome"][k], row["event"])
+            for key in ("role", "action", "correct", "bar", "image_id"):
+                self.assertEqual(objects[key][k], row[key], key)
+            onsets = [r["t"] for r in self.loaded.rows if r["event"] == "object_visible_onset"
+                      and r["trial"] == trial and str(r["object_uid"]) == uid]
+            self.assertEqual(objects["onset"][k], round(min(onsets), 6) if onsets else None)
+        trials = behavior["trials"]
+        self.assertEqual(trials["start"], sorted(trials["start"]))
+        by_id = {t["id"]: t for t in self.loaded.trials}
+        self.assertEqual(set(trials["id"]), {t["id"] for t in self.loaded.trials if t["start"] is not None})
+        for i, tid in enumerate(trials["id"]):
+            self.assertEqual(trials["world"][i], by_id[tid]["world"])
+            self.assertLessEqual(trials["start"][i], trials["stop"][i])
+        self.assertIs(explorer.behavior_timeline(self.loaded), behavior)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_core_js_behavior_helpers(self):
+        behavior = explorer.behavior_timeline(self.loaded)
+        # Displayed colours of equal-luminance stimuli, read from the most common opaque pixel of
+        # mworks/imitation/stimulus_set/<id>.png (2026-09-28).
+        measured = {"squarequalum_0_big_uniform": "#fe4848", "squarequalum_10_big_uniform": "#c57500",
+                    "squarequalum_14_big_uniform": "#a18600", "squarequalum_34_big_uniform": "#00d804",
+                    "squarequalum_52_big_uniform": "#00b2c4", "squarequalum_71_big_uniform": "#8563fe",
+                    "squarequalum_80_big_uniform": "#ce3efe", "squarequalum_94_big_uniform": "#fe3c8d",
+                    "squarequalum_99_big_uniform": "#fe455b", "barsequalum_43_big_uniform": "#00c46c"}
+        script = """
+const C = require(process.argv[1]);
+const fs = require('fs');
+const [behavior, ids] = JSON.parse(fs.readFileSync(0, 'utf8'));
+const B = C.prepareBehavior(behavior);
+const n = B.trials.n, pos = [];
+for (let p = 0; p <= n; p += 0.25) pos.push([p, C.posAtTime(B, C.timeAtPos(B, p))]);
+const v = C.behaviorView(B, 0, 3), w = C.behaviorView(B, n + 5, 3), all = C.behaviorView(B, 1, 10 * n);
+const yk = (c, count, centre, min) => { const r = C.yokedTrials(B, C.behaviorView(B, c, count), centre, min); return [r.first, r.last]; };
+const vt = (c, count) => { const r = C.viewTrials(B, C.behaviorView(B, c, count)); return [r.first, r.last]; };
+const yoke = {view: [vt(1.5, 3), vt(4.5, 3), vt(5, 2.5)], widened: yk(1.5, 3, 1, 5), covers: yk(1.5, 3, 7, 5),
+  centred: yk(5, 2, 5, 5), wide: yk(4, 6, 0, 5), all: yk(1.5, 3, 1, 20)};
+process.stdout.write(JSON.stringify({colors: ids.map(C.stimulusColor), other: [C.stimulusColor('foo_1'), C.stimulusColor(null)], yoke,
+  lanes: Array.from(B.objects.lane), laneCounts: Array.from(B.objects.lanes), tpos: Array.from(B.objects.tpos), pos,
+  views: [[v.a, v.b], [w.a, w.b], [all.a, all.b]], starts: Array.from(B.trials.start).map((s, p) => C.timeAtPos(B, p) - s)}));
+"""
+        done = subprocess.run(["node", "-e", script, str(CORE_JS)], input=json.dumps([behavior, list(measured)]),
+                              capture_output=True, text=True, timeout=60, check=True)
+        js = json.loads(done.stdout)
+        self.assertEqual(js["colors"], list(measured.values()))
+        self.assertEqual(js["other"], [None, None])
+        for p, back in js["pos"]:
+            self.assertAlmostEqual(p, back, places=6)
+        np.testing.assert_allclose(js["starts"], 0, atol=1e-9)
+        n = len(behavior["trials"]["id"])
+        self.assertEqual(js["views"], [[0, min(3, n)], [n - min(3, n), n], [0, n]])
+        # Yoked rasters: the view's trials (centres in [a, b)), widened to `min` around the centre
+        # trial but always covering the view, clamped to the session.  The synthetic session has 8 trials.
+        self.assertEqual(n, 8)
+        self.assertEqual(js["yoke"], {"view": [[0, 2], [3, 5], [4, 5]], "widened": [0, 4], "covers": [0, 4],
+                                      "centred": [3, 7], "wide": [1, 6], "all": [0, 7]})
+        objects = behavior["objects"]
+        pos = {tid: i for i, tid in enumerate(behavior["trials"]["id"])}
+        self.assertEqual(js["tpos"], [pos.get(t, -1) for t in objects["trial"]])
+        groups = {}
+        for k, (trial, role) in enumerate(zip(objects["trial"], objects["role"])):
+            groups.setdefault((trial, role), []).append(k)
+        for (trial, role), ks in groups.items():
+            ks.sort(key=lambda k: (objects["order"][k] if objects["order"][k] is not None else 1e9, objects["t"][k]))
+            self.assertEqual([js["lanes"][k] for k in ks], list(range(len(ks))))
+            self.assertEqual({js["laneCounts"][k] for k in ks}, {len(ks)})
+
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_core_js_psth_matches_compute_unit(self):
         pre, post, bin_, sigma = -1.0, 1.0, 0.05, 0.05
@@ -294,6 +373,9 @@ class ExplorerServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         status, _, _ = self.request(port, f"/api/explorer/table?session={self.sid}&alignment=nope")
         self.assertEqual(status, 404)
+        status, _, body = self.request(port, f"/api/explorer/behavior?session={self.sid}")
+        self.assertEqual(status, 200, body)
+        self.assertGreater(len(json.loads(body)["objects"]["t"]), 0)
         status, _, body = self.request(port, "/api/views", "POST", {"name": "demo", "state": {"unit": 1}})
         self.assertEqual(status, 200, body)
         status, _, body = self.request(port, "/api/views")
