@@ -287,6 +287,25 @@ class PopulationWorkspaceTests(unittest.TestCase):
             self.assertEqual(len(got["component_r2"]), 2)
             self.assertTrue(all(np.isfinite(np.array(g["coords"])).all() for g in got["groups"]))
 
+    def test_cumulative_variance_ends_at_the_joint_fit(self):
+        for method in ("pca", "ica", "fa"):
+            with self.subTest(method=method):
+                request, v01 = self.v01(method=method)
+                got = self.fit(request, v01, components=4)
+                cum, single = np.array(got["cumulative_r2"]), np.array(got["component_r2"])
+                self.assertEqual(len(cum), 4)
+                self.assertAlmostEqual(cum[-1], got["reconstruction_r2"], places=5)
+                self.assertTrue(np.all(np.diff(cum) >= -1e-6))
+                if method != "fa":  # uncorrelated scores: the curve is the running sum of the bars
+                    np.testing.assert_allclose(cum, np.cumsum(single), atol=1e-5)
+
+    def test_component_count_is_capped_by_the_data_not_ten(self):
+        request, v01 = self.v01()
+        with self.assertRaisesRegex(ValueError, "nonconstant units"):  # 6 units: past the old 2-10 check
+            self.fit(request, v01, components=11)
+        with self.assertRaisesRegex(ValueError, f"Choose 2-{explorer.MAX_COMPONENTS} components"):
+            self.fit(request, v01, components=explorer.MAX_COMPONENTS + 1)
+
     def test_single_trial_cloud_is_centred_on_the_trajectory(self):
         for method in ("pca", "ica", "fa"):
             for weight in ("trial", "event"):

@@ -10,6 +10,9 @@
   const tidy = (v, d = 3) => Number(Number(v).toFixed(d));
   const f1 = v => Math.round(v * 10) / 10;
   const VERSION = '0.2';
+  const MAX_NCOMP = 50;   // explorer.MAX_COMPONENTS; the slider covers 2-10, the number box the rest
+  const TC_SHOWN = 8;     // on screen, more component time courses than this scroll in a fixed-height box
+  const SPLIT_MIN = 240;  // px either side of the draggable trajectory | time-course divider
 
   // Spikes are fetched with this margin beyond the window: 4 sigma (<= 0.4 s) plus one bin (<= 0.2 s).
   const PAD = 0.65;
@@ -112,9 +115,9 @@
     tick: 'line', rasterH: 260, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
     mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, dims: '2', heatNorm: 'z',
     nsort: 'loading:0', axes: [0, 1, 2], heatGroup: null, cloud: false, cloudAlpha: 0.3, cloudZero: true, cloudFit: 'traj',
-    bt: true, btN: 16, pin: null, yoke: false,
+    bt: true, btN: 16, pin: null, yoke: false, popSplit: 0.5,
   };
-  const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, ylock: null, bars: true};
+  const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, ylock: null, bars: true, popSplit: 0.5};
   let S = clone(DEFAULTS);
 
   const TEMPLATES = [
@@ -168,7 +171,8 @@
     for (const [k, allowed] of Object.entries({mode: ['raster', 'population'], method: ['pca', 'ica', 'fa'], scaling: ['zscore', 'center'], dims: ['2', '3'], heatNorm: ['z', 'peak'], cloudFit: ['traj', 'cloud']}))
       if (!allowed.includes(String(s[k]))) s[k] = DEFAULTS[k]; else s[k] = String(s[k]);
     s.roster = Array.isArray(s.roster) ? [...new Set(s.roster.filter(Number.isInteger))].sort((a, b) => a - b) : [];
-    s.ncomp = Number.isInteger(s.ncomp) ? clamp(s.ncomp, 2, 10) : DEFAULTS.ncomp;
+    s.ncomp = Number.isInteger(s.ncomp) ? clamp(s.ncomp, 2, MAX_NCOMP) : DEFAULTS.ncomp;
+    s.popSplit = Number.isFinite(s.popSplit) ? clamp(s.popSplit, 0.15, 0.85) : DEFAULTS.popSplit;
     s.axes = Array.isArray(s.axes) && s.axes.length === 3 && s.axes.every(Number.isInteger) ? s.axes : clone(DEFAULTS.axes);
     if (typeof s.nsort !== 'string') s.nsort = DEFAULTS.nsort;
     s.cloud = s.cloud === true; s.cloudZero = s.cloudZero !== false;
@@ -862,7 +866,7 @@
     if (S.mode === 'population') { $('sortBy').value = S.nsort; if ($('sortBy').value !== S.nsort) { S.nsort = 'loading:0'; $('sortBy').value = S.nsort; } }
     else { $('sortBy').value = S.sort; if ($('sortBy').value !== S.sort) $('sortBy').value = 'session'; }
     $('sortLabel').textContent = S.mode === 'population' ? 'Sort neurons' : 'Sort rows by';
-    $('ncomp').value = S.ncomp; $('ncompOut').textContent = String(S.ncomp);
+    $('ncomp').value = Math.min(S.ncomp, 10); if (document.activeElement !== $('ncompN')) $('ncompN').value = S.ncomp;
     $('cloudOn').checked = S.cloud; $('cloudZero').checked = S.cloudZero;
     $('cloudAlpha').value = Math.round(S.cloudAlpha * 100); $('cloudAlphaOut').textContent = `${Math.round(S.cloudAlpha * 100)}%`;
     $('cloudKnob').classList.toggle('off', !S.cloud); $('cloudZeroWrap').classList.toggle('off', !S.cloud); $('cloudFitWrap').classList.toggle('off', !S.cloud);
@@ -1216,7 +1220,7 @@
   }
   function applyTemplate(t) {
     const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, tick: S.tick, rasterH: S.rasterH, bars: S.bars, err: S.err,
-      mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes};
+      mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes, popSplit: S.popSplit};
     S = sanitize({...clone(DEFAULTS), ...keep, ...clone(t.state)});
     afterBigChange();
     toast(`Template: ${t.name}`);
@@ -1571,21 +1575,34 @@
       top = 52 + legend.height;
     }
     const gap = 26;
-    const trajS = narrow ? Math.min(width, 400) : clamp(Math.round(width * 0.4), 280, 440);
-    const tcPanel = clamp(Math.round((trajS - 34) / K), 56, 110);
-    const tcH = tcPanel * K + 34;
-    const traj = {x: 0, y: top, w: trajS, h: trajS};
-    const tc = narrow ? {x: 0, y: top + trajS + gap, w: width, h: tcH} : {x: trajS + gap, y: top, w: width - trajS - gap, h: tcH};
+    // Wide: the trajectory and the time courses split the row S.popSplit : 1 - S.popSplit
+    // (drag the gap between them; double-click it for half each).  The trajectory box is
+    // as tall as it is wide, up to 600 px, and keeps equal axis scales inside.
+    const avail = width - gap;
+    const trajW = narrow ? Math.min(width, 400) : Math.round(clamp(avail * S.popSplit, SPLIT_MIN, avail - SPLIT_MIN));
+    const trajS = narrow ? trajW : Math.min(trajW, 600);
+    // Exports draw every component; on screen, past TC_SHOWN the panels scroll under a
+    // one-line header and above a fixed time axis.
+    const tcShown = opts.export ? K : Math.min(K, TC_SHOWN), tcScroll = tcShown < K, tcHead = tcScroll ? 18 : 0;
+    const tcPanel = clamp(Math.round((trajS - 34) / tcShown), 56, 110);
+    const tcH = tcHead + tcPanel * tcShown + 34;
+    const traj = {x: 0, y: top, w: trajW, h: trajS};
+    const tc = narrow ? {x: 0, y: top + trajS + gap, w: width, h: tcH} : {x: trajW + gap, y: top, w: width - trajW - gap, h: tcH};
     const row1 = narrow ? trajS + gap + tcH : Math.max(trajS, tcH);
     const U = fit.active_unit_ids.length;
     const loadW = narrow ? 84 : 150;
     const heat = {x: 0, y: top + row1 + gap + 20, w: width - loadW - 14, h: clamp(U * 4, 150, 520)};
     const load = {x: width - loadW, y: heat.y, w: loadW, h: heat.h};
     const varY = heat.y + heat.h + 44 + gap;
-    const vbox = {x: 0, y: varY, w: narrow ? width : Math.min(440, Math.round(width * 0.45)), h: 136};
-    const dbox = narrow ? {x: 0, y: varY + vbox.h + 18, w: width} : {x: vbox.w + 34, y: varY + 10, w: width - vbox.w - 34};
-    const height = Math.ceil((narrow ? dbox.y + 96 : varY + vbox.h + 8));
-    const layout = {width, height, n, times, pre, post, vis};
+    // Bars, then the cumulative curve to their right (below them on phones); the
+    // diagnostics take what is left of the row, or go underneath.
+    const vbox = {x: 0, y: varY, w: narrow ? width : Math.min(440, Math.round(width * 0.4)), h: 136};
+    const cbox = narrow ? {x: 0, y: varY + vbox.h + 18, w: width, h: 136} : {x: vbox.w + 34, y: varY, w: Math.min(360, Math.round(width * 0.3)), h: 136};
+    const dRight = !narrow && width - (cbox.x + cbox.w + 34) >= 540;
+    const dbox = dRight ? {x: cbox.x + cbox.w + 34, y: varY + 10, w: width - cbox.x - cbox.w - 34} : {x: 0, y: cbox.y + cbox.h + 18, w: width};
+    const height = Math.ceil(dRight ? varY + vbox.h + 8 : dbox.y + 96);
+    const layout = {width, height, n, times, pre, post, vis, split: narrow ? null : {avail, w: trajW}};
+    let tcOverlay = '';
     // A time marks the bin that contains it: the same rule the server uses for single-trial probes.
     const idxOf = t => clamp(Math.floor((t - pre) / fit.bin + 1e-9), 0, n - 1);
     const zeroIdx = pre <= 0 && post > 0 ? idxOf(0) : -1;
@@ -1601,7 +1618,7 @@
     {
       let [a, b, c3] = S.axes;
       const three = S.dims === '3' && K >= 3;
-      const pad = 34, inner = traj.w - 2 * pad;
+      const pad = 34, inner = Math.min(traj.w, traj.h) - 2 * pad;
       const pts = vis.map(({fg}) => fg.coords);
       const cloud = [];
       if (D.probeShown && !opts.noCloud) {
@@ -1639,8 +1656,8 @@
           x0 = Math.min(x0, quantile(xs, 0.01)); x1 = Math.max(x1, quantile(xs, 0.99));
           y0 = Math.min(y0, quantile(ys, 0.01)); y1 = Math.max(y1, quantile(ys, 0.99));
         }
-        const range = Math.max(x1 - x0, y1 - y0, 1e-9) * 1.08;
-        cx = (x0 + x1) / 2; cy = (y0 + y1) / 2; scale = inner / range;
+        cx = (x0 + x1) / 2; cy = (y0 + y1) / 2;
+        scale = Math.min((traj.w - 2 * pad) / Math.max(x1 - x0, 1e-9), (traj.h - 2 * pad) / Math.max(y1 - y0, 1e-9)) / 1.08;
         project = p => [traj.x + traj.w / 2 + (p[a] - cx) * scale, traj.y + traj.h / 2 - (p[b] - cy) * scale];
         const zx = traj.x + traj.w / 2 - cx * scale, zy = traj.y + traj.h / 2 + cy * scale;
         if (zx > traj.x + pad && zx < traj.x + traj.w - pad) out.push(`<line x1="${f(zx)}" x2="${f(zx)}" y1="${f(traj.y + pad)}" y2="${f(traj.y + traj.h - pad)}" stroke="${gridC}"/>`);
@@ -1691,36 +1708,49 @@
 
     // ---- component time courses
     {
-      const ml = 46, x0 = tc.x + ml, x1 = tc.x + tc.w - 8, pw = x1 - x0;
+      const ml = 46, x0 = tc.x + ml, x1 = tc.x + tc.w - (tcScroll ? 16 : 8), pw = x1 - x0, py = tc.y + tcHead;
       const X = t => x0 + (t - pre) / (post - pre) * pw;
-      const panels = [];
+      const panels = [], po = tcScroll ? [] : out;
       for (let k = 0; k < K; k++) {
-        const y0 = tc.y + k * tcPanel, y1 = y0 + tcPanel - 10;
+        const y0 = py + k * tcPanel, y1 = y0 + tcPanel - 10;
         let lo = Infinity, hi = -Infinity;
         for (const {fg} of vis) for (const p of fg.coords) { lo = Math.min(lo, p[k]); hi = Math.max(hi, p[k]); }
         if (!Number.isFinite(lo)) { lo = -1; hi = 1; }
         const padY = (hi - lo) * 0.1 || 1; lo -= padY; hi += padY;
         const Y = v => y1 - (v - lo) / (hi - lo) * (y1 - y0);
         panels.push({k, y0, y1, Y});
-        out.push(`<rect x="${f(X(Math.max(pre, M.cw[0])))}" y="${f(y0)}" width="${f(X(Math.min(post, M.cw[1])) - X(Math.max(pre, M.cw[0])))}" height="${f(y1 - y0)}" fill="${windowC}" opacity="${isDark() ? 0.5 : 0.55}"/>`);
-        if (lo < 0 && hi > 0) out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(Y(0))}" y2="${f(Y(0))}" stroke="${gridC}" stroke-width="1.2"/>`);
-        if (pre < 0 && post > 0) out.push(`<line x1="${f(X(0))}" x2="${f(X(0))}" y1="${f(y0)}" y2="${f(y1)}" stroke="${ink}" stroke-dasharray="2 3" opacity="0.6"/>`);
-        for (const r of S.refs) if (r > pre && r < post) out.push(`<line x1="${f(X(r))}" x2="${f(X(r))}" y1="${f(y0)}" y2="${f(y1)}" stroke="${muted}" stroke-dasharray="5 3"/>`);
+        po.push(`<rect x="${f(X(Math.max(pre, M.cw[0])))}" y="${f(y0)}" width="${f(X(Math.min(post, M.cw[1])) - X(Math.max(pre, M.cw[0])))}" height="${f(y1 - y0)}" fill="${windowC}" opacity="${isDark() ? 0.5 : 0.55}"/>`);
+        if (lo < 0 && hi > 0) po.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(Y(0))}" y2="${f(Y(0))}" stroke="${gridC}" stroke-width="1.2"/>`);
+        if (pre < 0 && post > 0) po.push(`<line x1="${f(X(0))}" x2="${f(X(0))}" y1="${f(y0)}" y2="${f(y1)}" stroke="${ink}" stroke-dasharray="2 3" opacity="0.6"/>`);
+        for (const r of S.refs) if (r > pre && r < post) po.push(`<line x1="${f(X(r))}" x2="${f(X(r))}" y1="${f(y0)}" y2="${f(y1)}" stroke="${muted}" stroke-dasharray="5 3"/>`);
         if (S.medians) for (const m of markers) {
           const mi = medianIdx(m, vis.flatMap(({g}) => g.rows));
-          if (mi) out.push(`<line x1="${f(X(mi.t))}" x2="${f(X(mi.t))}" y1="${f(y0)}" y2="${f(y1)}" stroke="${paint(m.c)}" stroke-width="1.1" stroke-dasharray="4 3"/>`);
+          if (mi) po.push(`<line x1="${f(X(mi.t))}" x2="${f(X(mi.t))}" y1="${f(y0)}" y2="${f(y1)}" stroke="${paint(m.c)}" stroke-width="1.1" stroke-dasharray="4 3"/>`);
         }
-        for (const {g, fg} of vis) out.push(`<path d="${fg.coords.map((p, j) => `${j ? 'L' : 'M'}${f(X(times[j]))} ${f(Y(p[k]))}`).join('')}" fill="none" stroke="${g.color}" stroke-width="1.8" stroke-linejoin="round"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/>`);
-        out.push(`<line x1="${f(x0)}" x2="${f(x0)}" y1="${f(y0)}" y2="${f(y1)}" stroke="${axisC}"/>`);
-        out.push(`<text x="${f(x0 + 6)}" y="${f(y0 + 12)}" font-size="11" font-weight="600" fill="${ink}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${compName(k)} <tspan font-weight="400" fill="${muted}">${pct(k)}</tspan></text>`);
-        for (const v of niceTicks(lo, hi, 2)) out.push(`<text x="${f(x0 - 5)}" y="${f(Y(v) + 3.5)}" text-anchor="end" font-size="9.5" fill="${muted}">${C.fmtNum(v)}</text>`);
-        if (!opts.export) out.push(`<rect class="hit" data-kind="tc" data-k="${k}" x="${f(x0)}" y="${f(y0)}" width="${f(pw)}" height="${f(tcPanel)}" fill="transparent"/>`);
+        for (const {g, fg} of vis) po.push(`<path d="${fg.coords.map((p, j) => `${j ? 'L' : 'M'}${f(X(times[j]))} ${f(Y(p[k]))}`).join('')}" fill="none" stroke="${g.color}" stroke-width="1.8" stroke-linejoin="round"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/>`);
+        po.push(`<line x1="${f(x0)}" x2="${f(x0)}" y1="${f(y0)}" y2="${f(y1)}" stroke="${axisC}"/>`);
+        po.push(`<text x="${f(x0 + 6)}" y="${f(y0 + 12)}" font-size="11" font-weight="600" fill="${ink}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${compName(k)} <tspan font-weight="400" fill="${muted}">${pct(k)}</tspan></text>`);
+        for (const v of niceTicks(lo, hi, 2)) po.push(`<text x="${f(x0 - 5)}" y="${f(Y(v) + 3.5)}" text-anchor="end" font-size="9.5" fill="${muted}">${C.fmtNum(v)}</text>`);
+        if (!opts.export) po.push(`<rect class="hit" data-kind="tc" data-k="${k}" x="${f(x0)}" y="${f(y0)}" width="${f(pw)}" height="${f(tcPanel)}" fill="transparent"/>`);
       }
-      const yb = tc.y + K * tcPanel - 10;
+      const yb = py + tcShown * tcPanel - 10;
+      if (tcScroll) {
+        // The box ends on the axis line, so scrolled to the end it shows the last panels exactly.
+        const vw = tc.w - 10, fullH = K * tcPanel - 10;
+        out.push(`<text id="tcRange" x="${f(x0)}" y="${f(tc.y + 11)}" font-size="10.5" fill="${muted}">${compName(0)}–${compName(tcShown - 1)} of ${K} · scroll for more</text>`);
+        tcOverlay = `<div class="tc-scroll" style="left:${f(tc.x)}px;top:${f(py)}px;width:${f(tc.w)}px;height:${f(yb - py)}px">` +
+          `<svg xmlns="http://www.w3.org/2000/svg" width="${f(vw)}" height="${f(fullH)}" viewBox="${f(tc.x)} ${f(py)} ${f(vw)} ${f(fullH)}" font-family="${font}">` +
+          `${po.join('')}<g id="tcCursor" pointer-events="none"></g><g id="tcHover" pointer-events="none"></g></svg></div>`;
+      }
       out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(yb)}" y2="${f(yb)}" stroke="${axisC}"/>`);
       for (const v of niceTicks(pre, post, Math.max(3, Math.round(pw / 80)))) out.push(`<text x="${f(X(v))}" y="${f(yb + 14)}" text-anchor="middle" font-size="10" fill="${muted}">${C.fmtNum(v)}</text>`);
       out.push(`<text x="${f((x0 + x1) / 2)}" y="${f(yb + 29)}" text-anchor="middle" font-size="11.5" fill="${ink}">time from ${esc(eventLabel(S.align))} (s)</text>`);
-      layout.tc = {box: tc, x0, x1, X, panels};
+      layout.tc = {box: tc, x0, x1, X, panels, scroll: tcScroll, shown: tcShown, panelH: tcPanel};
+    }
+    if (!narrow && !opts.export) {
+      const sx = traj.x + traj.w + gap / 2, sy = top + Math.min(trajS, tcH) / 2;
+      out.push(`<rect class="hit split" data-kind="split" x="${f(traj.x + traj.w)}" y="${f(top)}" width="${gap}" height="${f(row1)}" fill="transparent"/>`,
+        `<rect class="grip" x="${f(sx - 1.5)}" y="${f(sy - 20)}" width="3" height="40" rx="1.5" fill="${axisC}" pointer-events="none"/>`);
     }
 
     // ---- heatmap + loadings
@@ -1778,14 +1808,33 @@
     {
       const ml = 34, x0 = vbox.x + ml, x1 = vbox.x + vbox.w, yb = vbox.y + vbox.h - 20, h = vbox.h - 44;
       const r2 = fit.component_r2, maxv = Math.max(0.05, ...r2) * 1.15, step = (x1 - x0) / K, bw = Math.min(34, step * 0.62);
+      // Past about ten components, label every nth bar and drop the per-bar percentages.
+      const every = Math.max(1, Math.ceil(30 / step)), valueLabels = step >= 22;
+      const nameAt = k => (k % every === 0 ? `<text x="${f(x0 + (k + 0.5) * step)}" y="${f(yb + 13)}" text-anchor="middle" font-size="10" fill="${muted}">${compName(k)}</text>` : '');
       out.push(`<text x="${f(vbox.x)}" y="${f(vbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">${S.method === 'pca' ? 'variance explained' : 'variance explained by each component alone'}</text>`);
       r2.forEach((v, k) => {
         const cx = x0 + (k + 0.5) * step, y = yb - v / maxv * h;
-        out.push(`<rect x="${f(cx - bw / 2)}" y="${f(y)}" width="${f(bw)}" height="${f(yb - y)}" rx="2" fill="${paint('#3b5bdb')}" opacity="${0.9 - 0.05 * k}"/>`,
-          `<text x="${f(cx)}" y="${f(y - 3)}" text-anchor="middle" font-size="9.5" fill="${muted}">${C.fmtNum(100 * v, 0)}%</text>`,
-          `<text x="${f(cx)}" y="${f(yb + 13)}" text-anchor="middle" font-size="10" fill="${muted}">${compName(k)}</text>`);
+        out.push(`<rect x="${f(cx - bw / 2)}" y="${f(y)}" width="${f(bw)}" height="${f(yb - y)}" rx="2" fill="${paint('#3b5bdb')}" opacity="${(0.9 - 0.45 * k / Math.max(9, K - 1)).toFixed(3)}"/>`,
+          valueLabels ? `<text x="${f(cx)}" y="${f(y - 3)}" text-anchor="middle" font-size="9.5" fill="${muted}">${C.fmtNum(100 * v, 0)}%</text>` : '', nameAt(k));
       });
       out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(yb)}" y2="${f(yb)}" stroke="${axisC}"/>`);
+      // Cumulative: components 1..k together, in the order shown (server-computed from
+      // the partial reconstruction, so it is right for FA too).
+      const cum = fit.cumulative_r2 || [];
+      if (cum.length === K) {
+        const cx0 = cbox.x + ml, cx1 = cbox.x + cbox.w, cyb = cbox.y + cbox.h - 20, ch = cbox.h - 44, cstep = (cx1 - cx0) / K;
+        const cevery = Math.max(1, Math.ceil(30 / cstep));
+        const CX = k => cx0 + (k + 0.5) * cstep, CY = v => cyb - clamp(v, 0, 1) * ch;
+        out.push(`<text x="${f(cbox.x)}" y="${f(cbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">cumulative variance explained</text>`);
+        for (const v of [0, 0.5, 1]) out.push(`<line x1="${f(cx0)}" x2="${f(cx1)}" y1="${f(CY(v))}" y2="${f(CY(v))}" stroke="${v ? gridC : axisC}"/>`,
+          `<text x="${f(cx0 - 4)}" y="${f(CY(v) + 3.5)}" text-anchor="end" font-size="9.5" fill="${muted}">${v * 100}%</text>`);
+        out.push(`<path d="${cum.map((v, k) => `${k ? 'L' : 'M'}${f(CX(k))} ${f(CY(v))}`).join('')}" fill="none" stroke="${paint('#3b5bdb')}" stroke-width="1.8" stroke-linejoin="round"/>`);
+        cum.forEach((v, k) => {
+          out.push(`<circle cx="${f(CX(k))}" cy="${f(CY(v))}" r="${cstep >= 10 ? 2.8 : 1.8}" fill="${paint('#3b5bdb')}"/>`);
+          if (k % cevery === 0) out.push(`<text x="${f(CX(k))}" y="${f(cyb + 13)}" text-anchor="middle" font-size="10" fill="${muted}">${compName(k)}</text>`);
+          if (cstep >= 30 || k === K - 1) out.push(`<text x="${f(CX(k))}" y="${f(CY(v) - 5)}" text-anchor="${k === K - 1 && cstep < 30 ? 'end' : 'middle'}" font-size="9.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${C.fmtNum(100 * v, 0)}%</text>`);
+        });
+      }
       const dropped = fit.dropped_constant_units.length;
       const lines = [
         `${fit.fit_rows} fit rows = ${fit.groups.length} group${fit.groups.length === 1 ? '' : 's'} × ${n} bins · ${fit.active_unit_ids.length} neurons${dropped ? ` (${dropped} constant, left out)` : ''}`,
@@ -1799,20 +1848,21 @@
     const meta = opts.export ? `<metadata>${esc(JSON.stringify(popProvenance(M, fit)))}</metadata>` : '';
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="${font}">${meta}` +
       (opts.export ? `<rect x="-20" y="-20" width="${width + 40}" height="${height + 40}" fill="${bg}"/>` : '') + out.join('') +
-      (opts.export ? '' : '<g id="cursorLayer" pointer-events="none"></g><g id="hoverLayer" pointer-events="none"></g>') + '</svg>';
+      (opts.export ? '' : '<g id="cursorLayer" pointer-events="none"></g><g id="hoverLayer" pointer-events="none"></g>') + '</svg>' + tcOverlay;
     return {svg, layout};
   }
 
   function drawCursor() {
-    const L = D.popLayout, layer = document.getElementById('cursorLayer');
+    const L = D.popLayout, layer = document.getElementById('cursorLayer'), tcLayer = document.getElementById('tcCursor');
     if (!L || !layer) return;
     const j = D.cursor;
-    if (j === null || j === undefined || j >= L.n) { layer.innerHTML = ''; $('cursorOut').textContent = 't —'; return; }
+    if (j === null || j === undefined || j >= L.n) { layer.innerHTML = ''; if (tcLayer) tcLayer.innerHTML = ''; $('cursorOut').textContent = 't —'; return; }
     const bg = figVar('--fig-bg'), t = L.times[j];
     let html = '';
     L.vis.forEach(({g}, vi) => { const p = L.traj.screen[vi][j]; html += `<circle cx="${f1(p[0])}" cy="${f1(p[1])}" r="5.2" fill="${g.color}" stroke="${bg}" stroke-width="2"/>`; });
     const x = L.tc.X(t);
-    html += `<line x1="${f1(x)}" x2="${f1(x)}" y1="${f1(L.tc.box.y)}" y2="${f1(L.tc.box.y + L.tc.panels.length * (L.tc.panels[0].y1 - L.tc.panels[0].y0 + 10) - 10)}" stroke="${figVar('--accent')}" stroke-width="1.4"/>`;
+    const tcLine = `<line x1="${f1(x)}" x2="${f1(x)}" y1="${f1(L.tc.panels[0].y0)}" y2="${f1(L.tc.panels[L.tc.panels.length - 1].y1)}" stroke="${figVar('--accent')}" stroke-width="1.4"/>`;
+    if (L.tc.scroll && tcLayer) tcLayer.innerHTML = tcLine; else html += tcLine;
     if (L.heat) html += `<line x1="${f1(L.heat.X(t))}" x2="${f1(L.heat.X(t))}" y1="${f1(L.heat.box.y)}" y2="${f1(L.heat.box.y + L.heat.box.h)}" stroke="${figVar('--accent')}" stroke-width="1.4"/>`;
     layer.innerHTML = html;
     $('cursorOut').textContent = `t ${t >= 0 ? '+' : ''}${C.fmtNum(t, 2)} s`;
@@ -1920,8 +1970,7 @@
     syncPopToolbar(fit, M);
     const width = Math.max(300, Math.floor(document.querySelector('.figure-wrap').clientWidth || ($('stage').clientWidth - 36)));
     const {svg, layout} = popFigureSVG(M, fit, width);
-    fig.innerHTML = svg;
-    D.popLayout = layout;
+    mountPopFigure(fig, svg, layout);
     D.figMeta = {title: $('title').textContent, subtitle: $('subtitle').textContent, width};
     drawCursor();
     $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · condition means per group, one joint ${S.method.toUpperCase()} basis (sklearn, as the classic workspace) · component signs set so each component's largest loading is positive · electro_gui ${VERSION}`;
@@ -1931,7 +1980,19 @@
     if (!M || !fit || S.mode !== 'population') return;
     const width = D.figMeta ? D.figMeta.width : 800;
     const {svg, layout} = popFigureSVG(M, fit, width);
-    $('figure').innerHTML = svg; D.popLayout = layout; drawCursor();
+    mountPopFigure($('figure'), svg, layout); drawCursor();
+  }
+  // Redraws keep the time-course box where it was scrolled to.
+  function mountPopFigure(fig, svg, layout) {
+    fig.innerHTML = svg; D.popLayout = layout;
+    const box = fig.querySelector('.tc-scroll');
+    if (box) { box.scrollTop = D.tcScroll || 0; tcRangeLabel(box); }
+  }
+  function tcRangeLabel(box) {
+    const L = D.popLayout, el = document.getElementById('tcRange');
+    if (!L || !el || !L.tc.scroll) return;
+    const K = L.tc.panels.length, a = clamp(Math.round(box.scrollTop / L.tc.panelH), 0, K - L.tc.shown);
+    el.textContent = `${compName(a)}–${compName(a + L.tc.shown - 1)} of ${K} · scroll for more`;
   }
 
   // hover and 3D rotation in the population figure
@@ -1940,8 +2001,9 @@
     return {x: (evt.clientX - r.left) * (L.width / r.width), y: (evt.clientY - r.top) * (L.height / r.height)};
   }
   function popHover(kind, hit, p, evt) {
-    const L = D.popLayout, fit = D.popFit, hl = document.getElementById('hoverLayer');
+    const L = D.popLayout, fit = D.popFit, hl = document.getElementById('hoverLayer'), tcl = document.getElementById('tcHover');
     if (!L || !fit || !hl) return;
+    if (tcl) tcl.innerHTML = '';
     const names = fit.method;
     if (kind === 'traj') {
       let near = null;
@@ -1962,7 +2024,8 @@
       const k = Number(hit.dataset.k), t = D.popLayout.pre + (p.x - L.tc.x0) / (L.tc.x1 - L.tc.x0) * (L.post - L.pre);
       const j = clamp(Math.floor((t - L.pre) / fit.bin), 0, L.n - 1), x = L.tc.X(fit.times[j]);
       const last = L.tc.panels[L.tc.panels.length - 1];
-      hl.innerHTML = `<line x1="${f1(x)}" x2="${f1(x)}" y1="${f1(L.tc.panels[0].y0)}" y2="${f1(last.y1)}" stroke="${figVar('--fig-muted')}"/>`;
+      const line = `<line x1="${f1(x)}" x2="${f1(x)}" y1="${f1(L.tc.panels[0].y0)}" y2="${f1(last.y1)}" stroke="${figVar('--fig-muted')}"/>`;
+      if (L.tc.scroll && tcl) { tcl.innerHTML = line; hl.innerHTML = ''; } else hl.innerHTML = line;
       tooltip(`<b>${compName(k, names)} · t = ${C.fmtNum(fit.times[j], 3)} s</b>${L.vis.map(({g, fg}) => `<div class="tr" style="--c:${g.color}"><i></i><span>${esc(g.label)}</span><em>${C.fmtNum(fg.coords[j][k], 2)}</em></div>`).join('')}`, evt.clientX, evt.clientY);
     } else if (kind === 'heat' || kind === 'load') {
       const box = kind === 'heat' ? L.heat : L.load, rowH = box.rowH;
@@ -1979,12 +2042,21 @@
       tooltip(`<b>${esc(unitShort(unit))}</b><div class="kv">${kv.map(([a, v]) => `<span>${esc(a)}</span><b>${esc(v)}</b>`).join('')}</div>`, evt.clientX, evt.clientY);
     }
   }
-  let rotate = null;
+  let rotate = null, split = null, splitDown = 0;
   function bindPopFigure(fig) {
     fig.addEventListener('pointerdown', evt => {
       if (S.mode !== 'population' || !D.popLayout) return;
       const hit = evt.target.closest && evt.target.closest('.hit');
-      if (hit && hit.dataset.kind === 'traj' && D.popLayout.traj.three) {
+      if (hit && hit.dataset.kind === 'split' && D.popLayout.split) {
+        // Two presses within 400 ms reset to half each.  Counted here because, once the first
+        // press captures the pointer, the browser sends the dblclick to the figure, not the divider.
+        const now = performance.now();
+        if (now - splitDown < 400) { splitDown = 0; S.popSplit = 0.5; saveState(); rerenderPopFigure(); evt.preventDefault(); return; }
+        splitDown = now;
+        const r = fig.querySelector('svg').getBoundingClientRect();
+        split = {x: evt.clientX, w0: D.popLayout.split.w, avail: D.popLayout.split.avail, k: D.popLayout.width / r.width};
+        fig.setPointerCapture(evt.pointerId); fig.style.cursor = 'col-resize'; hideTip(); evt.preventDefault();
+      } else if (hit && hit.dataset.kind === 'traj' && D.popLayout.traj.three) {
         rotate = {x: evt.clientX, y: evt.clientY, yaw: D.view3d.yaw, pitch: D.view3d.pitch};
         fig.setPointerCapture(evt.pointerId); hideTip(); evt.preventDefault();
       } else if (hit && evt.pointerType !== 'mouse') {
@@ -2000,20 +2072,31 @@
         if (!D.rotFrame) D.rotFrame = requestAnimationFrame(() => { D.rotFrame = 0; rerenderPopFigure(); });
         return;
       }
+      if (split) {
+        const w = clamp(split.w0 + (evt.clientX - split.x) * split.k, SPLIT_MIN, split.avail - SPLIT_MIN);
+        if (Math.abs(w - D.popLayout.split.w) < 1) return;  // a still pointer must not redraw between the clicks of a double-click
+        S.popSplit = w / split.avail;
+        if (!D.rotFrame) D.rotFrame = requestAnimationFrame(() => { D.rotFrame = 0; rerenderPopFigure(); });
+        return;
+      }
       const hit = evt.target.closest && evt.target.closest('.hit');
-      if (!hit) { if (evt.pointerType === 'mouse') hideTip(); return; }
+      if (!hit || hit.dataset.kind === 'split') { if (evt.pointerType === 'mouse' || hit) hideTip(); return; }
       popHover(hit.dataset.kind, hit, popPoint(evt), evt);
     });
-    const end = () => { rotate = null; };
+    const end = () => { rotate = null; if (split) { split = null; fig.style.cursor = ''; saveState(); } };
     fig.addEventListener('pointerup', end);
     fig.addEventListener('pointercancel', end);
+    fig.addEventListener('scroll', evt => {  // scroll does not bubble; capture it from the time-course box
+      if (!evt.target.classList || !evt.target.classList.contains('tc-scroll')) return;
+      D.tcScroll = evt.target.scrollTop; tcRangeLabel(evt.target);
+    }, true);
   }
 
   function popProvenance(M, fit) {
     return {tool: `electro_gui ${VERSION} explorer · population`, generated: new Date().toISOString(), session_id: D.summary.session_id,
       source: D.summary.source, alignment: S.align, policy: S.policy, unit_ids: S.roster.slice(),
       active_unit_ids: fit.active_unit_ids, dropped_constant_units: fit.dropped_constant_units, method: fit.method, scaling: fit.scaling,
-      components: fit.components, component_r2: fit.component_r2, explained_variance_ratio: fit.explained_variance_ratio,
+      components: fit.components, component_r2: fit.component_r2, cumulative_r2: fit.cumulative_r2, explained_variance_ratio: fit.explained_variance_ratio,
       reconstruction_r2: fit.reconstruction_r2, rank: fit.rank, fit_rows: fit.fit_rows, converged: fit.converged, warnings: fit.warnings,
       weighting: fit.weighting, window: fit.window, bin: fit.bin, sigma: fit.sigma, common_trials: fit.common_trials,
       groups: fit.groups.map(g => ({key: g.key, label: g.label, events: g.events, trials: g.trials})), scope: fit.scope, state: S};
@@ -2136,7 +2219,7 @@
   }
   const hideTip = () => {
     $('tooltip').hidden = true;
-    for (const id of ['hoverLayer', 'btHover']) { const h = document.getElementById(id); if (h) h.innerHTML = ''; }
+    for (const id of ['hoverLayer', 'btHover', 'tcHover']) { const h = document.getElementById(id); if (h) h.innerHTML = ''; }
   };
   function svgPoint(evt) {
     const svg = $('figure').querySelector('svg');
@@ -2807,7 +2890,13 @@
       }
       if (e.target.closest('[data-rmzero]') && D.stab) { S.roster = S.roster.filter(id => D.stab.masks.has(id) && C.popcount(D.stab.masks.get(id), D.stab.n) > 0); rosterChanged(); }
     });
-    $('ncomp').addEventListener('input', e => { S.ncomp = Number(e.target.value); $('ncompOut').textContent = String(S.ncomp); renderStructure(); changed(); });
+    $('ncomp').addEventListener('input', e => { S.ncomp = Number(e.target.value); $('ncompN').value = S.ncomp; renderStructure(); changed(); });
+    $('ncompN').addEventListener('change', e => {
+      const v = Number(e.target.value);
+      if (!Number.isInteger(v) || v < 2) { syncControls(); return; }
+      if (v > MAX_NCOMP) toast(`At most ${MAX_NCOMP} components.`, true);
+      S.ncomp = Math.min(v, MAX_NCOMP); $('ncompN').value = S.ncomp; renderStructure(); changed();
+    });
     for (const [id, i] of [['axX', 0], ['axY', 1], ['axZ', 2]]) $(id).addEventListener('change', e => { S.axes[i] = Number(e.target.value); saveState(); rerenderPopFigure(); });
     $('heatGroup').addEventListener('change', e => { S.heatGroup = e.target.value; saveState(); rerenderPopFigure(); });
     $('cursor').addEventListener('input', e => { stopPlay(); D.cursor = Number(e.target.value); drawCursor(); });

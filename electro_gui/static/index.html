@@ -98,7 +98,7 @@
         <div class="model" data-only="population">
           <div class="seg-field"><span>Method</span><div class="seg" data-key="method"><button data-v="pca">PCA</button><button data-v="ica">ICA</button><button data-v="fa">FA</button></div></div>
           <div class="seg-field"><span>Scaling</span><div class="seg" data-key="scaling"><button data-v="zscore">z-score</button><button data-v="center">center</button></div></div>
-          <div class="knob"><div class="knob-head"><span>Components</span><output id="ncompOut"></output></div><input type="range" id="ncomp" min="2" max="10" step="1" aria-label="Number of components"></div>
+          <div class="knob"><div class="knob-head"><span>Components <small>(type up to 50)</small></span><span class="nums"><input type="number" id="ncompN" min="2" max="50" step="1" aria-label="Number of components"></span></div><input type="range" id="ncomp" min="2" max="10" step="1" aria-label="Number of components, 2 to 10"></div>
           <div class="seg-field"><span>Trajectory</span><div class="seg" data-key="dims"><button data-v="2">2D</button><button data-v="3">3D</button></div></div>
           <div class="seg-field"><span>Heatmap</span><div class="seg" data-key="heatNorm"><button data-v="z">z-score</button><button data-v="peak">peak = 1</button></div></div>
         </div>

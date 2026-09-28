@@ -32,6 +32,7 @@ from .conditions import missing
 
 GUARD_S = 0.4          # analysis.prepare_rows padding guard
 MAX_WINDOW_S = 10.0    # analysis._validate_settings display limit
+MAX_COMPONENTS = 50    # population fit; static/explorer.js MAX_NCOMP
 SPIKE_DECIMALS = 5     # 10 us; well below a 30 kHz sample
 
 # Fields that identify rows rather than describe them, aliases, and fields that
@@ -369,8 +370,8 @@ def _fit_inputs(loaded: Any, request: Mapping[str, Any]) -> dict:
     if weight not in ("trial", "event"):
         raise ValueError("weight must be trial or event")
     components = request.get("components", 3)
-    if isinstance(components, bool) or not isinstance(components, int) or not 2 <= components <= 10:
-        raise ValueError("Choose 2-10 components.")
+    if isinstance(components, bool) or not isinstance(components, int) or not 2 <= components <= MAX_COMPONENTS:
+        raise ValueError(f"Choose 2-{MAX_COMPONENTS} components.")
     pre, post = _window(request.get("pre"), "pre"), _window(request.get("post"), "post")
     bin_s, sigma = _window(request.get("bin"), "bin"), _window(request.get("sigma", 0), "sigma")
     if not (-MAX_WINDOW_S <= pre < post <= MAX_WINDOW_S) or not 0.005 <= bin_s <= 0.2 or not 0 <= sigma <= 0.1:
@@ -466,6 +467,14 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
         order = sorted(range(components), key=lambda k: -single[k])
         coords, loadings, single = coords[:, order], loadings[:, order], [single[k] for k in order]
         operator, offset_b = operator[:, order], offset_b[order]
+    # Components 1..k together, in the order shown, from the partial reconstruction
+    # rather than summed: it equals the running sum of the single-component R^2 only
+    # while the scores are uncorrelated (PCA, ICA; FA once converged), and it ends
+    # at reconstruction_r2.
+    resid, cumulative = xc.copy(), []
+    for k in range(components):
+        resid -= np.outer(coords[:, k] - coords[:, k].mean(), loadings[:, k])
+        cumulative.append(1 - float(np.sum(resid ** 2)) / total)
     fits = _cache(loaded).setdefault("fits", OrderedDict())
     fits[inp["key"]] = {"active_ids": list(fit["active_ids"]), "center": fit["center"][fit["varying"]], "scale": fit["scale"],
                         "operator": operator, "offset": offset_b}
@@ -486,6 +495,7 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
             "unit_ids": ids, "active_unit_ids": active, "dropped_constant_units": fit["dropped_ids"],
             "times": np.round(times, 6).tolist(), "groups": out_groups, "components": components,
             "loadings": np.round(loadings, 6).tolist(), "component_r2": [round(v, 6) for v in single],
+            "cumulative_r2": [round(v, 6) for v in cumulative],
             "explained_variance_ratio": evr, "reconstruction_r2": fit["reconstruction_r2"], "rank": fit["rank"],
             "fit_rows": int(x.shape[0]), "converged": fit["converged"], "warnings": fit["warnings"],
             "method": method, "scaling": scaling, "weight": weight, "window": [pre, post], "bin": bin_s, "sigma": sigma,

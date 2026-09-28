@@ -181,7 +181,9 @@ Neurons tab on phones) and a model block at the top of *Model & display*.
   Every event is re-checked on the server against the common-trial eligibility
   rule for this roster and window.  Component signs are set so each
   component's largest loading is positive; ICA/FA components are listed by
-  variance explained.  Refits run automatically about 0.3 s after a change
+  variance explained.  *Components* has a 2–10 slider and a number box that
+  takes up to 50 (`explorer.MAX_COMPONENTS`); past that the neurons and the
+  fit's rank are the limit.  Refits run automatically about 0.3 s after a change
   that affects them and are cached; hiding a group in the legend, axes,
   2D/3D, heatmap group, sorting and the cursor only redraw.
 - **Figure.**  A trajectory (any two components, or three in a 3D view you
@@ -191,9 +193,20 @@ Neurons tab on phones) and a model block at the top of *Model & display*.
   group — z-scored per neuron across all groups, or rate / neuron peak — with
   an area strip, sorted by a component's loading, peak time, mean rate, peak
   channel, area or unit ID, the chosen component's loadings as bars aligned to
-  the heatmap rows, and variance explained per component (single-component R²
-  for ICA/FA) with the fit's diagnostics.  The toolbar's time cursor (▶ plays;
+  the heatmap rows, variance explained per component (single-component R²
+  for ICA/FA) and, to its right, the cumulative variance explained by
+  components 1…k together, in the order shown — computed from the partial
+  reconstruction, so it ends at the diagnostics' "all K components together"
+  figure and is exact for FA, whose scores need not be uncorrelated — with the
+  fit's diagnostics.  The toolbar's time cursor (▶ plays;
   ← / → step; space plays) marks the same moment in every panel.
+- **Layout.**  On wide screens the trajectory and the time courses share the
+  top row half and half.  Drag the divider between them to resize (at least
+  240 px each); double-click it, or press *Reset*, for half each.  The split is
+  kept with the view.  The trajectory box is at most 600 px tall and keeps
+  equal axis scales.  Past eight components the time courses scroll in a box
+  the height of eight, under a "PC1–PC8 of 25" header and above a fixed time
+  axis, and redraws keep the scroll position; exports draw every component.
 - **Reference markers and single trials.**  t = 0 (●) and every reference line
   (■ ▲ ▼ ✚ in time order, set in *Markers*) are marked on each trajectory at the
   bin that contains that time.  *Show single trials at those times* adds a cloud
