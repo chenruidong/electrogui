@@ -442,6 +442,34 @@ class ExplorerServerTests(unittest.TestCase):
         status, _, _ = self.request(port, "/api/catalog", headers={"Cookie": "electro_token=s3cret", "Host": "192.168.1.5:8765"})
         self.assertEqual(status, 200)
 
+    def test_token_on_loopback_serves_behind_an_https_proxy(self):
+        # tailscale serve forwards https://<host>:8443 to a loopback server: the Host header
+        # is the public name and the browser's Origin is https, so neither may trip the guards.
+        port = self.serve(token="s3cret")
+        proxied = {"Host": "mac.tail.ts.net:8443", "Origin": "https://mac.tail.ts.net:8443"}
+        status, _, _ = self.request(port, "/api/catalog?token=s3cret", headers=proxied)
+        self.assertEqual(status, 200)
+        status, _, _ = self.request(port, "/api/catalog", headers=proxied)
+        self.assertEqual(status, 403)
+        status, _, _ = self.request(port, "/api/catalog?token=s3cret",
+                                   headers={"Host": "mac.tail.ts.net:8443", "Origin": "https://evil.example"})
+        self.assertEqual(status, 403)
+
+    def test_explicit_token_is_kept_on_a_loopback_host(self):
+        import argparse
+        from unittest import mock
+        from electro_gui import cli
+        args = cli.add_arguments(argparse.ArgumentParser()).parse_args(
+            ["--data-root", self.temp.name, "--cache-dir", self.temp.name, "--views-file", str(Path(self.temp.name) / "v.json"),
+             "--no-browser", "--port", "0", "--token", "fixed"])
+        with mock.patch("electro_gui.server.make_server", side_effect=OSError("stop")) as fake, self.assertRaises(SystemExit):
+            cli.run(args)
+        self.assertEqual(fake.call_args.kwargs["token"], "fixed")
+        args.token = None
+        with mock.patch("electro_gui.server.make_server", side_effect=OSError("stop")) as fake, self.assertRaises(SystemExit):
+            cli.run(args)
+        self.assertIsNone(fake.call_args.kwargs["token"])  # plain loopback stays token-free
+
 
 if __name__ == "__main__":
     unittest.main()

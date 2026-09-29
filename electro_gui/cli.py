@@ -38,9 +38,9 @@ def run(args):
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=Path(args.cache_dir).expanduser())
     application = Application(store, views_path=args.views_file)
     host = "0.0.0.0" if args.lan else args.host
-    token = None
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        token = args.token or secrets.token_urlsafe(12)
+    token = args.token  # an explicit token also protects a loopback server fronted by a proxy (tailscale serve)
+    if token is None and host not in ("127.0.0.1", "localhost", "::1"):
+        token = secrets.token_urlsafe(12)
     try:
         server = make_server(application, host=host, port=args.port, token=token)
     except OSError as exc:

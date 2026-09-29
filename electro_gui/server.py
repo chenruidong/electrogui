@@ -334,7 +334,7 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
                     self._send({"error": "Local Host header required."}, 403)
                     return False
             origin = self.headers.get("Origin")
-            if origin and origin != "http://" + self.headers.get("Host"):
+            if origin and urlsplit(origin).netloc != self.headers.get("Host"):  # scheme-agnostic: https via a proxy
                 self._send({"error": "Same-origin requests required."}, 403)
                 return False
             return True
