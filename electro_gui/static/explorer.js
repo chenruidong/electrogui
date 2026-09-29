@@ -113,7 +113,7 @@
     filters: [], color: 'role', style: 'action', panel: null, qbins: 3, hidden: [],
     sort: 'session', dir: 1, grouped: true, markers: [], refs: [], medians: true,
     tick: 'line', rasterH: 260, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
-    mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, dims: '2', heatNorm: 'z',
+    mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, tdrFactors: ['world', 'action', 'joystick_direction'], tdrWin: null, worldCoding: 'linear', dims: '2', heatNorm: 'z',
     nsort: 'loading:0', axes: [0, 1, 2], heatGroup: null, cloud: false, cloudAlpha: 0.3, cloudZero: true, cloudFit: 'traj',
     bt: true, btN: 16, pin: null, yoke: false, popSplit: 0.5,
   };
@@ -168,10 +168,13 @@
     s.qbins = [2, 3, 4, 5].includes(Number(s.qbins)) ? Number(s.qbins) : 3;
     s.dir = s.dir === -1 ? -1 : 1;
     if (!s.gstyle || typeof s.gstyle !== 'object' || Array.isArray(s.gstyle)) s.gstyle = {};
-    for (const [k, allowed] of Object.entries({mode: ['raster', 'population'], method: ['pca', 'ica', 'fa'], scaling: ['zscore', 'center'], dims: ['2', '3'], heatNorm: ['z', 'peak'], cloudFit: ['traj', 'cloud']}))
+    for (const [k, allowed] of Object.entries({mode: ['raster', 'population'], method: ['pca', 'ica', 'fa', 'tdr'], scaling: ['zscore', 'center'], dims: ['2', '3'], heatNorm: ['z', 'peak'], cloudFit: ['traj', 'cloud']}))
       if (!allowed.includes(String(s[k]))) s[k] = DEFAULTS[k]; else s[k] = String(s[k]);
     s.roster = Array.isArray(s.roster) ? [...new Set(s.roster.filter(Number.isInteger))].sort((a, b) => a - b) : [];
     s.ncomp = Number.isInteger(s.ncomp) ? clamp(s.ncomp, 2, MAX_NCOMP) : DEFAULTS.ncomp;
+    s.tdrFactors = Array.isArray(s.tdrFactors) ? [...new Set(s.tdrFactors.filter(k => typeof k === 'string'))].slice(0, 10) : clone(DEFAULTS.tdrFactors);
+    s.worldCoding = s.worldCoding === 'steps' ? 'steps' : 'linear';
+    s.tdrWin = Array.isArray(s.tdrWin) && s.tdrWin.length === 2 && s.tdrWin.every(Number.isFinite) && s.tdrWin[0] < s.tdrWin[1] ? s.tdrWin : null;
     s.popSplit = Number.isFinite(s.popSplit) ? clamp(s.popSplit, 0.15, 0.85) : DEFAULTS.popSplit;
     s.axes = Array.isArray(s.axes) && s.axes.length === 3 && s.axes.every(Number.isInteger) ? s.axes : clone(DEFAULTS.axes);
     if (typeof s.nsort !== 'string') s.nsort = DEFAULTS.nsort;
@@ -849,7 +852,7 @@
       $('styleBy').innerHTML = fieldOptions(T, {none: 'none', grouping: true});
       $('panelBy').innerHTML = fieldOptions(T, {none: 'none', grouping: true});
       $('sortBy').innerHTML = S.mode === 'population'
-        ? [...Array(S.ncomp).keys()].map(k => `<option value="loading:${k}">loading on ${compName(k)}</option>`).join('') +
+        ? [...Array(nComp()).keys()].map(k => `<option value="loading:${k}">loading on ${compName(k)}</option>`).join('') +
           '<option value="peak">peak time (heatmap group)</option><option value="rate">mean rate</option><option value="channel">peak channel</option><option value="area">area, then channel</option><option value="id">unit ID</option>'
         : fieldOptions(T, {none: '', sortExtras: true});
     }
@@ -866,6 +869,14 @@
     if (S.mode === 'population') { $('sortBy').value = S.nsort; if ($('sortBy').value !== S.nsort) { S.nsort = 'loading:0'; $('sortBy').value = S.nsort; } }
     else { $('sortBy').value = S.sort; if ($('sortBy').value !== S.sort) $('sortBy').value = 'session'; }
     $('sortLabel').textContent = S.mode === 'population' ? 'Sort neurons' : 'Sort rows by';
+    document.querySelectorAll('[data-method]').forEach(el => { el.hidden = el.dataset.method !== S.method; });
+    document.querySelectorAll('[data-not-method]').forEach(el => { el.hidden = el.dataset.notMethod === S.method; });
+    if (S.method === 'tdr') {
+      renderTdrFactors();
+      const w = tdrWindow();
+      if (document.activeElement !== $('tdrLoN')) $('tdrLoN').value = w[0];
+      if (document.activeElement !== $('tdrHiN')) $('tdrHiN').value = w[1];
+    }
     $('ncomp').value = Math.min(S.ncomp, 10); if (document.activeElement !== $('ncompN')) $('ncompN').value = S.ncomp;
     $('cloudOn').checked = S.cloud; $('cloudZero').checked = S.cloudZero;
     $('cloudAlpha').value = Math.round(S.cloudAlpha * 100); $('cloudAlphaOut').textContent = `${Math.round(S.cloudAlpha * 100)}%`;
@@ -889,7 +900,7 @@
     $('ylock').checked = S.ylock !== null; $('ymax').disabled = S.ylock === null;
     if (document.activeElement !== $('ymax')) $('ymax').value = S.ylock !== null ? S.ylock : (D.model ? tidy(D.model.ymax, 1) : '');
     $('showBars').checked = S.bars;
-    document.querySelectorAll('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', S[seg.dataset.key] === b.dataset.v)));
+    document.querySelectorAll('.seg[data-key]').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', S[seg.dataset.key] === b.dataset.v)));
   }
 
   function renderQuickFilters(M) {
@@ -985,8 +996,10 @@
     const pop = $('popover');
     if (pop.hidden || !popAnchor || matchMedia('(max-width: 959px)').matches) { pop.style.left = ''; pop.style.top = ''; return; }
     const r = popAnchor.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    // Below the anchor if it fits, else above; if neither fits, keep the whole popover
+    // (and its footer actions) inside the window rather than hanging off the bottom.
     let left = clamp(r.left, 12, innerWidth - w - 12), top = r.bottom + 6;
-    if (top + h > innerHeight - 12) top = Math.max(12, r.top - h - 6);
+    if (top + h > innerHeight - 12) top = r.top - h - 6 >= 12 ? r.top - h - 6 : Math.max(12, innerHeight - 12 - h);
     pop.style.left = `${left}px`; pop.style.top = `${top}px`;
   }
   function closePop() { $('popover').hidden = true; $('scrim').hidden = true; popAnchor = null; }
@@ -1220,7 +1233,7 @@
   }
   function applyTemplate(t) {
     const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, tick: S.tick, rasterH: S.rasterH, bars: S.bars, err: S.err,
-      mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes, popSplit: S.popSplit};
+      mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, tdrFactors: S.tdrFactors, tdrWin: S.tdrWin, worldCoding: S.worldCoding, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes, popSplit: S.popSplit};
     S = sanitize({...clone(DEFAULTS), ...keep, ...clone(t.state)});
     afterBigChange();
     toast(`Template: ${t.name}`);
@@ -1278,7 +1291,37 @@
   // shows (filters x colour x line style), for an explicit neuron roster.
   const AREA_PALETTE = ['#0c8599', '#e8590c', '#7048e8', '#2b8a3e', '#c2255c', '#5c940d'];
   const popSpansKey = () => `${S.roster.join(',')}|${S.align}|${S.policy}`;
-  const compName = (k, method = S.method) => `${method === 'pca' ? 'PC' : method === 'ica' ? 'IC' : 'F'}${k + 1}`;
+  const compName = (k, method = S.method) => {
+    if (method === 'tdr') { const f = D.popFit; return (f && f.method === 'tdr' && f.axis_names && f.axis_names[k]) || tdrLabel(S.tdrFactors[k]) || `TDR${k + 1}`; }
+    return `${method === 'pca' ? 'PC' : method === 'ica' ? 'IC' : 'F'}${k + 1}`;
+  };
+  const tdrLabel = key => { const T = D.tables.get(S.align), c = T && key && T.byKey.get(key); return c ? c.label : key; };
+  /** Number of axes the fit will have: one per TDR factor, else the component knob. */
+  const nComp = () => (S.method === 'tdr' ? S.tdrFactors.length + (S.worldCoding === 'steps' && S.tdrFactors.includes('world') ? 1 : 0) : S.ncomp);
+  /** The TDR window actually requested: the display window unless the user narrowed it. */
+  const tdrWindow = () => { const w = S.tdrWin || S.win; return [Math.max(w[0], S.win[0]), Math.min(w[1], S.win[1])]; };
+  function renderTdrFactors() {
+    $('tdrLabel').textContent = S.tdrFactors.length ? S.tdrFactors.map(tdrLabel).join(' · ') : 'no factors';
+  }
+  function openTdrPicker() {
+    const T = D.tables.get(S.align);
+    const cols = T ? T.columns.filter(c => c.kind === 'cat' && c.levels.length <= 6 && !S.tdrFactors.includes(c.key)) : [];
+    const chip = (k, on) => `<button type="button" class="chip${on ? ' on' : ''}" data-tdr="${esc(k)}" aria-pressed="${on}">${esc(tdrLabel(k))}</button>`;
+    const hasWorld = S.tdrFactors.includes('world');
+    const wc = (v, main, sub) => `<button type="button" data-wc="${v}" class="${S.worldCoding === v ? 'on' : ''}" aria-pressed="${S.worldCoding === v}"><b>${main}</b><small>${sub}</small></button>`;
+    const html = popHead('TDR factors') + `<div class="pop-body">` +
+      `<div class="pop-group">World coding${hasWorld ? '' : ' · add world below to use it'}</div>` +
+      `<div class="tdr-wc${hasWorld ? '' : ' off'}"><div class="seg" id="worldCoding">${wc('linear', 'Linear · 1 axis', 'PP −1, PM 0, MM +1')}${wc('steps', 'Steps · 2 axes', 'PP→PM and PM→MM')}</div>` +
+      `<p class="pop-note">${S.worldCoding === 'steps' ? 'Two axes whose coefficients are PM − PP and MM − PM, so a PM-specific effect gets its own axis. Needs PP, PM and MM all in the selection.' : 'One axis for the PP→MM trend; it assumes PM sits between PP and MM.'}</p></div>` +
+      `<div class="pop-group">Factors · ${nComp()} axes · tap to add or remove</div>` +
+      `<div class="chips tdr-chips">${S.tdrFactors.map(k => chip(k, true)).join('')}${cols.map(c => chip(c.key, false)).join('')}</div></div>` +
+      `<div class="pop-foot"><button type="button" class="small" data-tdr-reset>Defaults</button><button type="button" class="primary" data-close>Done</button></div>`;
+    const body = $('popover').hidden ? null : $('popover').querySelector('.pop-body');
+    const scroll = body && $('popover').querySelector('#worldCoding') ? body.scrollTop : 0;
+    openPop($('tdrBtn'), html, {wide: true});
+    const fresh = $('popover').querySelector('.pop-body');
+    if (fresh) fresh.scrollTop = scroll;
+  }
   const unitShort = u => (u ? `unit ${u.id}${u.peak_channel !== null && u.peak_channel !== undefined ? ` · ch ${u.peak_channel}` : ''}` : '');
   function areaColor(area) {
     const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))].sort();
@@ -1448,7 +1491,8 @@
   function fitRequest(M) {
     return {session_id: S.session, unit_ids: S.roster.slice(), alignment: S.align, policy: S.policy,
       pre: S.win[0], post: S.win[1], bin: S.bin, sigma: S.sigma, weight: S.weight, method: S.method,
-      scaling: S.scaling, components: S.ncomp,
+      scaling: S.scaling, components: nComp(),
+      ...(S.method === 'tdr' ? {factors: S.tdrFactors.slice(), tdr_window: tdrWindow(), world_coding: S.worldCoding} : {}),
       groups: M.grouping.groups.map(g => ({key: g.key, label: g.label, row_ids: g.rows.map(i => M.T.rowId[i])}))};
   }
   function prepareFit(fit) {
@@ -1924,7 +1968,7 @@
     D.popModel = M;
     const areas = [...new Set(S.roster.map(id => (D.unitMap.get(id) || {}).area).filter(Boolean))];
     $('title').textContent = `Population · ${S.roster.length} neurons${areas.length ? ` · ${areas.join(' + ')}` : ''}`;
-    $('subtitle').textContent = `${eventLabel(S.align)} · ${S.policy === 'verified_stable' ? 'trials stable for every neuron' : 'all complete trials'} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.method.toUpperCase()} (${S.scaling === 'zscore' ? 'z-scored' : 'centred'}) · ${S.ncomp} components · ${S.weight === 'trial' ? 'trial' : 'event'}-weighted means`;
+    $('subtitle').textContent = `${eventLabel(S.align)} · ${S.policy === 'verified_stable' ? 'trials stable for every neuron' : 'all complete trials'} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.method.toUpperCase()} (${S.scaling === 'zscore' ? 'z-scored' : 'centred'}) · ${S.method === 'tdr' ? `axes: ${S.tdrFactors.map(tdrLabel).join(', ')} · window ${tdrWindow().map(v => C.fmtNum(v)).join(' to ')} s` : `${S.ncomp} components`} · ${S.weight === 'trial' ? 'trial' : 'event'}-weighted means`;
     const shown = M.visible.reduce((acc, g) => acc + g.rows.length, 0);
     const trials = new Set(); M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
     const detail = [];
@@ -1944,7 +1988,8 @@
         (S.filters.length ? '<button type="button" class="small" data-act="clear-filters">Clear filters</button>' : ''));
       return;
     }
-    if (S.ncomp > S.roster.length) { popEmpty('Too many components', [`${S.ncomp} components need at least ${S.ncomp} neurons; this roster has ${S.roster.length}.`], ''); return; }
+    if (S.method === 'tdr' && S.tdrFactors.length < 2) { popEmpty('Choose TDR factors', ['Targeted dimensionality reduction needs at least two factors (one axis each); pick them in Model & display.'], ''); return; }
+    if (nComp() > S.roster.length) { popEmpty('Too many components', [`${nComp()} components need at least ${nComp()} neurons; this roster has ${S.roster.length}.`], ''); return; }
     const req = fitRequest(M), key = C.hash(JSON.stringify(req));
     const fit = D.fits.get(key);
     if (!fit) {
@@ -1973,7 +2018,7 @@
     mountPopFigure(fig, svg, layout);
     D.figMeta = {title: $('title').textContent, subtitle: $('subtitle').textContent, width};
     drawCursor();
-    $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · condition means per group, one joint ${S.method.toUpperCase()} basis (sklearn, as the classic workspace) · component signs set so each component's largest loading is positive · electro_gui ${VERSION}`;
+    $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · condition means per group, ${S.method === 'tdr' ? `one axis per factor: regression of single-event rates on the factors (world coded ${S.worldCoding === 'steps' ? 'as PP→PM and PM→MM steps' : 'PP −1, PM 0, MM +1'}; other categories effect-coded), read at each factor's peak time, denoised in the leading PC subspace and orthogonalised by QR` : `one joint ${S.method.toUpperCase()} basis (sklearn, as the classic workspace) · component signs set so each component's largest loading is positive`} · electro_gui ${VERSION}`;
   }
   function rerenderPopFigure() {
     const M = D.popModel, fit = D.popFit;
@@ -2099,7 +2144,7 @@
       components: fit.components, component_r2: fit.component_r2, cumulative_r2: fit.cumulative_r2, explained_variance_ratio: fit.explained_variance_ratio,
       reconstruction_r2: fit.reconstruction_r2, rank: fit.rank, fit_rows: fit.fit_rows, converged: fit.converged, warnings: fit.warnings,
       weighting: fit.weighting, window: fit.window, bin: fit.bin, sigma: fit.sigma, common_trials: fit.common_trials,
-      groups: fit.groups.map(g => ({key: g.key, label: g.label, events: g.events, trials: g.trials})), scope: fit.scope, state: S};
+      groups: fit.groups.map(g => ({key: g.key, label: g.label, events: g.events, trials: g.trials})), scope: fit.scope, tdr: fit.tdr || null, state: S};
   }
   function popExportSVG() {
     const width = Math.max(900, D.figMeta.width);
@@ -2842,6 +2887,8 @@
       if (first) first.click();
     });
     addEventListener('resize', () => { placePop(); schedule(); });
+    // Pickers fill their lists after opening; re-place whenever the popover changes size.
+    if (window.ResizeObserver) new ResizeObserver(() => placePop()).observe(pop);
 
     // filters
     $('quickFilters').addEventListener('click', e => {
@@ -2890,6 +2937,21 @@
       }
       if (e.target.closest('[data-rmzero]') && D.stab) { S.roster = S.roster.filter(id => D.stab.masks.has(id) && C.popcount(D.stab.masks.get(id), D.stab.n) > 0); rosterChanged(); }
     });
+    $('tdrBtn').addEventListener('click', openTdrPicker);
+    $('popover').addEventListener('click', e => {
+      const t = e.target.closest('[data-tdr],[data-wc],[data-tdr-reset]'); if (!t) return;
+      if (t.dataset.tdr) S.tdrFactors = S.tdrFactors.includes(t.dataset.tdr) ? S.tdrFactors.filter(x => x !== t.dataset.tdr) : [...S.tdrFactors, t.dataset.tdr].slice(0, 10);
+      else if (t.dataset.wc) S.worldCoding = t.dataset.wc;
+      else { S.tdrFactors = clone(DEFAULTS.tdrFactors); S.worldCoding = 'linear'; }
+      openTdrPicker(); renderStructure(); changed();
+    });
+    const tdrWinChange = () => {
+      const lo = Number($('tdrLoN').value), hi = Number($('tdrHiN').value);
+      const full = lo <= S.win[0] && hi >= S.win[1];
+      S.tdrWin = $('tdrLoN').value !== '' && $('tdrHiN').value !== '' && lo < hi && !full ? [lo, hi] : null;
+      changed();
+    };
+    $('tdrLoN').addEventListener('change', tdrWinChange); $('tdrHiN').addEventListener('change', tdrWinChange);
     $('ncomp').addEventListener('input', e => { S.ncomp = Number(e.target.value); $('ncompN').value = S.ncomp; renderStructure(); changed(); });
     $('ncompN').addEventListener('change', e => {
       const v = Number(e.target.value);
@@ -2967,7 +3029,7 @@
       const b = e.target.closest('button'); if (!b) return;
       const key = seg.dataset.key;
       S[key] = b.dataset.v;
-      changed({data: key === 'policy'});
+      changed({data: key === 'policy', structure: key === 'method'});
     }));
     $('resetDisplay').addEventListener('click', () => { Object.assign(S, clone(DISPLAY_DEFAULTS)); changed({data: true}); });
     $('empty').addEventListener('click', e => {

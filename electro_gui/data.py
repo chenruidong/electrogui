@@ -21,7 +21,7 @@ _OUTCOMES = {"prey_capture", "prey_miss", "predator_contact", "predator_avoid"}
 # Their value (info.tokens_at_contact) is the token count the trial pays out.
 _GOAL_CONTACTS = {"goal_contact_rewarded", "goal_contact_empty"}
 _UNAVAILABLE = {
-    "joystick_direction": "continuous joystick features are not part of GUI v0.1",
+    "joystick_direction": "the assembled session has no joystick_x series",
     "gaze_direction": "continuous gaze features are not part of GUI v0.1",
     "color_label": "color labels are not embedded in the assembled NWB",
     "color_epoch_experience": "derivation is not implemented in GUI v0.1",
@@ -36,6 +36,7 @@ _CANONICAL_VALUES = {
     "intention": ("PP", "PM", "MM", "NA"),
     "role": ("prey", "predator"),
     "action": ("touch", "avoid"),
+    "joystick_direction": ("left", "right"),
     "outcome": tuple(sorted(_OUTCOMES)),
 }
 _FIELD_INFO = {
@@ -44,6 +45,7 @@ _FIELD_INFO = {
     "intention": ("task", "Observed trial strategy.", "Classified from the completed trial after its object outcomes are known; NA is a literal incompatible/undecided value.", None),
     "role": ("object", "Object role.", "Recorded or resolved for the object; available at object timing.", None),
     "action": ("object", "Observed object action.", "Resolved from the object's outcome after the object response; post hoc timing.", None),
+    "joystick_direction": ("object", "Dominant joystick direction before the object's outcome.", "Sign of the largest |joystick_x| excursion in the 1 s before the outcome (deadzone MOVE_THRESHOLD); post hoc timing, missing when the joystick never leaves the deadzone.", None),
     "outcome": ("object", "Object outcome.", "Resolved from the object's completed response; post hoc timing.", None),
     "order": ("object", "Object ordinal within trial.", "Known from the object's trial sequence.", None),
     "image_id": ("object", "Image identity.", "Identity of the displayed object at object timing.", None),
@@ -176,7 +178,14 @@ def _info(value):
     return {}
 
 
-def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None):
+def _joystick_directions(events: pd.DataFrame, joystick) -> dict:
+    """(trial, object_uid) -> 'left'/'right' from the pre-outcome joystick window."""
+    from imitation_phys.object_outcome_psth import pre_outcome_direction_epochs
+    epochs, _ = pre_outcome_direction_epochs(events, joystick)
+    return {(int(r.trial_index), str(r.object_uid)): r.direction for r in epochs.itertuples(index=False)}
+
+
+def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None, joystick=None):
     """Join the full chronology before selection; never fill missing worlds."""
     from imitation_phys.decoding import object_outcomes
     canonical = object_outcomes(events)  # Validates bar flags against recorded assets.
@@ -259,6 +268,9 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None):
                    outcome_t=float(item["t_outcome_s"]))
         if obj["order"] is None:
             obj["order"] = int(item["order"]) + 1
+    directions = _joystick_directions(events, joystick) if joystick is not None else {}
+    for key, obj in objects.items():
+        obj["direction"] = directions.get(key)
     by_trial = {}
     for obj in objects.values():
         by_trial.setdefault(obj["trial"], []).append(obj)
@@ -335,6 +347,7 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None):
             r[k] = trial.get(k)
         for k in ("role", "action", "outcome", "image_id", "bar", "order"):
             r[k] = obj.get(k) if obj else None
+        r["joystick_direction"] = obj.get("direction") if obj else None
         for prefix, other in (("previous", prior), ("next", next_obj)):
             for k in ("role", "action", "outcome"):
                 r[f"{prefix}_{k}"] = other[k] if other else None
@@ -345,7 +358,7 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None):
 
 def _registry(trials: pd.DataFrame, rows: list[dict]) -> list[dict]:
     fields: dict[str, dict] = {}
-    for key, label, typ, timing in [("event", "Alignment event", "category", "anchor"), ("world", "Task world", "category", "trial"), ("intention", "Observed trial strategy", "category", "full_trial_posthoc"), ("role", "Object role", "category", "object"), ("action", "Object action", "category", "object_outcome_posthoc"), ("outcome", "Object outcome", "category", "object_outcome_posthoc"), ("order", "Object ordinal", "number", "object"), ("image_id", "Image identity", "category", "object"), ("bar", "Bar object", "boolean", "object"), ("success", "Trial success", "boolean", "full_trial_posthoc"), ("reward_tokens", "Trial reward tokens", "number", "full_trial_posthoc"), ("block_id", "Block ID", "number", "trial"), ("trial", "Trial index", "number", "trial"), ("t", "Session time (seconds)", "number", "anchor")]:
+    for key, label, typ, timing in [("event", "Alignment event", "category", "anchor"), ("world", "Task world", "category", "trial"), ("intention", "Observed trial strategy", "category", "full_trial_posthoc"), ("role", "Object role", "category", "object"), ("action", "Object action", "category", "object_outcome_posthoc"), ("joystick_direction", "Joystick direction", "category", "object_outcome_posthoc"), ("outcome", "Object outcome", "category", "object_outcome_posthoc"), ("order", "Object ordinal", "number", "object"), ("image_id", "Image identity", "category", "object"), ("bar", "Bar object", "boolean", "object"), ("success", "Trial success", "boolean", "full_trial_posthoc"), ("reward_tokens", "Trial reward tokens", "number", "full_trial_posthoc"), ("block_id", "Block ID", "number", "trial"), ("trial", "Trial index", "number", "trial"), ("t", "Session time (seconds)", "number", "anchor")]:
         vals = [r.get(key) for r in rows if not _missing(r.get(key))]
         available = bool(vals) or key in {"event", "trial", "t"}
         info = _FIELD_INFO.get(key, ("advanced", label, "Recorded field.", None))
@@ -379,7 +392,9 @@ def _registry(trials: pd.DataFrame, rows: list[dict]) -> list[dict]:
         if typ == "number" and vals: fields[key]["range"] = [min(vals), max(vals)]
     for key, alias in (("trial_index", "trial"), ("session_time", "t")):
         fields[key] = {"key": key, "label": key.replace("_", " ").title(), "type": "number", "timing": "trial" if key == "trial_index" else "anchor", "timing_description": "Recorded trial or aligned session time.", "description": "Imported alias retained for recipe compatibility.", "category": "advanced", "availability": "available", "alias_of": alias, "value_counts": {}, "missing_count": sum(_missing(r.get(key)) for r in rows), "cardinality": 0, "units": "s" if key == "session_time" else None, "grouping_eligible": False, "grouping_requires_bins": True, "grouping_reason": "numeric fields require explicit bins"}
-    for key, reason in _UNAVAILABLE.items(): fields[key] = {"key": key, "label": key.replace("_", " ").title(), "type": "category", "timing": "unavailable", "timing_description": "No producer is available in this assembled session.", "description": reason, "category": "advanced", "availability": "unavailable", "reason": reason, "values": [], "value_counts": {}, "missing_count": len(rows), "cardinality": 0, "units": None, "grouping_eligible": False, "grouping_requires_bins": False, "grouping_reason": reason}
+    for key, reason in _UNAVAILABLE.items():
+        if fields.get(key, {}).get("availability") == "available": continue
+        fields[key] = {"key": key, "label": key.replace("_", " ").title(), "type": "category", "timing": "unavailable", "timing_description": "No producer is available in this assembled session.", "description": reason, "category": "advanced", "availability": "unavailable", "reason": reason, "values": [], "value_counts": {}, "missing_count": len(rows), "cardinality": 0, "units": None, "grouping_eligible": False, "grouping_requires_bins": False, "grouping_reason": reason}
     return [fields[key] for key in sorted(fields)]
 
 
@@ -397,7 +412,8 @@ class LoadedSession:
             classify = None
             self.notices.append(f"Observed trial strategy unavailable: {exc}")
         self._code_stats = {p: (p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ctime_ns) for p in self.code_paths}
-        self.trials, self.rows = _enrich(session.trials().table, session.events(), classify)
+        joystick = session.behavioral_series("joystick_x") if session.has_behavioral_series("joystick_x") else None
+        self.trials, self.rows = _enrich(session.trials().table, session.events(), classify, joystick)
         self.fields = _registry(session.trials().table, self.rows)
         units = session.units(); peaks = units.metadata.get("peak_channel")
         # Peak channel survives a re-sort; unit IDs do not, so every label carries both.

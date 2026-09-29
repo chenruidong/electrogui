@@ -43,7 +43,8 @@ class ElectroGuiDataTests(unittest.TestCase):
             self.assertTrue(all("row_id" in row for row in loaded.rows))
             field_map = {field["key"]: field for field in loaded.fields}
             self.assertIn("joystick_direction", field_map)
-            self.assertEqual(field_map["joystick_direction"]["availability"], "unavailable")
+            self.assertEqual(field_map["joystick_direction"]["availability"], "available")  # the fixture carries joystick_x
+            self.assertEqual(field_map["gaze_direction"]["availability"], "unavailable")
             self.assertGreater(len(loaded.spikes(1)), 0)
             self.assertEqual(loaded.eligibility([1], "all_complete")[0], {0, 1, 2, 3, 4, 5, 6})
             self.assertEqual(loaded.metadata()["source"]["sha256"], loaded.session.source_identity()["sha256"])

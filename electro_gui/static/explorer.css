@@ -513,3 +513,12 @@ a.item { text-decoration: none; }
   .body { display: block; padding: 0; }
   .fig-card { border: 0; box-shadow: none; }
 }
+
+/* TDR factor picker */
+.tdr-wc { padding: 0 14px 10px; }
+.tdr-wc.off { opacity: .45; pointer-events: none; }
+.tdr-wc .seg button { display: flex; flex-direction: column; align-items: center; gap: 1px; white-space: normal; padding: 5px 6px; line-height: 1.2; }
+.tdr-wc .seg button small { font-size: 11px; font-weight: 450; color: var(--muted); }
+.tdr-wc .seg button.on small { color: inherit; opacity: .8; }
+.tdr-wc .pop-note { padding: 6px 0 0; }
+.tdr-chips { padding: 0 14px 10px; }

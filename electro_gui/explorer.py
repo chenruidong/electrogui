@@ -351,7 +351,8 @@ def stability_masks(loaded: Any) -> dict:
             "bit_order": "trial i (index into trials) is bit (i & 7) of byte (i >> 3)"}
 
 
-_FIT_FIELDS = ("unit_ids", "alignment", "policy", "method", "scaling", "weight", "components", "pre", "post", "bin", "sigma", "groups")
+_FIT_FIELDS = ("unit_ids", "alignment", "policy", "method", "scaling", "weight", "components", "pre", "post", "bin", "sigma", "groups", "factors", "tdr_window", "world_coding")
+TDR_DEFAULT_FACTORS = ("world", "action", "joystick_direction")
 
 
 def _fit_inputs(loaded: Any, request: Mapping[str, Any]) -> dict:
@@ -363,19 +364,40 @@ def _fit_inputs(loaded: Any, request: Mapping[str, Any]) -> dict:
     if policy not in ("verified_stable", "all_complete"):
         raise ValueError("policy must be verified_stable or all_complete")
     method, scaling, weight = request.get("method", "pca"), request.get("scaling", "zscore"), request.get("weight", "trial")
-    if method not in ("pca", "ica", "fa"):
-        raise ValueError("method must be pca, ica or fa")
+    if method not in ("pca", "ica", "fa", "tdr"):
+        raise ValueError("method must be pca, ica, fa or tdr")
     if scaling not in ("center", "zscore"):
         raise ValueError("scaling must be center or zscore")
     if weight not in ("trial", "event"):
         raise ValueError("weight must be trial or event")
     components = request.get("components", 3)
-    if isinstance(components, bool) or not isinstance(components, int) or not 2 <= components <= MAX_COMPONENTS:
+    factors, world_coding = request.get("factors"), "linear"
+    if method == "tdr":
+        factors = list(TDR_DEFAULT_FACTORS) if factors is None else factors
+        registry = {f["key"]: f for f in getattr(loaded, "fields", [])}
+        if (not isinstance(factors, list) or not 2 <= len(factors) <= 10 or len(set(factors)) != len(factors)
+                or any(not isinstance(f, str) for f in factors)):
+            raise ValueError("Choose 2-10 distinct TDR factors.")
+        for f in factors:
+            if registry.get(f, {}).get("availability") != "available":
+                raise ValueError(f"TDR factor {f!r} is not available in this session.")
+        world_coding = request.get("world_coding", "linear")
+        if world_coding not in ("linear", "steps"):
+            raise ValueError("world_coding must be linear or steps")
+        components = len(factors) + (1 if world_coding == "steps" and "world" in factors else 0)
+    elif isinstance(components, bool) or not isinstance(components, int) or not 2 <= components <= MAX_COMPONENTS:
         raise ValueError(f"Choose 2-{MAX_COMPONENTS} components.")
     pre, post = _window(request.get("pre"), "pre"), _window(request.get("post"), "post")
     bin_s, sigma = _window(request.get("bin"), "bin"), _window(request.get("sigma", 0), "sigma")
     if not (-MAX_WINDOW_S <= pre < post <= MAX_WINDOW_S) or not 0.005 <= bin_s <= 0.2 or not 0 <= sigma <= 0.1:
         raise ValueError("Window must lie in [-10, 10] s, bin in [5, 200] ms and sigma in [0, 100] ms.")
+    tdr_window = None
+    if method == "tdr":
+        win = request.get("tdr_window")
+        lo, hi = (pre, post) if win is None else (_window(win[0], "tdr_window"), _window(win[1], "tdr_window")) if isinstance(win, list) and len(win) == 2 else (None, None)
+        if lo is None or not pre - 1e-9 <= lo < hi <= post + 1e-9:
+            raise ValueError("The TDR window must lie inside the display window.")
+        tdr_window = [lo, hi]
     groups = request.get("groups")
     if not isinstance(groups, list) or not 1 <= len(groups) <= 24:
         raise ValueError("Send 1-24 groups.")
@@ -407,7 +429,7 @@ def _fit_inputs(loaded: Any, request: Mapping[str, Any]) -> dict:
         raise ValueError("Event x time matrix is too large; narrow the selection or widen the bins.")
     key = json.dumps({k: request.get(k) for k in _FIT_FIELDS}, sort_keys=True, default=str)
     return {"ids": ids, "alignment": alignment, "policy": policy, "method": method, "scaling": scaling, "weight": weight,
-            "components": components, "pre": pre, "post": post, "bin": bin_s, "sigma": sigma, "groups": groups,
+            "components": components, "factors": factors, "world_coding": world_coding, "tdr_window": tdr_window, "pre": pre, "post": post, "bin": bin_s, "sigma": sigma, "groups": groups,
             "members": members, "flat": flat, "eligible": eligible, "provenance": provenance,
             "n": n, "radius": radius, "kernel": kernel, "times": times, "key": key}
 
@@ -421,7 +443,7 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
     The fitted transform is linear; its operator is cached so single-trial
     projections (:func:`population_probe`) never need a refit.
     """
-    from .population import fit_basis, group_means
+    from .population import fit_basis, group_means, row_rates
     inp = _fit_inputs(loaded, request)
     ids, members, flat, weight = inp["ids"], inp["members"], inp["flat"], inp["weight"]
     method, scaling, components = inp["method"], inp["scaling"], inp["components"]
@@ -442,39 +464,64 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
     means = np.empty((len(members), n, len(ids)))
     for u, uid in enumerate(ids):
         means[:, :, u] = group_means(np.sort(np.asarray(loaded.spikes(uid), dtype=float)), anchors, weights, pre, bin_s, n, radius, kernel)
-    fit = fit_basis(means, ids, method, scaling, components)
-    coords, loadings = np.array(fit["coordinates"], dtype=float), np.array(fit["loadings"], dtype=float)
-    # The transform is linear: coords = x @ P + b, with x the centred/scaled rates.
-    estimator, n_active = fit["estimator"], len(fit["active_ids"])
-    offset_b = estimator.transform(np.zeros((1, n_active)))[0]
-    operator = estimator.transform(np.eye(n_active)) - offset_b
-    # Component signs are arbitrary; make each component's largest loading positive so
-    # small knob changes do not flip trajectories.
-    for k in range(components):
-        j = int(np.argmax(np.abs(loadings[:, k])))
-        if loadings[j, k] < 0:
-            loadings[:, k] *= -1
-            coords[:, k] *= -1
-            operator[:, k] *= -1
-            offset_b[k] *= -1
-    x = fit["x"]
-    xc = x - x.mean(axis=0)
-    total = float(np.sum(xc ** 2)) or 1.0
-    single = [1 - float(np.sum((xc - np.outer(coords[:, k] - coords[:, k].mean(), loadings[:, k])) ** 2)) / total
-              for k in range(components)]
-    if method != "pca":
-        # ICA/FA components have no natural order; list them by variance explained.
-        order = sorted(range(components), key=lambda k: -single[k])
-        coords, loadings, single = coords[:, order], loadings[:, order], [single[k] for k in order]
-        operator, offset_b = operator[:, order], offset_b[order]
-    # Components 1..k together, in the order shown, from the partial reconstruction
-    # rather than summed: it equals the running sum of the single-component R^2 only
-    # while the scores are uncorrelated (PCA, ICA; FA once converged), and it ends
-    # at reconstruction_r2.
-    resid, cumulative = xc.copy(), []
-    for k in range(components):
-        resid -= np.outer(coords[:, k] - coords[:, k].mean(), loadings[:, k])
-        cumulative.append(1 - float(np.sum(resid ** 2)) / total)
+    tdr = None
+    if method == "tdr":
+        from .tdr import design, fit_axes
+        registry = {f["key"]: f for f in getattr(loaded, "fields", [])}
+        X, used, described = design(flat, inp["factors"], registry, inp["world_coding"])
+        if used.sum() * n * len(ids) > 60_000_000:
+            raise ValueError("TDR event x time x neuron array is too large; narrow the selection, the TDR window or the roster.")
+        lo, hi = inp["tdr_window"]
+        bins = np.flatnonzero((times >= lo - 1e-9) & (times <= hi + 1e-9))
+        if not len(bins):
+            raise ValueError("The TDR window contains no time bin.")
+        used_anchors = anchors[used]
+        rates = np.stack([row_rates(np.sort(np.asarray(loaded.spikes(uid), dtype=float)), used_anchors, pre, bin_s, n, radius, kernel)[:, bins]
+                          for uid in ids], axis=2)
+        fit = fit_axes(means, ids, rates, X, described, bins, scaling, world_coding=inp["world_coding"])
+        tdr = fit["tdr"]
+        tdr.update(window=[lo, hi], bins=[int(bins[0]), int(bins[-1])], events_without_factor=int((~used).sum()),
+                   factor_keys=list(inp["factors"]), world_coding=inp["world_coding"])
+        for f in tdr["factors"]:
+            f["peak_time"] = float(times[f["peak_bin"]])
+        coords, loadings = np.array(fit["coordinates"], dtype=float), np.array(fit["loadings"], dtype=float)
+        operator, offset_b = fit["operator"], fit["offset"]
+        single, cumulative = fit["component_r2"], fit["cumulative_r2"]
+        x = fit["x"]
+    else:
+        fit = fit_basis(means, ids, method, scaling, components)
+        coords, loadings = np.array(fit["coordinates"], dtype=float), np.array(fit["loadings"], dtype=float)
+        # The transform is linear: coords = x @ P + b, with x the centred/scaled rates.
+        estimator, n_active = fit["estimator"], len(fit["active_ids"])
+        offset_b = estimator.transform(np.zeros((1, n_active)))[0]
+        operator = estimator.transform(np.eye(n_active)) - offset_b
+        # Component signs are arbitrary; make each component's largest loading positive so
+        # small knob changes do not flip trajectories.
+        for k in range(components):
+            j = int(np.argmax(np.abs(loadings[:, k])))
+            if loadings[j, k] < 0:
+                loadings[:, k] *= -1
+                coords[:, k] *= -1
+                operator[:, k] *= -1
+                offset_b[k] *= -1
+        x = fit["x"]
+        xc = x - x.mean(axis=0)
+        total = float(np.sum(xc ** 2)) or 1.0
+        single = [1 - float(np.sum((xc - np.outer(coords[:, k] - coords[:, k].mean(), loadings[:, k])) ** 2)) / total
+                  for k in range(components)]
+        if method != "pca":
+            # ICA/FA components have no natural order; list them by variance explained.
+            order = sorted(range(components), key=lambda k: -single[k])
+            coords, loadings, single = coords[:, order], loadings[:, order], [single[k] for k in order]
+            operator, offset_b = operator[:, order], offset_b[order]
+        # Components 1..k together, in the order shown, from the partial reconstruction
+        # rather than summed: it equals the running sum of the single-component R^2 only
+        # while the scores are uncorrelated (PCA, ICA; FA once converged), and it ends
+        # at reconstruction_r2.
+        resid, cumulative = xc.copy(), []
+        for k in range(components):
+            resid -= np.outer(coords[:, k] - coords[:, k].mean(), loadings[:, k])
+            cumulative.append(1 - float(np.sum(resid ** 2)) / total)
     fits = _cache(loaded).setdefault("fits", OrderedDict())
     fits[inp["key"]] = {"active_ids": list(fit["active_ids"]), "center": fit["center"][fit["varying"]], "scale": fit["scale"],
                         "operator": operator, "offset": offset_b}
@@ -490,7 +537,7 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
                            "trials": len({r["trial"] for r in picked}),
                            "coords": np.round(traj[g], 6).tolist(),
                            "means": np.round(means[g][:, keep], 4).tolist()})
-    evr = fit["operators"].get("explained_variance_ratio")
+    evr = None if tdr else fit["operators"].get("explained_variance_ratio")
     return {"kind": "population_fit", "session_id": loaded.session_id, "alignment": alignment, "policy": policy,
             "unit_ids": ids, "active_unit_ids": active, "dropped_constant_units": fit["dropped_ids"],
             "times": np.round(times, 6).tolist(), "groups": out_groups, "components": components,
@@ -498,7 +545,8 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
             "cumulative_r2": [round(v, 6) for v in cumulative],
             "explained_variance_ratio": evr, "reconstruction_r2": fit["reconstruction_r2"], "rank": fit["rank"],
             "fit_rows": int(x.shape[0]), "converged": fit["converged"], "warnings": fit["warnings"],
-            "method": method, "scaling": scaling, "weight": weight, "window": [pre, post], "bin": bin_s, "sigma": sigma,
+            "method": method, "scaling": scaling, "weight": weight, "window": [pre, post],
+            **({"tdr": tdr, "axis_names": [f["label"] for f in tdr["factors"]]} if tdr else {}), "bin": bin_s, "sigma": sigma,
             "common_trials": len(eligible), "guard_s": GUARD_S,
             "scope": "Descriptive in-sample fit to all groups' condition means jointly; no held-out prediction or significance test.",
             "weighting": ("equal trials within group, events averaged within trial" if weight == "trial" else "equal events within group")

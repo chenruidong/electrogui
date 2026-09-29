@@ -100,6 +100,18 @@ def group_means(spikes, anchors, weights, pre, bin_s, n, radius, kernel):
     return out
 
 
+def row_rates(spikes, anchors, pre, bin_s, n, radius, kernel):
+    """Smoothed rate of every event, shaped (events, n); the per-row twin of :func:`group_means`."""
+    edges = pre + np.arange(-radius, n + radius + 1) * bin_s
+    counts = np.diff(np.searchsorted(spikes, anchors[:, None] + edges[None, :], side="left"), axis=1) / bin_s
+    if not radius:
+        return counts
+    out = np.zeros((len(anchors), n))
+    for k, w in enumerate(kernel):
+        out += w * counts[:, k:k + n]
+    return out
+
+
 def compute_population(loaded, request):
     """Fit a single within-session basis to the exact selected membership.
 
