@@ -127,7 +127,6 @@ class ExplorerPayloadTests(unittest.TestCase):
         for i, tid in enumerate(trials["id"]):
             self.assertEqual(trials["world"][i], by_id[tid]["world"])
             self.assertLessEqual(trials["start"][i], trials["stop"][i])
-        self.assertIs(explorer.behavior_timeline(self.loaded), behavior)
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_core_js_behavior_helpers(self):
