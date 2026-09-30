@@ -1387,11 +1387,52 @@
       `</div><div class="pop-note">Formal block-permutation tests and population PCA/ICA/FA are in the <a href="/classic/">classic workspace</a>.</div>`;
     openPop($('exportBtn').offsetParent ? $('exportBtn') : $('menuBtn'), html);
   }
+  /** GET /api/health, or null from a server that predates it. */
+  async function serverHealth() {
+    try {
+      const r = await fetch('/api/health', {cache: 'no-store'});
+      return r.ok ? await r.json() : null;
+    } catch (e) { return null; }
+  }
+  /**
+   * Restart the server (it re-execs itself with the code now on disk, on the same
+   * port and token), wait for a process with a new boot id, then reload the page.
+   */
+  async function restartServer() {
+    if (!confirm('Restart the electro_gui server?\n\nIt loads the code now on disk and then reloads this page. A computation already running finishes first; queued ones are dropped.')) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'restart-overlay';
+    const say = (title, text) => { overlay.innerHTML = `<div class="loading-card"><div class="spinner"></div><div><b>${esc(title)}</b><p>${esc(text)}</p></div></div>`; };
+    say('Restarting the server', 'Asking electro_gui to restart…');
+    document.body.appendChild(overlay);
+    let before;
+    try {
+      before = (await getJSON('/api/restart', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})).boot;
+    } catch (e) {
+      overlay.remove();
+      toast(/HTTP 404|Unknown endpoint/.test(e.message) ? 'This server predates the restart button: restart it once on the Mac.' : `Restart failed: ${e.message}`, true);
+      return;
+    }
+    const t0 = Date.now();
+    for (;;) {
+      await sleep(1000);
+      const h = await serverHealth();
+      if (h && h.boot !== before) { location.reload(); return; }
+      const s = Math.round((Date.now() - t0) / 1000);
+      if (s > 180) {
+        overlay.innerHTML = `<div class="loading-card"><div><b>The server has not come back</b><p>Nothing answered for 3 minutes. Reload this page to try again, or restart electro_gui on the Mac.</p><p><button class="primary" type="button">Reload</button></p></div></div>`;
+        overlay.querySelector('button').addEventListener('click', () => location.reload());
+        return;
+      }
+      say('Restarting the server', `Waiting for electro_gui to come back with the code on disk (${s} s)…`);
+    }
+  }
   function openMenu() {
     const theme = localStorage.getItem('eg-theme') || 'auto';
     const other = S.mode === 'population' ? ['raster', 'Rasters', 'one unit: raster over PSTH'] : ['population', 'Population', 'many neurons: heatmap, components, trajectories'];
     const html = popHead('electro_gui') + `<div class="pop-body"><button type="button" class="item" data-menu="mode:${other[0]}"><span class="main"><b>Switch to ${other[1]}</b><small>${other[2]}</small></span></button><button type="button" class="item" data-menu="views"><span class="main"><b>Views & templates</b><small>apply a template or config file, save or restore a view, copy a link</small></span></button>` +
-      `<button type="button" class="item" data-menu="export"><span class="main"><b>Export</b><small>SVG, PNG, CSV, settings</small></span></button><div class="editor">` +
+      `<button type="button" class="item" data-menu="export"><span class="main"><b>Export</b><small>SVG, PNG, CSV, settings</small></span></button>` +
+      `<button type="button" class="item" data-menu="restart"><span class="main"><b>Restart server</b><small id="restartInfo">load the code now on disk, then reload this page</small></span></button><div class="editor">` +
       `<label class="row"><span>Session</span><select id="menuSession">${D.catalog.map(s => `<option value="${esc(s.id)}"${s.id === S.session ? ' selected' : ''}>${esc(shortSession(s.id))}</option>`).join('')}</select></label>` +
       `<div class="row"><span>Theme</span><div class="seg" id="themeSeg">${['auto', 'light', 'dark'].map(t => `<button type="button" data-theme="${t}" class="${theme === t ? 'on' : ''}">${t}</button>`).join('')}</div></div>` +
       `<p class="pop-note" style="padding:0"><b>Shortcuts</b> — ← / → previous / next unit · drag across the PSTH to set the count window · click a legend entry to hide a group, double-click to show only it.</p>` +
@@ -1400,6 +1441,15 @@
       `</div></div>`;
     openPop($('menuBtn'), html);
     $('menuSession').addEventListener('change', e => { closePop(); selectSession(e.target.value).then(renderStructure); });
+    serverHealth().then(h => {
+      const el = document.getElementById('restartInfo');
+      if (!el || !h) return;
+      const since = new Date(h.started * 1000), n = h.code_changed.length;
+      const when = since.toDateString() === new Date().toDateString() ? since.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : since.toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+      el.textContent = `running since ${when} · ${n ? `${n} file${n > 1 ? 's' : ''} changed` : 'code up to date'}`;
+      el.title = n ? `Changed since the server started: ${h.code_changed.join(', ')}` : '';
+      if (n) el.style.color = 'var(--accent)';
+    });
     $('themeSeg').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { localStorage.setItem('eg-theme', b.dataset.theme); applyTheme(); openMenu(); }));
   }
 
@@ -3038,7 +3088,7 @@
       const t = e.target.closest('button, [data-close]');
       if (!t) return;
       if (t.hasAttribute('data-close')) { closePop(); return; }
-      if (t.dataset.menu) { closePop(); if (t.dataset.menu.startsWith('mode:')) setMode(t.dataset.menu.slice(5)); else (t.dataset.menu === 'views' ? openViews : openExport)(); return; }
+      if (t.dataset.menu) { closePop(); if (t.dataset.menu.startsWith('mode:')) setMode(t.dataset.menu.slice(5)); else if (t.dataset.menu === 'restart') restartServer(); else (t.dataset.menu === 'views' ? openViews : openExport)(); return; }
       if (t.dataset.ru) {
         const id = Number(t.dataset.ru), set = new Set(S.roster);
         set.has(id) ? set.delete(id) : set.add(id);

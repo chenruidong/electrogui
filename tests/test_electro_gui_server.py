@@ -1,13 +1,20 @@
+import argparse
+import contextlib
 import http.client
+import io
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
+from electro_gui import cli, server as server_module
 from electro_gui.data import SessionStore
-from electro_gui.server import Application, make_server
+from electro_gui.server import Application, code_changed_since, make_server
 from tests.synthetic_session import write_synthetic_session_file
 
 
@@ -94,6 +101,89 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.get("/../../pyproject.toml")[0], 404)
         self.assertEqual(self.get("/api/jobs/missing")[0], 404)
         self.assertEqual(self.get("/api/jobs", "POST", {"action": "unknown"})[0], 400)
+
+
+    def test_health_names_this_process_and_restart_stops_serving(self):
+        status, data = self.get("/api/health")
+        self.assertEqual(status, 200)
+        health = json.loads(data)
+        self.assertEqual((health["boot"], health["pid"]), (server_module.BOOT_ID, os.getpid()))
+        self.assertIsInstance(health["code_changed"], list)
+        self.assertEqual(self.get("/api/restart", "POST")[0], 400)  # a JSON body is required, as for every POST
+        self.assertTrue(self.thread.is_alive())
+        status, data = self.get("/api/restart", "POST", {})
+        self.assertEqual(status, 202, data)
+        self.assertEqual(json.loads(data), {"restarting": True, "boot": server_module.BOOT_ID})
+        self.thread.join(5)
+        self.assertFalse(self.thread.is_alive())  # stopped serving; cli.run does the re-exec
+        self.assertTrue(self.server.restart_requested)
+
+    def test_code_changed_since_lists_python_files_newer_than_the_start(self):
+        self.assertIn("electro_gui/server.py", code_changed_since(0))
+        self.assertEqual(code_changed_since(time.time() + 3600), [])
+
+
+class _StoppedServer:
+    """make_server stand-in: serve_forever returns at once, as after POST /api/restart."""
+
+    def __init__(self, restart):
+        self.server_address, self.restart_requested = ("127.0.0.1", 43210), restart
+
+    def serve_forever(self, poll_interval):
+        pass
+
+    def server_close(self):
+        pass
+
+
+class RestartHandoverTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        os.environ.pop(cli.RESTART_ENV, None)
+        self.addCleanup(os.environ.pop, cli.RESTART_ENV, None)
+
+    def run_cli(self, args):
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(cli, "_lan_addresses", return_value=[]):
+            cli.run(args)
+
+    def args(self, *extra):
+        return cli.add_arguments(argparse.ArgumentParser()).parse_args(
+            ["--data-root", self.temp.name, "--cache-dir", self.temp.name,
+             "--views-file", str(Path(self.temp.name) / "v.json"), "--port", "0", *extra])
+
+    def test_a_requested_restart_reexecs_the_same_command_on_the_same_port_and_token(self):
+        # A random LAN token must survive the restart, or every phone would be locked out.
+        with mock.patch("electro_gui.server.make_server", return_value=_StoppedServer(True)) as make, \
+                mock.patch("webbrowser.open"), mock.patch("os.closerange"), mock.patch("os.execve") as execve:
+            self.run_cli(self.args("--host", "0.0.0.0", "--no-browser"))
+        token = make.call_args.kwargs["token"]
+        self.assertTrue(token)
+        exe, argv, env = execve.call_args.args
+        self.assertEqual(exe, sys.executable)
+        self.assertEqual(argv, [sys.executable, *sys.orig_argv[1:]])
+        self.assertEqual(json.loads(env[cli.RESTART_ENV]), {"port": 43210, "token": token})
+
+    def test_no_restart_means_no_reexec(self):
+        with mock.patch("electro_gui.server.make_server", return_value=_StoppedServer(False)), \
+                mock.patch("os.execve") as execve:
+            self.run_cli(self.args("--no-browser"))
+        execve.assert_not_called()
+
+    def test_the_restarted_process_takes_over_port_and_token_and_opens_no_browser(self):
+        os.environ[cli.RESTART_ENV] = json.dumps({"port": 4321, "token": "tok"})
+        with mock.patch("electro_gui.server.make_server", return_value=_StoppedServer(False)) as make, \
+                mock.patch("webbrowser.open") as browser, mock.patch("os.execve"):
+            self.run_cli(self.args())
+        self.assertEqual((make.call_args.kwargs["port"], make.call_args.kwargs["token"]), (4321, "tok"))
+        browser.assert_not_called()
+        self.assertNotIn(cli.RESTART_ENV, os.environ)  # not inherited by anything it starts
+
+    def test_an_explicit_token_wins_over_the_handed_over_one(self):
+        os.environ[cli.RESTART_ENV] = json.dumps({"port": 4321, "token": "old"})
+        with mock.patch("electro_gui.server.make_server", return_value=_StoppedServer(False)) as make:
+            self.run_cli(self.args("--token", "fixed"))
+        self.assertEqual(make.call_args.kwargs["token"], "fixed")
 
 
 if __name__ == "__main__":

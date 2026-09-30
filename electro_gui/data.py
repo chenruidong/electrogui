@@ -473,7 +473,7 @@ class LoadedSession:
         for path, signature in self._code_stats.items():
             stat = path.stat()
             if (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns) != signature:
-                raise RuntimeError("Session preparation code changed; restart electro_gui before loading results.")
+                raise RuntimeError("Session preparation code changed; restart electro_gui (⋯ → Restart server) before loading results.")
 
     def spikes(self, unit_id):
         self._check(); units = self.session.units(); return np.asarray(units.spike_times_s[units.index_of(int(unit_id))], dtype=float)

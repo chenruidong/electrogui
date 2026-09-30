@@ -286,6 +286,29 @@ def _git_identity(repo):
 
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
+# This process's identity: a restart (POST /api/restart, then cli.run re-execs
+# itself) gets a new BOOT_ID, which is how a page knows the new code is up.
+BOOT_ID = uuid4().hex[:12]
+STARTED = time.time()
+_REPO = Path(__file__).resolve().parents[1]
+
+
+def code_changed_since(started=None):
+    """Python files of electro_gui/ and imitation_phys/ modified after this server started.
+
+    Those are what a restart picks up; static files are read from disk on every
+    request, so a page reload already gets them.
+    """
+    started = STARTED if started is None else started
+    changed = []
+    for package in ("electro_gui", "imitation_phys"):
+        for path in sorted((_REPO / package).rglob("*.py")):
+            try:
+                if path.stat().st_mtime > started:
+                    changed.append(str(path.relative_to(_REPO)))
+            except OSError:
+                pass
+    return changed
 _COMPRESSIBLE = ("application/json", "text/", "application/javascript", "image/svg+xml")
 
 
@@ -360,6 +383,9 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
                     sessions = application.store.catalog()
                     self._send({"version": __version__, "sessions": sessions,
                                 "default_session": sessions[0]["id"] if sessions else None})
+                elif url.path == "/api/health":
+                    self._send({"version": __version__, "boot": BOOT_ID, "started": STARTED, "pid": os.getpid(),
+                                "code_changed": code_changed_since()})
                 elif url.path.startswith("/api/explorer/"):
                     self._send(application.explore(url.path.rsplit("/", 1)[1], parse_qs(url.query)))
                 elif url.path == "/api/views":
@@ -411,7 +437,7 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
                 return
             try:
                 route = urlsplit(self.path).path
-                if route not in ("/api/jobs", "/api/views", "/api/explorer/popfit", "/api/explorer/popprobe"):
+                if route not in ("/api/jobs", "/api/views", "/api/explorer/popfit", "/api/explorer/popprobe", "/api/restart"):
                     self._send({"error": "Unknown endpoint"}, 404)
                     return
                 if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -425,6 +451,15 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
                     raise ValueError("Request must be a JSON object.")
                 if route == "/api/views":
                     self._send(application.views(request))
+                    return
+                if route == "/api/restart":
+                    # Stop serving; cli.run then waits for a running computation,
+                    # closes, and replaces the process with a fresh copy of itself
+                    # (same command line, port and token).  A server run some
+                    # other way (tests, an embedding) just stops.
+                    self._send({"restarting": True, "boot": BOOT_ID}, 202)
+                    self.server.restart_requested = True
+                    threading.Thread(target=self.server.shutdown, name="electro-restart", daemon=True).start()
                     return
                 if route == "/api/explorer/popfit":
                     self._send(application.population_fit(request))
@@ -442,4 +477,6 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
             # Polling is intentionally quiet. The UI reports progress and errors.
             pass
 
-    return ThreadingHTTPServer((host, port), Handler)
+    server = ThreadingHTTPServer((host, port), Handler)
+    server.restart_requested = False
+    return server

@@ -67,6 +67,18 @@ token are refused, and without `--lan`/`--host` the server stays on loopback as
 before.  Anyone holding the URL can read the sessions it serves, so stop the
 server when you are done.  `--token` fixes the token instead of drawing one.
 
+**Restart server** (in the ⋯ menu) restarts electro_gui from the page, which is
+the way to load new Python code from a phone.  The item says when the server
+started and whether any `.py` file under `electro_gui/` or `imitation_phys/`
+has changed since.  The server lets a running computation finish, drops queued
+ones, then re-executes its own command line in place (`exec`: same PID, port and
+token, including a random `--lan` token, and no new browser tab), so a launchd
+`KeepAlive` agent, a terminal and a preview runner all keep working.  The page
+waits for a process with a new boot id and reloads itself; reopening a session
+after that is quick because its verification is cached.  Static files (the page's
+JS and CSS) are read from disk on every request, so they need only a reload.  A
+server started before this button existed has to be restarted once by hand.
+
 ## Explorer (the default page)
 
 The page is a figure card — title (`unit · ch · area · quality`), a legend of
@@ -358,6 +370,8 @@ including the session and unit.
 
 ### Explorer API
 
+`GET /api/health` (version, boot id, start time, PID and the Python files
+changed since), `POST /api/restart` (body `{}`; see *On a tablet or phone*),
 `GET /api/explorer/session?session=` (units with peak channels, alignment
 counts, event names), `/api/explorer/table?session=&alignment=` (columnar joined
 fields; `*_t` times become seconds from the row's event),

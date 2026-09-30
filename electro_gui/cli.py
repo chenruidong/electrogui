@@ -2,15 +2,20 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import secrets
 import socket
+import sys
+import time
 import webbrowser
 
 from . import __version__
 
 DEFAULT_ROOTS = ("/Volumes/T7/engaging-results", "/Volumes/Transfer/engaging_results")
+# Set by _restart for the process that replaces this one: {"port": ..., "token": ...}.
+RESTART_ENV = "ELECTRO_GUI_RESTART"
 
 
 def add_arguments(parser):
@@ -35,6 +40,11 @@ def add_arguments(parser):
 
 
 def run(args):
+    # A restart keeps the port (even one --port 0 chose) and the token (even a
+    # random one), so open pages and phones reconnect, and opens no browser.
+    restart = json.loads(os.environ.pop(RESTART_ENV, "") or "null")
+    if restart:
+        args.port, args.no_browser = int(restart["port"]), True
     os.environ.setdefault("MPLCONFIGDIR", str(Path(args.cache_dir).expanduser() / "matplotlib"))
     from .data import SessionStore
     from .server import Application, make_server
@@ -43,13 +53,20 @@ def run(args):
     application = Application(store, views_path=args.views_file, config_dirs=args.config_dir if args.config_dir is not None else ["output/presentation"])
     host = "0.0.0.0" if args.lan else args.host
     token = args.token  # an explicit token also protects a loopback server fronted by a proxy (tailscale serve)
+    if restart and token is None:
+        token = restart.get("token")
     if token is None and host not in ("127.0.0.1", "localhost", "::1"):
         token = secrets.token_urlsafe(12)
-    try:
-        server = make_server(application, host=host, port=args.port, token=token)
-    except OSError as exc:
-        application.close()
-        raise SystemExit(f"Cannot start electro_gui: {exc}. Use --port 0 to choose a free port.") from None
+    for attempt in range(20 if restart else 1):  # the old socket may take a moment to let go
+        try:
+            server = make_server(application, host=host, port=args.port, token=token)
+            break
+        except OSError as exc:
+            if attempt + 1 < (20 if restart else 1):
+                time.sleep(0.5)
+                continue
+            application.close()
+            raise SystemExit(f"Cannot start electro_gui: {exc}. Use --port 0 to choose a free port.") from None
     port = server.server_address[1]
     query = f"?token={token}" if token else ""
     specific = host not in ("0.0.0.0", "::", "", "127.0.0.1", "localhost", "::1")
@@ -70,8 +87,30 @@ def run(args):
     except KeyboardInterrupt:
         print("\nStopping electro_gui after any active computation finishes.", flush=True)
     finally:
+        if getattr(server, "restart_requested", False):
+            print("Restart requested: finishing any active computation, then restarting.", flush=True)
         server.server_close()
         application.close()
+    if getattr(server, "restart_requested", False):
+        _restart(port, token)
+
+
+def _restart(port, token):
+    """Replace this process with a fresh copy of itself, on the same port and token.
+
+    ``exec`` keeps the PID, so a launchd ``KeepAlive`` agent, a terminal or a
+    preview runner all keep the same process; the new interpreter imports the
+    code now on disk.  Every descriptor but stdin/out/err is closed first, so
+    open NWB files are not carried into the new process.
+    """
+    import resource
+    argv = [sys.executable, *(getattr(sys, "orig_argv", None) or [sys.executable, "-m", "electro_gui", *sys.argv[1:]])[1:]]
+    env = dict(os.environ, **{RESTART_ENV: json.dumps({"port": port, "token": token})})
+    sys.stdout.flush()
+    sys.stderr.flush()
+    soft = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+    os.closerange(3, soft if 0 < soft < 65536 else 65536)
+    os.execve(sys.executable, argv, env)
 
 
 def _tailscale_addresses():
