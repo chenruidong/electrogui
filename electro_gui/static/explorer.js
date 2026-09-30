@@ -107,17 +107,18 @@
   }
 
   // ---------------------------------------------------------------- state
+  const RASTER_MIN = 80, RASTER_MAX = 700, RASTER_FIT_MIN = 120, PSTH_MIN = 80, PSTH_MAX = 500, PSTH_DEFAULT = 205;
   const DEFAULTS = {
     session: null, unit: null, align: 'object_outcome', policy: 'verified_stable',
     win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem',
     filters: [], color: 'role', style: 'action', panel: null, qbins: 3, hidden: [],
     sort: 'session', dir: 1, grouped: true, markers: [], refs: [], medians: true,
-    tick: 'line', rasterH: 260, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
+    tick: 'line', rasterH: 260, rasterFit: true, psthH: PSTH_DEFAULT, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
     mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, tdrFactors: ['world', 'action', 'joystick_direction'], tdrWin: null, worldCoding: 'linear', dims: '2', heatNorm: 'z',
     nsort: 'loading:0', axes: [0, 1, 2], heatGroup: null, cloud: false, cloudAlpha: 0.3, cloudZero: true, cloudFit: 'traj',
     bt: true, btN: 16, pin: null, yoke: false, popSplit: 0.5,
   };
-  const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, ylock: null, bars: true, popSplit: 0.5};
+  const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, rasterFit: true, psthH: PSTH_DEFAULT, ylock: null, bars: true, popSplit: 0.5};
   let S = clone(DEFAULTS);
 
   const TEMPLATES = [
@@ -164,7 +165,9 @@
     for (const k of ['filters', 'hidden', 'markers', 'refs', 'unitQ', 'unitArea']) if (!Array.isArray(s[k])) s[k] = clone(DEFAULTS[k]);
     s.markers = s.markers.filter(m => m && typeof m.e === 'string').map((m, i) => ({id: m.id || `m${i + 1}`, match: 'trial', occ: 'nearest', c: INK, ...m}));
     s.refs = s.refs.filter(Number.isFinite);
-    s.rasterH = Number.isFinite(s.rasterH) ? clamp(s.rasterH, 80, 700) : DEFAULTS.rasterH;
+    s.rasterH = Number.isFinite(s.rasterH) ? clamp(s.rasterH, RASTER_MIN, RASTER_MAX) : DEFAULTS.rasterH;
+    s.rasterFit = s.rasterFit !== false;
+    s.psthH = Number.isFinite(s.psthH) ? clamp(Math.round(s.psthH), PSTH_MIN, PSTH_MAX) : PSTH_DEFAULT;
     s.qbins = [2, 3, 4, 5].includes(Number(s.qbins)) ? Number(s.qbins) : 3;
     s.dir = s.dir === -1 ? -1 : 1;
     if (!s.gstyle || typeof s.gstyle !== 'object' || Array.isArray(s.gstyle)) s.gstyle = {};
@@ -450,8 +453,8 @@
     const showN = S.grouped;
     const ml = narrow ? 42 : 52, mr = showN ? (narrow ? 30 : 38) : 10;
     const gapX = 26, gapY = 26;
-    const rasterH = Math.round(S.rasterH * (narrow ? 0.8 : 1));
-    const psthH = narrow ? 170 : 205;
+    const rasterH = rasterHeight(narrow);
+    const psthH = psthHeight(narrow);
     const titleH = nP > 1 ? 22 : 4;
     const markerLabelH = S.medians && Object.keys(M.markerData).length ? 14 : 0;
     const xAxisH = 40;
@@ -611,6 +614,10 @@
       if (!opts.export) {
         out.push(`<rect class="hit" data-kind="raster" data-p="${pi}" x="${f(x0)}" y="${f(rTop)}" width="${f(plotW)}" height="${rasterH}" fill="transparent"/>`);
         out.push(`<rect class="hit" data-kind="psth" data-p="${pi}" x="${f(x0)}" y="${f(pTop)}" width="${f(plotW)}" height="${psthH}" fill="transparent"/>`);
+        // The raster | PSTH divider: drag to trade height between them, double-click to reset the PSTH.
+        const gapH = pTop - rBot, gy = rBot + gapH / 2;
+        out.push(`<rect class="hit rsplit" data-kind="rsplit" data-p="${pi}" x="${f(x0)}" y="${f(rBot)}" width="${f(plotW)}" height="${f(gapH)}" fill="transparent"/>`,
+          `<rect class="rgrip" x="${f((x0 + x1) / 2 - 22)}" y="${f(gy - 2.5)}" width="44" height="5" rx="2.5" pointer-events="none"/>`);
       }
     });
     const meta = opts.export ? `<metadata>${esc(JSON.stringify(provenance(M)))}</metadata>` : '';
@@ -715,7 +722,43 @@
     renderRaster();
     drawPin();
     renderBehavior();
+    fitRaster();  // after the timeline, so a just-collapsed panel is measured as collapsed
   }
+  // Raster height.  On a desktop window it follows the window by default ("fit"): each
+  // render measures where the behavior timeline ends and resizes the rasters so it ends at
+  // the window's bottom edge.  Dragging the divider above the timeline (or the slider)
+  // fixes an explicit height; double-clicking the divider returns to fit.
+  const fitsWindow = () => S.rasterFit && !matchMedia('(max-width: 959px)').matches;
+  function rasterHeight(narrow = false) {
+    if (fitsWindow() && D.fitRasterH) return D.fitRasterH;
+    return Math.round(S.rasterH * (narrow ? 0.8 : 1));
+  }
+  // Phones draw the PSTH at 170/205 of the stored height, as they always have.
+  const psthHeight = (narrow = false) => Math.round(S.psthH * (narrow ? 170 / 205 : 1));
+  const panelRows = L => (L ? new Set(L.panels.map(p => p.rTop)).size : 1) || 1;
+  function fitRaster() {
+    if (!fitsWindow() || S.mode !== 'raster' || !D.layout || $('figure').classList.contains('stale')) { D.fitPasses = 0; D.fitPrev = null; return; }
+    const bottom = $('behavior').getBoundingClientRect().bottom + scrollY;
+    const excess = bottom - (innerHeight - 14);
+    const current = rasterHeight();
+    // The page grows by about one pixel per raster pixel per panel row, more when the
+    // side bar chart (which scales with the figure) is the taller column; take the slope
+    // measured since the previous pass when there is one.
+    const prev = D.fitPrev, rows = panelRows(D.layout);
+    const slope = prev && Math.abs(current - prev.h) >= 1 ? clamp((bottom - prev.bottom) / (current - prev.h), 0.5 * rows, 4 * rows) : rows;
+    const next = Math.round(clamp(current - excess / slope, RASTER_FIT_MIN, RASTER_MAX));
+    if (Math.abs(next - current) >= 2 && (D.fitPasses || 0) < 6) {
+      D.fitPasses = (D.fitPasses || 0) + 1; D.fitPrev = {h: current, bottom}; D.fitRasterH = next; schedule();
+    } else { D.fitPasses = 0; D.fitPrev = null; if (!D.fitRasterH) D.fitRasterH = current; }
+    syncRasterOut();
+  }
+  function syncRasterOut() {
+    const h = rasterHeight();
+    $('rasterH').value = h;
+    $('rasterHOut').textContent = fitsWindow() ? `fit · ${h} px` : `${S.rasterH} px`;
+    $('btSplit').title = fitsWindow() ? 'Drag to resize the rasters (fitted to the window now); double-click to fit again' : 'Drag to resize the rasters; double-click to fit them to the window';
+  }
+
   function renderRaster() {
     const M = buildModel();
     const fig = $('figure');
@@ -751,9 +794,12 @@
     D.layout = layout;
     D.figMeta = {title, subtitle, width};
     if (S.bars) {
-      const h = side ? Math.min(380, Math.max(260, layout.height * 0.6)) : 260;
+      // Beside the figure the chart runs from just above the PSTH to the figure's bottom
+      // edge, so it never makes the page taller than the figure (which the fit relies on).
+      const barsTop = Math.max(0, layout.panels[0].pTop - 30);
+      const h = side ? Math.max(160, layout.height - barsTop) : 260;
       $('bars').innerHTML = barsSVG(M, side ? barsW : Math.min(Math.max(260, width), 140 + 70 * M.visible.length), h);
-      $('bars').style.marginTop = side ? `${Math.max(0, layout.panels[0].pTop - 30)}px` : '';
+      $('bars').style.marginTop = side ? `${barsTop}px` : '';
     } else $('bars').innerHTML = '';
     $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · rows are events; half-open count window; ${S.policy === 'verified_stable' ? 'stability from the exact NWB (v0.1 rule, 0.4 s guard)' : 'no stability filter'} · electro_gui ${VERSION}`;
   }
@@ -896,7 +942,7 @@
     if (document.activeElement !== $('cwHiN')) $('cwHiN').value = S.cw[1];
     $('bin').value = Math.round(S.bin * 1000); $('binOut').textContent = `${Math.round(S.bin * 1000)} ms`;
     $('sigma').value = Math.round(S.sigma * 1000); $('sigmaOut').textContent = S.sigma ? `${Math.round(S.sigma * 1000)} ms` : 'off';
-    $('rasterH').value = S.rasterH; $('rasterHOut').textContent = `${S.rasterH} px`;
+    syncRasterOut();
     $('ylock').checked = S.ylock !== null; $('ymax').disabled = S.ylock === null;
     if (document.activeElement !== $('ymax')) $('ymax').value = S.ylock !== null ? S.ylock : (D.model ? tidy(D.model.ymax, 1) : '');
     $('showBars').checked = S.bars;
@@ -1232,7 +1278,7 @@
     });
   }
   function applyTemplate(t) {
-    const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, tick: S.tick, rasterH: S.rasterH, bars: S.bars, err: S.err,
+    const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, tick: S.tick, rasterH: S.rasterH, rasterFit: S.rasterFit, psthH: S.psthH, bars: S.bars, err: S.err,
       mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, tdrFactors: S.tdrFactors, tdrWin: S.tdrWin, worldCoding: S.worldCoding, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes, popSplit: S.popSplit};
     S = sanitize({...clone(DEFAULTS), ...keep, ...clone(t.state)});
     afterBigChange();
@@ -2300,10 +2346,39 @@
   }
 
   let brush = null, tipTimer = 0;
+  // Raster | PSTH divider.  Height moves between the two and their sum stays put, so a
+  // fitted page still fits; in fit mode the raster share lives in D.fitRasterH.
+  let psplit = null, psplitDown = 0;
+  // Drawn heights, with the figure's own narrow (< 560 px) scaling.
+  const narrowFig = () => !!(D.layout && D.layout.width < 560);
+  const psthScale = () => (narrowFig() ? 170 / 205 : 1);
+  function setRasterPx(h) {
+    if (fitsWindow()) D.fitRasterH = h;
+    else S.rasterH = clamp(Math.round(h / (narrowFig() ? 0.8 : 1)), RASTER_MIN, RASTER_MAX);
+  }
+  function dragPsthSplit(evt) {
+    const dy = (evt.clientY - psplit.y) * psplit.k;
+    const r = clamp(Math.round(psplit.r0 + dy), fitsWindow() ? RASTER_FIT_MIN : RASTER_MIN, RASTER_MAX);
+    const p = clamp(psplit.p0 - (r - psplit.r0), PSTH_MIN * psthScale(), PSTH_MAX * psthScale());
+    const r2 = psplit.r0 + (psplit.p0 - p);  // the PSTH may have hit its limit first
+    if (Math.abs(p - psthHeight(narrowFig())) < 1) return;  // a still pointer must not redraw between the clicks of a double-click
+    S.psthH = clamp(Math.round(p / psthScale()), PSTH_MIN, PSTH_MAX);
+    setRasterPx(r2);
+    syncRasterOut(); schedule();
+  }
+  function resetPsthSplit() {
+    const before = psthHeight(narrowFig());
+    S.psthH = PSTH_DEFAULT;
+    if (fitsWindow()) { D.fitPasses = 0; D.fitPrev = null; }  // the fit refills whatever the PSTH gave back
+    else setRasterPx(rasterHeight(narrowFig()) + before - psthHeight(narrowFig()));
+    changed();
+  }
+
   function bindFigure() {
     const fig = $('figure');
     fig.addEventListener('pointermove', evt => {
       if (!D.layout || !D.model) return;
+      if (psplit) { dragPsthSplit(evt); return; }
       const p = svgPoint(evt);
       if (brush) {
         const L = D.layout.panels[brush.p];
@@ -2313,7 +2388,7 @@
         return;
       }
       const hit = evt.target.closest && evt.target.closest('.hit');
-      if (!hit) { if (evt.pointerType === 'mouse') hideTip(); return; }
+      if (!hit || hit.dataset.kind === 'rsplit') { if (evt.pointerType === 'mouse' || hit) hideTip(); return; }
       const L = D.layout.panels[Number(hit.dataset.p)];
       hit.dataset.kind === 'psth' ? hoverPsth(L, p, evt) : hoverRaster(L, p, evt);
     });
@@ -2321,6 +2396,17 @@
     fig.addEventListener('pointerdown', evt => {
       const hit = evt.target.closest && evt.target.closest('.hit');
       if (!hit || !D.layout) return;
+      if (hit.dataset.kind === 'rsplit') {
+        // Two presses within 400 ms reset the PSTH height (the pointer is captured, so the
+        // browser's dblclick would go to the figure rather than the divider).
+        const now = performance.now();
+        if (now - psplitDown < 400) { psplitDown = 0; resetPsthSplit(); evt.preventDefault(); return; }
+        psplitDown = now;
+        const r = fig.querySelector('svg').getBoundingClientRect();
+        psplit = {y: evt.clientY, r0: rasterHeight(narrowFig()), p0: psthHeight(narrowFig()), k: D.layout.height / r.height};
+        fig.setPointerCapture(evt.pointerId); fig.style.cursor = 'row-resize'; hideTip(); evt.preventDefault();
+        return;
+      }
       if (evt.pointerType === 'mouse' && evt.button === 0 && hit.dataset.kind === 'psth') {
         brush = {p: Number(hit.dataset.p), x: svgPoint(evt).x, moved: false};
         fig.setPointerCapture(evt.pointerId);
@@ -2332,6 +2418,7 @@
       }
     });
     fig.addEventListener('pointerup', evt => {
+      if (psplit) { psplit = null; fig.style.cursor = ''; saveState(); return; }
       if (!brush) return;
       const L = D.layout.panels[brush.p], x = svgPoint(evt).x;
       if (Math.abs(x - brush.x) > 4) {
@@ -2341,7 +2428,7 @@
       }
       brush = null; hideTip();
     });
-    fig.addEventListener('pointercancel', () => { brush = null; hideTip(); });
+    fig.addEventListener('pointercancel', () => { brush = null; if (psplit) { psplit = null; fig.style.cursor = ''; saveState(); } hideTip(); });
     fig.addEventListener('click', evt => {
       const hit = evt.target.closest && evt.target.closest('.hit');
       if (!hit || hit.dataset.kind !== 'raster' || !D.layout || !D.model) return;
@@ -3021,7 +3108,35 @@
     $('cwHiN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v > S.cw[0]) S.cw[1] = v; changed(); });
     $('bin').addEventListener('input', e => { S.bin = Number(e.target.value) / 1000; changed(); });
     $('sigma').addEventListener('input', e => { S.sigma = Number(e.target.value) / 1000; changed(); });
-    $('rasterH').addEventListener('input', e => { S.rasterH = Number(e.target.value); changed(); });
+    $('rasterH').addEventListener('input', e => { S.rasterH = Number(e.target.value); S.rasterFit = false; changed(); });
+    // The divider above the behavior timeline: drag to set the raster height, double-click
+    // (two presses within 400 ms, as the population divider) to fit the window again.
+    let rsplit = null, rsplitDown = 0;
+    const bs = $('btSplit');
+    const setFit = () => { S.rasterFit = true; D.fitRasterH = null; D.fitPasses = 0; changed(); };
+    bs.addEventListener('pointerdown', evt => {
+      const now = performance.now();
+      if (now - rsplitDown < 400) { rsplitDown = 0; rsplit = null; setFit(); evt.preventDefault(); return; }
+      rsplitDown = now;
+      rsplit = {y: evt.clientY, h0: rasterHeight(), rows: panelRows(D.layout)};
+      bs.setPointerCapture(evt.pointerId); bs.classList.add('dragging'); hideTip(); evt.preventDefault();
+    });
+    bs.addEventListener('pointermove', evt => {
+      if (!rsplit) return;
+      const h = Math.round(clamp(rsplit.h0 + (evt.clientY - rsplit.y) / rsplit.rows, RASTER_MIN, RASTER_MAX));
+      if (Math.abs(h - rasterHeight()) < 1) return;  // a still pointer must not leave fit between the clicks of a double-click
+      S.rasterFit = false; S.rasterH = h; syncRasterOut(); schedule();
+    });
+    const rsplitEnd = () => { if (!rsplit) return; rsplit = null; bs.classList.remove('dragging'); saveState(); };
+    bs.addEventListener('pointerup', rsplitEnd); bs.addEventListener('pointercancel', rsplitEnd);
+    bs.addEventListener('keydown', evt => {
+      if (evt.key === 'Enter') { setFit(); evt.preventDefault(); return; }
+      if (evt.key !== 'ArrowUp' && evt.key !== 'ArrowDown') return;
+      evt.preventDefault();
+      S.rasterH = clamp(rasterHeight() + (evt.key === 'ArrowDown' ? 10 : -10), RASTER_MIN, RASTER_MAX); S.rasterFit = false; changed();
+    });
+    // Collapsing the timeline or a wrapping header changes what has to fit.
+    if (window.ResizeObserver) new ResizeObserver(() => { if (fitsWindow() && S.mode === 'raster') schedule(); }).observe($('behavior'));
     $('ylock').addEventListener('change', e => { S.ylock = e.target.checked ? (D.model ? tidy(D.model.ymax, 1) : 20) : null; changed(); });
     $('ymax').addEventListener('change', e => { const v = Number(e.target.value); if (v > 0) { S.ylock = v; changed(); } });
     $('showBars').addEventListener('change', e => { S.bars = e.target.checked; changed(); });

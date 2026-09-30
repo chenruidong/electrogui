@@ -292,6 +292,10 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius
 /* The trajectory | time-course divider: drag to resize, double-click for half each. */
 .figure .hit.split { cursor: col-resize; touch-action: none; }
 .figure .hit.split:hover + .grip { fill: var(--accent); }
+/* The raster | PSTH divider in the raster figure: drag to trade height, double-click to reset. */
+.figure .hit.rsplit { cursor: row-resize; touch-action: none; }
+.figure .rgrip { fill: var(--line-2); opacity: .7; transition: fill .12s, opacity .12s; }
+.figure .hit.rsplit:hover + .rgrip { fill: var(--accent); opacity: 1; }
 .tc-scroll svg { display: block; }
 .tc-scroll::-webkit-scrollbar { width: 8px; }
 .tc-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -301,7 +305,13 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius
 .figure-wrap.stacked { grid-template-columns: minmax(0, 1fr); }
 .figure-wrap.stacked .bars { width: 100%; }
 /* behavior timeline */
-.behavior { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.behavior { padding-top: 4px; }
+/* The divider above the timeline: drag to resize the rasters, double-click to fit the window. */
+.bt-split { position: relative; height: 16px; margin-top: 4px; cursor: row-resize; touch-action: none; outline: none; }
+.bt-split::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--line); }
+.bt-split span { position: absolute; left: 50%; top: 50%; width: 44px; height: 6px; margin: -3px 0 0 -22px; border-radius: 3px; background: var(--line-2); transition: background .12s; }
+.bt-split:hover span, .bt-split.dragging span, .bt-split:focus-visible span { background: var(--accent); }
+.bt-split:hover::before, .bt-split.dragging::before { border-top-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .bt-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
 .bt-toggle { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 2px 4px 2px 0; }
 .bt-toggle h2 { margin: 0; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); font-weight: 650; }
