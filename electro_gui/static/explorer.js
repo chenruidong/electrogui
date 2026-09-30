@@ -107,18 +107,18 @@
   }
 
   // ---------------------------------------------------------------- state
-  const RASTER_MIN = 80, RASTER_MAX = 700, RASTER_FIT_MIN = 120, PSTH_MIN = 80, PSTH_MAX = 500, PSTH_DEFAULT = 205;
+  const RASTER_MIN = 80, RASTER_MAX = 700, RASTER_FIT_MIN = 120, PSTH_MIN = 80, PSTH_MAX = 500;
   const DEFAULTS = {
     session: null, unit: null, align: 'object_outcome', policy: 'verified_stable',
     win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem',
     filters: [], color: 'role', style: 'action', panel: null, qbins: 3, hidden: [],
     sort: 'session', dir: 1, grouped: true, markers: [], refs: [], medians: true,
-    tick: 'line', rasterH: 260, rasterFit: true, psthH: PSTH_DEFAULT, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
+    tick: 'line', rasterH: 260, rasterFit: true, psthH: 205, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
     mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, tdrFactors: ['world', 'action', 'joystick_direction'], tdrWin: null, worldCoding: 'linear', dims: '2', heatNorm: 'z',
     nsort: 'loading:0', axes: [0, 1, 2], heatGroup: null, cloud: false, cloudAlpha: 0.3, cloudZero: true, cloudFit: 'traj',
     bt: true, btN: 16, pin: null, yoke: false, popSplit: 0.5,
   };
-  const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, rasterFit: true, psthH: PSTH_DEFAULT, ylock: null, bars: true, popSplit: 0.5};
+  const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, rasterFit: true, psthH: 205, ylock: null, bars: true, popSplit: 0.5};
   let S = clone(DEFAULTS);
 
   const TEMPLATES = [
@@ -167,7 +167,7 @@
     s.refs = s.refs.filter(Number.isFinite);
     s.rasterH = Number.isFinite(s.rasterH) ? clamp(s.rasterH, RASTER_MIN, RASTER_MAX) : DEFAULTS.rasterH;
     s.rasterFit = s.rasterFit !== false;
-    s.psthH = Number.isFinite(s.psthH) ? clamp(Math.round(s.psthH), PSTH_MIN, PSTH_MAX) : PSTH_DEFAULT;
+    s.psthH = Number.isFinite(s.psthH) ? clamp(Math.round(s.psthH), PSTH_MIN, PSTH_MAX) : DEFAULTS.psthH;
     s.qbins = [2, 3, 4, 5].includes(Number(s.qbins)) ? Number(s.qbins) : 3;
     s.dir = s.dir === -1 ? -1 : 1;
     if (!s.gstyle || typeof s.gstyle !== 'object' || Array.isArray(s.gstyle)) s.gstyle = {};
@@ -2423,7 +2423,7 @@
   }
   function resetPsthSplit() {
     const before = psthHeight(narrowFig());
-    S.psthH = PSTH_DEFAULT;
+    S.psthH = DEFAULTS.psthH;
     if (fitsWindow()) { D.fitPasses = 0; D.fitPrev = null; }  // the fit refills whatever the PSTH gave back
     else setRasterPx(rasterHeight(narrowFig()) + before - psthHeight(narrowFig()));
     changed();
