@@ -9,7 +9,8 @@ browser cannot compute from the session:
   trial/object/history fields, in a dictionary-encoded columnar layout;
 * ``unit_raster``: one unit's spike times around each row of that table, and
   each row's eligible span under a stability policy;
-* ``event_times``: the times of one recorded event, for per-row markers.
+* ``event_times``: the times of one recorded event, for per-row markers;
+* ``spike_train``: one unit's whole spike train, for the behavior timeline.
 
 Row candidacy and eligibility follow :func:`electro_gui.analysis.prepare_rows`
 exactly: complete trials only, finite times inside the ephys recording and
@@ -35,6 +36,7 @@ GUARD_S = 0.4          # analysis.prepare_rows padding guard
 MAX_WINDOW_S = 10.0    # analysis._validate_settings display limit
 MAX_COMPONENTS = 50    # population fit; static/explorer.js MAX_NCOMP
 SPIKE_DECIMALS = 5     # 10 us; well below a 30 kHz sample
+SPIKE_TRAIN_TICK_S = 1e-4  # behavior timeline lane: far below one pixel at its tightest zoom
 
 # Fields that identify rows rather than describe them, aliases, and fields that
 # are constant by construction in a table of complete, in-recording rows.
@@ -221,6 +223,24 @@ def unit_raster(loaded: Any, alignment: str, unit_id: int, policy: str, lo: floa
             "status_labels": {"0": "eligible", "1": "trial not eligible under this policy", "2": "event outside an eligible run"},
             "eligible_trials": len(eligible),
             "eligibility": {k: v for k, v in (provenance or {}).items() if k != "source"}}
+
+
+def spike_train(loaded: Any, unit_id: int) -> dict:
+    """One unit's whole spike train, for the behavior timeline's spike lane.
+
+    Times are on the session (ephys) clock, rounded to ``SPIKE_TRAIN_TICK_S``
+    and sent as integer tick differences, ``t[i] = tick_s * (dt[0] + ... +
+    dt[i])``: a few characters per spike, so a 570 000-spike unit is about a
+    megabyte gzipped.  No eligibility rule applies; the lane shows every spike.
+    """
+    if isinstance(unit_id, bool) or int(unit_id) not in {int(u["id"]) for u in loaded.units}:
+        raise ValueError(f"Unknown unit ID: {unit_id!r}")
+    unit_id = int(unit_id)
+    spikes = np.sort(np.asarray(loaded.spikes(unit_id), dtype=float))
+    ticks = np.rint(spikes[np.isfinite(spikes)] / SPIKE_TRAIN_TICK_S).astype(np.int64)
+    unit = next(u for u in loaded.units if int(u["id"]) == unit_id)
+    return {"session_id": loaded.session_id, "unit": unit, "n": int(len(ticks)), "tick_s": SPIKE_TRAIN_TICK_S,
+            "dt": np.diff(ticks, prepend=0).tolist()}
 
 
 def event_times(loaded: Any, event: str) -> dict:

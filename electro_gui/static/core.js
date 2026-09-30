@@ -641,6 +641,30 @@
     return {sessionId: json.session_id, trials, objects, byTrial, key};
   }
 
+  /** A /api/explorer/spiketrain payload as sorted session times (s): t[i] = tick_s * (dt[0] + … + dt[i]). */
+  function decodeSpikeTrain(json) {
+    const t = new Float64Array(json.dt.length);
+    let tick = 0;
+    for (let i = 0; i < t.length; i++) { tick += json.dt[i]; t[i] = tick * json.tick_s; }
+    return t;
+  }
+
+  /**
+   * Spikes of sorted times `t` in [t0, t1) counted into `width` equal columns
+   * (the timeline's pixels).  `ref` is the 95th percentile of the non-empty
+   * columns' counts, at least 1, so shading a column by min(1, count / ref)
+   * gives plain ticks while spikes are sparser than a pixel and a density strip
+   * once they are not.  `n` is the number of spikes in the range.
+   */
+  function spikeColumns(t, t0, t1, width) {
+    const counts = new Uint32Array(Math.max(1, width));
+    const i0 = lowerBound(t, t0), i1 = lowerBound(t, t1), scale = counts.length / Math.max(1e-12, t1 - t0);
+    for (let i = i0; i < i1; i++) counts[Math.min(counts.length - 1, Math.floor((t[i] - t0) * scale))]++;
+    const full = Array.from(counts).filter(c => c > 0).sort((a, b) => a - b);
+    const ref = full.length ? Math.max(1, full[Math.min(full.length - 1, Math.floor(0.95 * full.length))]) : 1;
+    return {counts, ref, n: i1 - i0};
+  }
+
   /** Session time at a fractional trial position: linear between consecutive trial starts. */
   function timeAtPos(B, p) {
     const T = B.trials, n = T.n;
@@ -703,7 +727,7 @@
   }
 
   return {GUARD_S, MISSING, SEP, FIELD_LABELS, LEVEL_ORDER, fieldLabel, formatLevel, fmtNum, humanize, levelKey,
-    stimulusColor, prepareBehavior, timeAtPos, posAtTime, behaviorView, viewTrials, yokedTrials, upperBound,
+    stimulusColor, prepareBehavior, decodeSpikeTrain, spikeColumns, timeAtPos, posAtTime, behaviorView, viewTrials, yokedTrials, upperBound,
     prepareTable, rawValue, fieldLevels, filterMask, eligibility, quantileEdges, groupRows, indexEvents,
     markerTimes, median, countIn, lowerBound, psthGrid, rowCurve, psth, psthFromCurves, thin, windowRates, sortRows, encodeState, decodeState,
     decodeMask, andMask, andCount, popcount, fullMask, bestSubset, heatColor, project3d, hash};

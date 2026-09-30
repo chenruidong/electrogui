@@ -195,6 +195,12 @@ class Application:
                 if policy not in ("verified_stable", "all_complete"):
                     raise ValueError("policy must be verified_stable or all_complete")
                 return explorer.unit_raster(loaded, one("alignment"), unit, policy, one("lo"), one("hi"))
+            if what == "spiketrain":
+                try:
+                    unit = int(one("unit"))
+                except ValueError:
+                    raise ValueError("unit must be an integer ID") from None
+                return explorer.spike_train(loaded, unit)
             if what == "events":
                 return explorer.event_times(loaded, one("event"))
             if what == "behavior":

@@ -123,6 +123,45 @@ class ExplorerPayloadTests(unittest.TestCase):
         counts = {a["key"]: a["n"] for a in summary["alignments"]}
         self.assertEqual(counts["object_outcome"], explorer.alignment_table(self.loaded, "object_outcome")["n"])
 
+    def test_spike_train_is_every_spike_of_the_unit(self):
+        # The behavior timeline's spike lane: the unit's whole train, no eligibility rule, as
+        # integer tick differences on the session clock.
+        for uid in (1, 2):
+            train = explorer.spike_train(self.loaded, uid)
+            expected = np.sort(self.loaded.spikes(uid))
+            self.assertEqual(train["n"], len(expected))
+            self.assertEqual(train["unit"]["id"], uid)
+            self.assertTrue(all(isinstance(d, int) for d in train["dt"]))
+            np.testing.assert_allclose(np.cumsum(train["dt"]) * train["tick_s"], expected, atol=train["tick_s"] / 2 + 1e-9)
+        with self.assertRaises(ValueError):
+            explorer.spike_train(self.loaded, 99999)
+        with self.assertRaises(ValueError):
+            explorer.spike_train(self.loaded, True)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_core_js_spike_lane_helpers(self):
+        train = explorer.spike_train(self.loaded, 1)
+        script = """
+const C = require(process.argv[1]);
+const train = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const t = C.decodeSpikeTrain(train);
+const sparse = C.spikeColumns(Float64Array.from([0.05, 0.15, 0.95, 1.0, 2.5]), 0, 1, 10);
+const dense = C.spikeColumns(Float64Array.from([...Array(20)].map((_, i) => 0.01 + i * 0.001).concat([0.55, 0.95])), 0, 1, 10);
+const empty = C.spikeColumns(new Float64Array(0), 0, 1, 4);
+process.stdout.write(JSON.stringify({t: Array.from(t), sparse: [Array.from(sparse.counts), sparse.ref, sparse.n],
+  dense: [Array.from(dense.counts), dense.ref, dense.n], empty: [Array.from(empty.counts), empty.ref, empty.n]}));
+"""
+        done = subprocess.run(["node", "-e", script, str(CORE_JS)], input=json.dumps(train),
+                              capture_output=True, text=True, timeout=60, check=True)
+        js = json.loads(done.stdout)
+        np.testing.assert_allclose(js["t"], np.sort(self.loaded.spikes(1)), atol=train["tick_s"] / 2 + 1e-9)
+        # [t0, t1) into equal columns: 1.0 and 2.5 are outside; sparse spikes shade as plain ticks (ref 1).
+        self.assertEqual(js["sparse"], [[1, 1, 0, 0, 0, 0, 0, 0, 0, 1], 1, 3])
+        # A 20-spike burst in one column: ref is the 95th percentile of non-empty columns, so the
+        # burst is at full shade and the lone spikes are faint.
+        self.assertEqual(js["dense"], [[20, 0, 0, 0, 0, 1, 0, 0, 0, 1], 20, 22])
+        self.assertEqual(js["empty"], [[0, 0, 0, 0], 1, 0])
+
     def test_behavior_timeline_lists_every_resolved_object_once(self):
         behavior = explorer.behavior_timeline(self.loaded)
         outcome_rows = {}
@@ -415,6 +454,13 @@ class ExplorerServerTests(unittest.TestCase):
         status, _, body = self.request(port, f"/api/explorer/behavior?session={self.sid}")
         self.assertEqual(status, 200, body)
         self.assertGreater(len(json.loads(body)["objects"]["t"]), 0)
+        status, _, body = self.request(port, f"/api/explorer/spiketrain?session={self.sid}&unit=1")
+        self.assertEqual(status, 200, body)
+        train = json.loads(body)
+        self.assertEqual((train["unit"]["id"], len(train["dt"])), (1, train["n"]))
+        self.assertGreater(train["n"], 0)
+        status, _, _ = self.request(port, f"/api/explorer/spiketrain?session={self.sid}&unit=abc")
+        self.assertEqual(status, 400)
         status, _, body = self.request(port, "/api/views", "POST", {"name": "demo", "state": {"unit": 1}})
         self.assertEqual(status, 200, body)
         status, _, body = self.request(port, "/api/views")

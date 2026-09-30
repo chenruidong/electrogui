@@ -151,6 +151,7 @@
     heatCache: new Map(), view3d: {yaw: -0.6, pitch: 0.35}, cursor: null, playTimer: 0, popLayout: null, popFit: null, popModel: null,
     probes: new Map(), probeErrors: new Map(), probePending: null, probeShown: null, popReq: null,
     behavior: null, behaviorError: null, btC: null, btLayout: null, btDrag: null,
+    trains: new Map(), trainErrors: new Map(),   // unit id -> spike times (s) for the timeline's spike lane
   };
 
   function sanitize(raw) {
@@ -290,6 +291,19 @@
         }
       }));
     }
+    if (S.mode === 'raster' && S.bt && !D.trains.has(S.unit) && !D.trainErrors.has(S.unit)) {
+      const unit = S.unit;
+      jobs.push(once(`s|${unit}`, async () => {
+        try {
+          const raw = await getJSON(`/api/explorer/spiketrain?${query({session: sid, unit})}`);
+          if (token !== D.sessionToken) return;
+          D.trains.set(unit, C.decodeSpikeTrain(raw));
+          if (D.trains.size > 6) D.trains.delete(D.trains.keys().next().value);
+        } catch (e) {
+          if (token === D.sessionToken) D.trainErrors.set(unit, e.message);   // shown in the lane, not retried
+        }
+      }));
+    }
     for (const m of S.markers) for (const e of [m.e, m.end]) {
       if (!e || D.events.has(e)) continue;
       jobs.push(once(`e|${e}`, async () => {
@@ -312,7 +326,7 @@
     D.summary = null; D.tables.clear(); D.rasters.clear(); D.events.clear(); D.model = null;
     D.popspans.clear(); D.stab = null; D.fits.clear(); D.fitErrors.clear(); D.heatCache.clear(); D.popFit = null; D.popLayout = null; stopPlay();
     D.probes.clear(); D.probeErrors.clear(); D.probeShown = null;
-    D.behavior = null; D.behaviorError = null; D.btC = null; D.btLayout = null;
+    D.behavior = null; D.behaviorError = null; D.btC = null; D.btLayout = null; D.trains.clear(); D.trainErrors.clear();
     $('sessionSelect').value = sid;
     showLoading(`Opening ${sid}`, 'The first open of a session verifies the whole NWB file — about 1–2 minutes for a 3 GB recording. After that, units, alignments and knobs respond immediately.');
     try {
@@ -2583,9 +2597,10 @@
     const ink = figVar('--fig-ink'), muted = figVar('--fig-muted'), gridC = figVar('--fig-grid'), axisC = figVar('--fig-axis'), bg = figVar('--fig-bg');
     const narrow = width < 560, f = f1;
     const ml = narrow ? 52 : 88, mr = 10, x0 = ml, x1 = width - mr, plotW = x1 - x0;
-    const labH = 16, rowH = 36, evH = 18, axH = 26, ovGap = 6, ovH = 14;
+    const labH = 16, rowH = 36, evH = 18, spH = 22, axH = 26, ovGap = 6, ovH = 14;
     const yPred = labH + rowH / 2, yPrey = labH + rowH * 1.5, eTop = labH + 2 * rowH + 4, eBot = eTop + evH;
-    const axY = eBot + 2, ovTop = axY + axH + ovGap, height = ovTop + ovH + 5;
+    const sTop = eBot + 3, sBot = sTop + spH;   // the unit's spike train
+    const axY = sBot + 2, ovTop = axY + axH + ovGap, height = ovTop + ovH + 5;
     const T = B.trials, O = B.objects;
     const V = C.behaviorView(B, btCentre(B), S.btN);
     D.btC = (V.a + V.b) / 2;
@@ -2608,8 +2623,8 @@
       if (w) prevW = w;
       if (z < x0 - 2 || a > x1 + 2) continue;
       const done = T.complete[p] === true;
-      if (T.initiated[p] !== false) out.push(`<rect x="${f(a)}" y="${labH}" width="${f(Math.max(0.5, z - a))}" height="${f(eBot - labH)}" fill="${done ? worldC(w) : muted}" opacity="${done ? (isDark() ? 0.16 : 0.09) : 0.05}"/>`);
-      if (change) out.push(`<line x1="${f(a)}" x2="${f(a)}" y1="${labH - 2}" y2="${f(eBot)}" stroke="${ink}" stroke-width="1" stroke-dasharray="4 3" opacity="0.7"/>`);
+      if (T.initiated[p] !== false) out.push(`<rect x="${f(a)}" y="${labH}" width="${f(Math.max(0.5, z - a))}" height="${f(sBot - labH)}" fill="${done ? worldC(w) : muted}" opacity="${done ? (isDark() ? 0.16 : 0.09) : 0.05}"/>`);
+      if (change) out.push(`<line x1="${f(a)}" x2="${f(a)}" y1="${labH - 2}" y2="${f(sBot)}" stroke="${ink}" stroke-width="1" stroke-dasharray="4 3" opacity="0.7"/>`);
       const cx = Math.max(a, x0) + 2;
       if (change) { out.push(`<text x="${f(cx)}" y="11" font-size="10.5" font-weight="650" fill="${worldC(w)}">${esc(w)} ${T.id[p]}</text>`); lastLabel = cx + 40; }
       else if (cx > lastLabel + 4 && z - a > 16) { out.push(`<text x="${f(cx)}" y="11" font-size="10" fill="${muted}">${T.id[p]}${done ? '' : ' ✕'}</text>`); lastLabel = cx + 6 * String(T.id[p]).length + 8; }
@@ -2662,12 +2677,34 @@
       }
       for (const [c, d] of paths) out.push(c ? `<path d="${d}" stroke="${c}" stroke-width="1.2"/>` : `<path d="${d}" stroke="${muted}" stroke-width="1" opacity="0.45"/>`);
     }
+    // the unit's spike train, every spike (no eligibility rule), one tick per pixel
+    // column shaded by its count: single spikes while they are sparser than a pixel,
+    // a density strip when zoomed out
+    const train = D.trains.get(S.unit);
+    let spikeRate = null;
+    if (train) {
+      const W = Math.max(1, Math.round(plotW)), SHADES = 5;
+      const {counts, ref, n} = C.spikeColumns(train, V.t0, V.t1, W);
+      spikeRate = n / span;
+      const shade = Array(SHADES + 1).fill('');
+      for (let c = 0; c < W; c++) {
+        if (!counts[c]) continue;
+        const k = Math.min(SHADES, Math.ceil(counts[c] / ref * SHADES));
+        shade[k] += `M${f(x0 + (c + 0.5) * plotW / W)} ${f(sTop + 1)}v${spH - 2}`;
+      }
+      for (let k = 1; k <= SHADES; k++) if (shade[k]) out.push(`<path d="${shade[k]}" stroke="${ink}" stroke-width="1" opacity="${(0.25 + 0.75 * k / SHADES).toFixed(2)}"/>`);
+    } else {
+      const note = D.trainErrors.has(S.unit) ? `spike train unavailable: ${D.trainErrors.get(S.unit)}` : 'loading spikes…';
+      out.push(`<text x="${f(x0 + 6)}" y="${f(sTop + spH / 2 + 3.5)}" font-size="10" fill="${muted}">${esc(note)}</text>`);
+    }
     out.push('</g>');
     // labels and axis
     const lab = (y, text, sub) => out.push(`<text x="${f(x0 - 8)}" y="${f(y + 3.5)}" text-anchor="end" font-size="${narrow ? 10.5 : 11.5}" fill="${ink}">${esc(text)}${sub ? `<tspan fill="${muted}" font-size="10"> ${esc(sub)}</tspan>` : ''}</text>`);
     lab(yPred, narrow ? 'pred −' : 'Predator', narrow ? '' : '(−)');
     lab(yPrey, narrow ? 'prey +' : 'Prey', narrow ? '' : '(+)');
     out.push(`<text x="${f(x0 - 8)}" y="${f((eTop + eBot) / 2 + 3.5)}" text-anchor="end" font-size="10" fill="${muted}">events</text>`);
+    out.push(`<text x="${f(x0 - 8)}" y="${f(sTop + (spikeRate === null ? spH / 2 + 3.5 : 9))}" text-anchor="end" font-size="10" fill="${muted}">spikes</text>`);
+    if (spikeRate !== null) out.push(`<text x="${f(x0 - 8)}" y="${f(sTop + 19)}" text-anchor="end" font-size="9.5" fill="${muted}">${C.fmtNum(spikeRate, 1)}/s</text>`);
     out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(axY)}" y2="${f(axY)}" stroke="${axisC}"/>`);
     for (const v of niceTicks(V.t0, V.t1, Math.max(3, Math.round(plotW / 90)))) {
       if (v < V.t0 || v > V.t1) continue;
@@ -2692,7 +2729,7 @@
     out.push(`<text x="${f(x0 - 8)}" y="${f(ovTop + ovH / 2 + 3.5)}" text-anchor="end" font-size="10" fill="${muted}">session</text>`);
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${Math.ceil(height)}" viewBox="0 0 ${width} ${Math.ceil(height)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">` +
       out.join('') + '<g id="btPinLayer" pointer-events="none"></g><g id="btHover" pointer-events="none"></g></svg>';
-    return {svg, layout: {width, height, x0, x1, plotW, labH, rowH, eTop, eBot, axY, ovTop, ovH, yPred, yPrey, sq, view: V, X, XO, s0, s1, glyphs, ticks, T: Tab}};
+    return {svg, layout: {width, height, x0, x1, plotW, labH, rowH, eTop, eBot, sTop, sBot, axY, ovTop, ovH, yPred, yPrey, sq, view: V, X, XO, s0, s1, glyphs, ticks, T: Tab}};
   }
 
   /** What is under a point of the timeline. */
@@ -2705,7 +2742,7 @@
       let best = null, bd = 9;
       for (const g of L.glyphs) { const d = Math.max(Math.abs(g.x - p.x), Math.abs(g.y - p.y)); if (d < bd) { bd = d; best = g; } }
       if (best) return {kind: 'object', k: best.k, x: best.x, y: best.y};
-    } else if (L.ticks.length) {
+    } else if (p.y <= L.eBot + 2 && L.ticks.length) {
       let best = null, bd = 4;
       for (const tk of L.ticks) { const d = Math.abs(tk.x - p.x); if (d < bd) { bd = d; best = tk; } }
       if (best) return {kind: 'row', i: best.i, x: best.x};
@@ -2751,11 +2788,11 @@
       layer.innerHTML = `<rect x="${f1(hit.x - s / 2 - (D.behavior.objects.bar[hit.k] ? L.sq * 0.55 : 0))}" y="${f1(hit.y - s / 2)}" width="${f1(s + (D.behavior.objects.bar[hit.k] ? L.sq * 1.1 : 0))}" height="${f1(s)}" rx="2.5" fill="none" stroke="${muted}" stroke-width="1.4"/>`;
       tooltip(objectTip(hit.k), evt.clientX, evt.clientY);
     } else if (hit.kind === 'row') {
-      layer.innerHTML = `<line x1="${f1(hit.x)}" x2="${f1(hit.x)}" y1="${f1(L.labH)}" y2="${f1(L.eBot)}" stroke="${muted}" stroke-width="1"/>`;
+      layer.innerHTML = `<line x1="${f1(hit.x)}" x2="${f1(hit.x)}" y1="${f1(L.labH)}" y2="${f1(L.sBot)}" stroke="${muted}" stroke-width="1"/>`;
       tooltip(rowTip(L.T, hit.i), evt.clientX, evt.clientY);
     } else {
       const T = D.behavior.trials, a = L.X(T.start[hit.p]), z = L.X(T.stop[hit.p]);
-      layer.innerHTML = `<rect x="${f1(a)}" y="${f1(L.labH)}" width="${f1(Math.max(1, z - a))}" height="${f1(L.eBot - L.labH)}" fill="none" stroke="${muted}" stroke-width="1.2"/>`;
+      layer.innerHTML = `<rect x="${f1(a)}" y="${f1(L.labH)}" width="${f1(Math.max(1, z - a))}" height="${f1(L.sBot - L.labH)}" fill="none" stroke="${muted}" stroke-width="1.2"/>`;
       tooltip(trialTip(hit.p), evt.clientX, evt.clientY);
     }
   }
@@ -2833,7 +2870,7 @@
     if (!pin || !B.trials.pos.has(pin.trial)) { layer.innerHTML = ''; return; }
     const accent = figVar('--accent'), p = B.trials.pos.get(pin.trial), out = [];
     const a = clamp(L.X(B.trials.start[p]), L.x0, L.x1), z = clamp(L.X(B.trials.stop[p]), L.x0, L.x1);
-    if (z > a) out.push(`<rect x="${f1(a)}" y="${f1(L.labH - 1)}" width="${f1(Math.max(1.5, z - a))}" height="${f1(L.eBot - L.labH + 1)}" fill="${accent}" fill-opacity="0.08" stroke="${accent}" stroke-width="1.6" rx="2"/>`);
+    if (z > a) out.push(`<rect x="${f1(a)}" y="${f1(L.labH - 1)}" width="${f1(Math.max(1.5, z - a))}" height="${f1(L.sBot - L.labH + 1)}" fill="${accent}" fill-opacity="0.08" stroke="${accent}" stroke-width="1.6" rx="2"/>`);
     if (pin.t !== null && pin.t >= L.view.t0 && pin.t <= L.view.t1) {
       const x = L.X(pin.t);
       out.push(`<line x1="${f1(x)}" x2="${f1(x)}" y1="${f1(L.labH)}" y2="${f1(L.axY)}" stroke="${accent}" stroke-width="1.2" stroke-dasharray="3 2"/>`);

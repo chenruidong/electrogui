@@ -151,7 +151,14 @@ interval, if the animal never initiated it and no object appeared), a dashed
 line and label mark each world change (read across an uninitiated trial), and an
 *events* strip shows every row of the current alignment: coloured by its raster
 group when it is in the raster, faint grey when it is filtered, ineligible or
-hidden.  The strip below is the whole session with the visible window boxed.
+hidden.  Under it, *spikes* is the current unit's spike train on the same time
+axis — every spike, with no eligibility rule, so it runs through inter-trial
+intervals and uninitiated trials — with the mean rate over the visible window
+beside the label.  Each pixel column is one tick shaded by its spike count
+(relative to the 95th percentile of occupied columns): single spikes while they
+are sparser than a pixel, a density strip when zoomed out.  The train is
+fetched once per unit and kept for the last six units.  The strip below is the
+whole session with the visible window boxed.
 
 - **Zoom** with the *trials* slider (3 to all), pinch or ctrl-scroll on the
   timeline; **pan** by dragging, swiping sideways, `‹ ›`, or clicking/dragging
@@ -359,7 +366,10 @@ fields; `*_t` times become seconds from the row's event),
 `/api/explorer/events?session=&event=`,
 `/api/explorer/behavior?session=` (every trial's span and world, every resolved
 object's outcome time, visible onset, role, action, correctness, bar flag and
-image ID, for the behavior timeline); for Population,
+image ID, for the behavior timeline),
+`/api/explorer/spiketrain?session=&unit=` (the unit's whole spike train as integer
+0.1 ms tick differences, `t[i] = tick_s · (dt[0] + … + dt[i])`, for the
+timeline's spike lane); for Population,
 `/api/explorer/popspans?session=&alignment=&units=1,2,…&policy=` (eligible spans
 under the common-trial rule), `/api/explorer/stability?session=` (every unit's
 stable trials as base64 bitmasks over complete trials),
