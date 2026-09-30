@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>ElectroGUI — electrode and neural spike</title>
+  <defs>
+    <linearGradient id="navy" x2="1" y2="1"><stop stop-color="#102e43"/><stop offset="1" stop-color="#060f22"/></linearGradient>
+    <radialGradient id="halo" cx="65%" cy="43%" r="65%"><stop stop-color="#0d5965" stop-opacity=".5"/><stop offset="1" stop-color="#071426" stop-opacity="0"/></radialGradient>
+    <linearGradient id="metal" x2="1" y2="0"><stop stop-color="#366b7d"/><stop offset=".5" stop-color="#b4e9ed"/><stop offset="1" stop-color="#4a8999"/></linearGradient>
+    <linearGradient id="signal" x2="1" y2=".6"><stop stop-color="#46e5b8"/><stop offset=".55" stop-color="#6cf5ef"/><stop offset="1" stop-color="#3bbcee"/></linearGradient>
+  </defs>
+  <!-- Full bleed opaque square: the operating system supplies its corner mask. -->
+  <path fill="url(#navy)" d="M0 0h512v512H0z"/>
+  <path fill="url(#halo)" d="M0 0h512v512H0z"/>
+  <!-- Quiet multichannel traces behind the primary waveform. -->
+  <g fill="none" stroke="#438999" stroke-width="3" opacity=".2" stroke-linecap="round">
+    <path d="M178 204h43l12-22 14 48 15-26h146"/>
+    <path d="M178 334h102l14-22 13 44 13-22h88"/>
+  </g>
+  <!-- Silicon recording shank and exposed contact pads. -->
+  <path d="M108 104q0-10 10-10h30q10 0 10 10v246l-25 57-25-57z" fill="url(#metal)"/>
+  <path d="M119 109h28v238l-14 32-14-32z" fill="#102f42"/>
+  <g fill="#63e8dc">
+    <rect x="123" y="151" width="20" height="18" rx="4"/>
+    <rect x="123" y="205" width="20" height="18" rx="4"/>
+    <rect x="123" y="259" width="20" height="18" rx="4"/>
+    <rect x="123" y="313" width="20" height="18" rx="4"/>
+  </g>
+  <!-- Biphasic extracellular spike; heavy strokes remain legible at Home Screen sizes. -->
+  <path id="wave" d="M158 268h43c12 0 17-5 21-24l17-91 25 211 22-106c3-15 8-18 13-9l10 19h94" fill="none" stroke="#4be2da" stroke-width="28" opacity=".10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M158 268h43c12 0 17-5 21-24l17-91 25 211 22-106c3-15 8-18 13-9l10 19h94" fill="none" stroke="url(#signal)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="403" cy="268" r="9" fill="#9af8f5"/>
+</svg>
