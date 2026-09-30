@@ -2597,14 +2597,18 @@
     const out = [];
     const firstP = clamp(Math.floor(V.a) - 1, 0, T.n - 1), lastP = clamp(Math.ceil(V.b), 0, T.n - 1);
     out.push(`<clipPath id="btClip"><rect x="${f(x0)}" y="0" width="${f(plotW)}" height="${f(axY)}"/></clipPath><g clip-path="url(#btClip)">`);
-    // trial bands, world transitions, trial IDs
-    let lastLabel = -Infinity;
+    // trial bands, world transitions, trial IDs.  A trial the animal never
+    // initiated showed no object and has no world: no band, like the ITI, and
+    // a world change is read across it from the last labelled trial.
+    let lastLabel = -Infinity, prevW = null;
+    for (let q = firstP - 1; q >= 0 && !prevW; q--) prevW = T.world[q];
     for (let p = firstP; p <= lastP; p++) {
       const a = X(T.start[p]), z = X(T.stop[p]);
+      const w = T.world[p], change = prevW && w && prevW !== w;
+      if (w) prevW = w;
       if (z < x0 - 2 || a > x1 + 2) continue;
-      const w = T.world[p], done = T.complete[p] === true;
-      out.push(`<rect x="${f(a)}" y="${labH}" width="${f(Math.max(0.5, z - a))}" height="${f(eBot - labH)}" fill="${done ? worldC(w) : muted}" opacity="${done ? (isDark() ? 0.16 : 0.09) : 0.05}"/>`);
-      const change = p > 0 && T.world[p - 1] && w && T.world[p - 1] !== w;
+      const done = T.complete[p] === true;
+      if (T.initiated[p] !== false) out.push(`<rect x="${f(a)}" y="${labH}" width="${f(Math.max(0.5, z - a))}" height="${f(eBot - labH)}" fill="${done ? worldC(w) : muted}" opacity="${done ? (isDark() ? 0.16 : 0.09) : 0.05}"/>`);
       if (change) out.push(`<line x1="${f(a)}" x2="${f(a)}" y1="${labH - 2}" y2="${f(eBot)}" stroke="${ink}" stroke-width="1" stroke-dasharray="4 3" opacity="0.7"/>`);
       const cx = Math.max(a, x0) + 2;
       if (change) { out.push(`<text x="${f(cx)}" y="11" font-size="10.5" font-weight="650" fill="${worldC(w)}">${esc(w)} ${T.id[p]}</text>`); lastLabel = cx + 40; }
@@ -2674,6 +2678,7 @@
     // whole-session overview with the visible window
     let ov = '';
     for (let p = 0; p < T.n; p++) {
+      if (T.initiated[p] === false) continue;
       const a = XO(T.start[p]), z = XO(T.stop[p]);
       ov += `<rect x="${f(a)}" y="${f(ovTop)}" width="${f(Math.max(0.6, z - a))}" height="${ovH}" fill="${T.complete[p] === true ? worldC(T.world[p]) : muted}"/>`;
     }
@@ -2733,6 +2738,7 @@
     const kv = [['world', T.world[p] || '—'], ['strategy', T.intention[p] || '—'], ['success', yesNo(T.success[p])], ['complete', yesNo(T.complete[p])],
       ['time', `${C.fmtNum(T.start[p], 1)}–${C.fmtNum(T.stop[p], 1)} s (${C.fmtNum(T.stop[p] - T.start[p], 1)} s)`],
       ['objects', `${objs.length}${errors ? ` · ${errors} incorrect` : ''}`]];
+    if (T.initiated[p] === false) kv.push(['initiated', 'no · no object appeared']);
     return `<b>trial ${T.id[p]}</b><div class="kv">${kv.map(([a, v]) => `<span>${esc(a)}</span><b>${esc(v)}</b>`).join('')}</div><div class="hint">click to pin this trial</div>`;
   }
   function btHover(hit, evt) {
@@ -2853,7 +2859,8 @@
     if (p !== undefined && B.trials.world[p]) bits.push(esc(B.trials.world[p]));
     const k = B && pin.uid !== null ? B.key.get(`${pin.trial}|${pin.uid}`) : undefined;
     if (k !== undefined) bits.push(esc(eventLabel(B.objects.outcome[k])));
-    if (M) {
+    if (p !== undefined && B.trials.initiated[p] === false) bits.push('never initiated · in no raster');
+    else if (M) {
       const T = M.T, owner = rowOwners(M), why = {filtered: 0, yoked: 0, unstable: 0, window: 0, hidden: 0};
       let all = 0, shown = 0;
       for (let i = 0; i < T.n; i++) {

@@ -616,7 +616,8 @@
     const nT = tr.id.length, nO = ob.t.length;
     const pos = new Map(tr.id.map((id, i) => [id, i]));
     const trials = {n: nT, id: Int32Array.from(tr.id), start: Float64Array.from(tr.start), stop: Float64Array.from(tr.stop),
-      complete: tr.complete, world: tr.world, intention: tr.intention, success: tr.success, pos};
+      complete: tr.complete, initiated: tr.initiated || tr.id.map(() => null), world: tr.world, intention: tr.intention,
+      success: tr.success, pos};
     const objects = {n: nO, trial: Int32Array.from(ob.trial), uid: ob.uid, rowId: Int32Array.from(ob.row_id),
       t: Float64Array.from(ob.t), onset: Float64Array.from(ob.onset, v => (v === null ? NaN : v)),
       role: ob.role, action: ob.action, outcome: ob.outcome, correct: ob.correct, bar: ob.bar, image: ob.image_id, order: ob.order,

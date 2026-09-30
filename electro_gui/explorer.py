@@ -278,6 +278,7 @@ def behavior_timeline(loaded: Any) -> dict:
         "session_id": loaded.session_id, "duration_s": getattr(loaded, "duration_s", None),
         "trials": {"id": [int(t["id"]) for t in trials], "start": [round(float(t["start"]), 6) for t in trials],
                    "stop": [round(float(t["stop"]), 6) for t in trials], "complete": [flag(t.get("complete")) for t in trials],
+                   "initiated": [flag(t.get("initiated")) for t in trials],
                    "world": [text(t.get("world")) for t in trials], "intention": [text(t.get("intention")) for t in trials],
                    "success": [flag(t.get("success")) for t in trials]},
         "objects": {"trial": [k[0] for k, _ in objects], "uid": [k[1] for k, _ in objects],

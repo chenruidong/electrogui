@@ -205,9 +205,18 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None, joystick=
         tid = int(tid)
         values = _safe(values)
         trial_extras[tid] = {f"trial.{k}": v for k, v in values.items() if isinstance(v, (str, int, float, bool)) or v is None}
+        # A trial the animal never initiated (a timeout on the start block, e.g.
+        # sub-Ravel_ses-2026_09_15 trial 314, or a session's last trial) showed
+        # no object.  It gets no world and is not complete, the rule of
+        # TrialsTable.complete() and trial_world_from_nwb, so it is in no raster
+        # or PSTH.  Its scheduled block_type stays readable as trial.block_type.
+        # A table without the column carries no evidence and counts as initiated.
+        initiated = _boolean(values.get("initiated"))
         trials_by_id[tid] = {
             "id": tid, "start": values.get("start_time"), "stop": values.get("stop_time"),
-            "complete": _boolean(values.get("complete")), "world": values.get("block_type"),
+            "initiated": initiated,
+            "complete": False if initiated is False else _boolean(values.get("complete")),
+            "world": None if initiated is False else values.get("block_type"),
             "block_id": values.get("preset_block_id", values.get("block_id")),
             "success": _boolean(values.get("success")),
             # Filled from goal contact below.  The trial table's

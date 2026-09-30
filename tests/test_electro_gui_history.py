@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+from electro_gui import explorer
 from electro_gui.data import _enrich, _registry
 from electro_gui.analysis import prepare_rows
 
@@ -87,6 +88,38 @@ class ElectroGuiHistoryTests(unittest.TestCase):
         self.assertEqual(by_id[1]["intention"], "PP")
         self.assertIsNone(by_id[2]["intention"])
         self.assertIsNone(by_id[2]["trial_error_free"])
+
+    def test_a_trial_never_initiated_has_no_world_and_enters_no_raster(self):
+        # sub-Ravel_ses-2026_09_15 trial 314: an MM trial that timed out on the
+        # start block.  Its display opened and closed with no object shown, yet
+        # the task's table says complete, block_type MM.  It gets no world, is
+        # not complete (so no alignment offers its rows) and the behaviour
+        # timeline gets initiated=False to draw it blank, like the ITI.
+        events = _events([
+            {"event": "trial_display_start", "trial_index": 0, "t_ephys_s": 0.5},
+            {"event": "object_visible_onset", "trial_index": 0, "t_ephys_s": 1.0, "object_uid": "prey-1", "kind": "+", "info": {"is_bar": False, "ordinal": 1}},
+            {"event": "prey_capture", "trial_index": 0, "t_ephys_s": 2.0, "object_uid": "prey-1", "kind": "+", "info": {"is_bar": False, "ordinal": 1}},
+            {"event": "trial_display_start", "trial_index": 1, "t_ephys_s": 10.5},
+            {"event": "episode_timeout", "trial_index": 1, "t_ephys_s": 18.0},
+            {"event": "trial_display_start", "trial_index": 2, "t_ephys_s": 20.5},
+        ])
+        trials = pd.concat([_trials(initiated=True),
+                            _trials(start_time=10.0, stop_time=19.0, block_type="MM", initiated=False, success=float("nan")),
+                            _trials(start_time=20.0, stop_time=29.0, block_type="MM", initiated=True)])
+        trials.index = pd.Index([0, 1, 2], name="trial_index")
+        ordered, rows = _enrich(trials, events, classify=lambda row, include_bars=False: "PP")
+        by_id = {t["id"]: t for t in ordered}
+        self.assertEqual([(by_id[i]["world"], by_id[i]["complete"], by_id[i]["initiated"]) for i in (0, 1, 2)],
+                         [("PP", True, True), (None, False, False), ("MM", True, True)])
+        timeout = [r for r in rows if r["trial"] == 1]
+        self.assertEqual([r["event"] for r in timeout], ["trial_display_start", "episode_timeout"])
+        self.assertTrue(all(r["world"] is None and r["complete"] is False for r in timeout))
+        self.assertEqual({r["trial.block_type"] for r in timeout}, {"MM"})  # the schedule stays readable
+        loaded = SimpleNamespace(session_id="s", trials=ordered, rows=rows, alignments=["trial_display_start"])
+        self.assertEqual([r["trial"] for r in explorer.alignment_rows(loaded, "trial_display_start")], [0, 2])
+        timeline = explorer.behavior_timeline(loaded)["trials"]
+        self.assertEqual(timeline["initiated"], [True, False, True])
+        self.assertEqual(timeline["world"], ["PP", None, "MM"])
 
     def test_previous_and_next_outcomes_use_actual_timestamps_and_ordinal_history(self):
         events = _events([
