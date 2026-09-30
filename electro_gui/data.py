@@ -433,7 +433,7 @@ def _registry(trials: pd.DataFrame, rows: list[dict]) -> list[dict]:
 
 def alignment_keys(rows: Iterable[Mapping[str, Any]]) -> list[str]:
     """Every recorded event the explorer offers as an alignment, plus the outcome union."""
-    return sorted(({r["event"] for r in rows} - HIDDEN_EVENTS) | {"object_outcome"})
+    return sorted(({r["event"] for r in rows} - HIDDEN_EVENTS) | {"object_outcome", "object_touched", "object_avoided"})
 
 
 class LoadedSession:

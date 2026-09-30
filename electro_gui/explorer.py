@@ -28,7 +28,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .analysis import OUTCOMES, _runs
+from .analysis import OUTCOMES, UNION_ALIGNMENTS, _runs
 from .conditions import missing
 from .data import HIDDEN_EVENTS
 
@@ -65,7 +65,8 @@ def alignment_counts(loaded: Any) -> dict[str, int]:
     if "counts" not in cache:
         complete = {t["id"] for t in loaded.trials if t.get("complete") is True}
         counts = Counter(r["event"] for r in loaded.rows if _candidate(r, complete))
-        counts["object_outcome"] = sum(counts.get(k, 0) for k in OUTCOMES)
+        for name, members in UNION_ALIGNMENTS.items():
+            counts[name] = sum(counts.get(k, 0) for k in members)
         cache["counts"] = dict(counts)
     return cache["counts"]
 
@@ -81,9 +82,9 @@ def alignment_rows(loaded: Any, alignment: str) -> list[Mapping[str, Any]]:
     cache = _cache(loaded).setdefault("rows", {})
     if alignment not in cache:
         known = set(getattr(loaded, "alignments", []) or [])
-        if alignment != "object_outcome" and alignment not in known:
+        if alignment not in UNION_ALIGNMENTS and alignment not in known:
             raise KeyError(f"Unknown alignment: {alignment}")
-        events = OUTCOMES if alignment == "object_outcome" else {alignment}
+        events = UNION_ALIGNMENTS.get(alignment, {alignment})
         complete = {t["id"] for t in loaded.trials if t.get("complete") is True}
         rows = [r for r in loaded.rows if r.get("event") in events and _candidate(r, complete)]
         rows.sort(key=lambda r: (float(r["t"]), int(r.get("row_id", 0))))
@@ -155,7 +156,7 @@ def alignment_table(loaded: Any, alignment: str) -> dict:
     table = {"session_id": loaded.session_id, "alignment": alignment, "n": len(rows),
              "row_id": [int(r["row_id"]) for r in rows], "t": [round(a, 6) for a in anchors],
              "trial": [int(r["trial"]) for r in rows],
-             "event": [str(r.get("event")) for r in rows] if alignment == "object_outcome" else None,
+             "event": [str(r.get("event")) for r in rows] if alignment in UNION_ALIGNMENTS else None,
              "object": {"levels": uids, "codes": [uid_index.get(str(r.get("object_uid")), -1) for r in rows]},
              "columns": columns}
     cache[alignment] = table
@@ -248,9 +249,9 @@ def event_times(loaded: Any, event: str) -> dict:
     cache = _cache(loaded).setdefault("events", {})
     if event not in cache:
         known = {r.get("event") for r in loaded.rows} - HIDDEN_EVENTS
-        if event != "object_outcome" and event not in known:
+        if event not in UNION_ALIGNMENTS and event not in known:
             raise KeyError(f"Unknown event: {event}")
-        names = OUTCOMES if event == "object_outcome" else {event}
+        names = UNION_ALIGNMENTS.get(event, {event})
         rows = [r for r in loaded.rows if r.get("event") in names and r.get("trial") is not None and _finite(r.get("t"))
                 and r.get("within_ephys_recording", True) is not False and r.get("within_sync_fit_window", True) is not False]
         rows.sort(key=lambda r: float(r["t"]))

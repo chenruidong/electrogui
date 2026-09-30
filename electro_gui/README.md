@@ -404,7 +404,7 @@ The v0.1 interface, unchanged apart from its URL.
 1. Choose a session and unit. Every recorded unit is listed, including MUA;
    unit IDs are always specific to the chosen source. The first session load
    fingerprints the entire NWB and prepares its event/trial joins.
-2. Choose any recorded alignment event, or the four-event `object_outcome`
+2. Choose any recorded alignment event, or the four-event `object_outcome`, or its pooled halves `object_touched` (prey_capture + predator_contact) and `object_avoided` (prey_miss + predator_avoid)
    union. Set the display interval, 25/50/100 ms bins, Gaussian smoothing up
    to 100 ms, and a separate count interval inside the displayed interval.
 3. Choose **Verified stable** or **All complete** explicitly. Verified stable

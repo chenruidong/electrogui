@@ -21,7 +21,8 @@
 
   // --------------------------------------------------------------- names
   const EVENT_NAMES = {
-    object_outcome: 'object outcome (any)', prey_capture: 'prey captured', prey_miss: 'prey missed',
+    object_outcome: 'object outcome (any)', object_touched: 'object touched (prey captured + predator touched)',
+    object_avoided: 'object avoided (prey missed + predator avoided)', prey_capture: 'prey captured', prey_miss: 'prey missed',
     predator_contact: 'predator touched', predator_avoid: 'predator avoided', object_visible_onset: 'object visible',
     object_fully_visible: 'object fully visible', object_offset: 'object offset',
     joystick_move_onset: 'joystick onset', joystick_move_offset: 'joystick offset', joystick_peak: 'joystick peak',
@@ -37,7 +38,7 @@
     punishment_cue_onset: 'punishment cue on', sound_onset: 'sound onset', token_change: 'token change',
   };
   const eventLabel = e => EVENT_NAMES[e] || C.humanize(e);
-  const PINNED_ALIGN = ['object_outcome', 'prey_capture', 'predator_contact', 'prey_miss', 'predator_avoid',
+  const PINNED_ALIGN = ['object_outcome', 'object_touched', 'object_avoided', 'prey_capture', 'predator_contact', 'prey_miss', 'predator_avoid',
     'object_visible_onset', 'trial_initiation', 'joystick_move_onset', 'goal_release', 'reward_valve_onset'];
   const OBJECT_EVENTS = /^(object_|prey_|predator_(contact|avoid)|gaze_on_object)/;
   function eventCategory(e) {

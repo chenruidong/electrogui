@@ -93,7 +93,7 @@ class ExplorerPayloadTests(unittest.TestCase):
         # row can belong to an object that was never presented.
         self.assertEqual(HIDDEN_EVENTS, {"object_spawn"})
         spawn = {"event": "object_spawn", "trial": 1, "t": 1.0, "row_id": 10 ** 6, "object_uid": "x"}
-        self.assertEqual(alignment_keys([spawn, {"event": "trial_initiation"}]), ["object_outcome", "trial_initiation"])
+        self.assertEqual(alignment_keys([spawn, {"event": "trial_initiation"}]), ["object_avoided", "object_outcome", "object_touched", "trial_initiation"])
         with mock.patch.object(self.loaded, "rows", [*self.loaded.rows, spawn]):
             summary = explorer.session_summary(self.loaded)
             self.assertNotIn("object_spawn", summary["events"])
@@ -106,6 +106,19 @@ class ExplorerPayloadTests(unittest.TestCase):
                        "alignment": "object_spawn", "recipe": {"enabled": False, "cohorts": []}}
             with self.assertRaises(ValueError):
                 prepare_rows(self.loaded, request, [2])
+
+    def test_touched_and_avoided_pool_their_outcome_events(self):
+        touched = {"prey_capture", "predator_contact"}
+        avoided = {"prey_miss", "predator_avoid"}
+        for key, members in (("object_touched", touched), ("object_avoided", avoided)):
+            rows = explorer.alignment_rows(self.loaded, key)
+            self.assertTrue(rows)
+            self.assertEqual({r["event"] for r in rows} - members, set())
+            self.assertGreaterEqual(explorer.event_times(self.loaded, key)["n"], len(rows))  # no complete-trial filter
+            self.assertEqual(explorer.alignment_counts(self.loaded)[key], len(rows))
+        self.assertEqual(len(explorer.alignment_rows(self.loaded, "object_touched"))
+                         + len(explorer.alignment_rows(self.loaded, "object_avoided")),
+                         len(explorer.alignment_rows(self.loaded, "object_outcome")))
 
     def test_event_times_cover_every_valid_occurrence(self):
         name = next(r["event"] for r in self.loaded.rows if r["event"] in explorer.OUTCOMES)

@@ -18,6 +18,12 @@ from .conditions import default_recipe, group_value, missing, select, validate
 from .data import HIDDEN_EVENTS
 
 OUTCOMES = {"prey_capture", "prey_miss", "predator_contact", "predator_avoid"}
+# Pooled alignments: a name that stands for several recorded outcome events.
+UNION_ALIGNMENTS = {
+    "object_outcome": OUTCOMES,
+    "object_touched": {"prey_capture", "predator_contact"},
+    "object_avoided": {"prey_miss", "predator_avoid"},
+}
 
 
 def _finite(x: Any) -> bool:
@@ -98,7 +104,7 @@ def prepare_rows(loaded: Any, request: Mapping[str, Any], unit_ids: Sequence[Any
     if errors:
         raise ValueError("; ".join(errors))
     alignment = request.get("alignment", "object_outcome")
-    if alignment != "object_outcome" and alignment not in set(getattr(loaded, "alignments", []) or []):
+    if alignment not in UNION_ALIGNMENTS and alignment not in set(getattr(loaded, "alignments", []) or []):
         known = {r.get("event") for r in getattr(loaded, "rows", []) if r.get("event")} - HIDDEN_EVENTS
         if alignment not in known:
             raise ValueError(f"Unknown alignment: {alignment}")
@@ -108,8 +114,8 @@ def prepare_rows(loaded: Any, request: Mapping[str, Any], unit_ids: Sequence[Any
     candidates = []
     for row in getattr(loaded, "rows", []):
         event = row.get("event")
-        if alignment == "object_outcome":
-            if event not in OUTCOMES: continue
+        if alignment in UNION_ALIGNMENTS:
+            if event not in UNION_ALIGNMENTS[alignment]: continue
         elif event != alignment:
             continue
         tid = _trial_id(row); trial = trials.get(tid)

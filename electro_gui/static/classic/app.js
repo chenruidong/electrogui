@@ -146,7 +146,7 @@
   function fillAlignments(kind, selected) {
     const prefix=kind==='unit'?'':'pop', search=$(kind==='unit'?'alignmentSearch':'popAlignmentSearch'), select=$(inputId(kind,'alignment'));
     const query=(search?.value||'').toLowerCase(); const all=state.alignments[kind] || [];
-    const groups=new Map(); all.filter(a=>a===selected||a.toLowerCase().includes(query)).forEach(a=>{const key=['object_outcome','trial_initiation'].includes(a)?'Common':state.session?.alignment_fields?.find(f=>f.key===a)?.category||alignmentCategory(a);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(a);});
+    const groups=new Map(); all.filter(a=>a===selected||a.toLowerCase().includes(query)).forEach(a=>{const key=['object_outcome','object_touched','object_avoided','trial_initiation'].includes(a)?'Common':state.session?.alignment_fields?.find(f=>f.key===a)?.category||alignmentCategory(a);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(a);});
     select.replaceChildren(...[...groups].map(([cat,values])=>{const og=document.createElement('optgroup');og.label=cat;values.forEach(v=>{const o=new Option(v,v);o.selected=v===selected || (!selected && v==='object_outcome');og.append(o);});return og;}));
     if (!select.value && all.length) select.value=selected||all[0];
     const help=$(kind==='unit'?'alignmentHelp':'popAlignmentHelp'); if(help) help.textContent=state.session?.alignment_fields?.find(f=>f.key===select.value)?.description||'Recorded event anchor; technical synchronization events are grouped separately.';
