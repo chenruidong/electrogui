@@ -145,7 +145,7 @@
 
   const D = {
     catalog: [], summary: null, units: [], tables: new Map(), rasters: new Map(), events: new Map(),
-    inflight: new Map(), sessionToken: 0, layout: null, model: null, views: {}, fatal: null,
+    inflight: new Map(), sessionToken: 0, layout: null, model: null, views: {}, configs: [], fatal: null,
     unitMap: new Map(), popspans: new Map(), stab: null, fits: new Map(), fitErrors: new Map(), fitPending: null,
     heatCache: new Map(), view3d: {yaw: -0.6, pitch: 0.35}, cursor: null, playTimer: 0, popLayout: null, popFit: null, popModel: null,
     probes: new Map(), probeErrors: new Map(), probePending: null, probeShown: null, popReq: null,
@@ -1185,18 +1185,73 @@
   }
 
   async function openViews() {
-    let saved = {};
+    let saved = {}, cfg = null;
     try { saved = await getJSON('/api/views'); } catch (e) { saved = null; }
+    try { cfg = await getJSON('/api/configs'); } catch (e) { cfg = null; }   // an older server has no config route: no section
     D.views = saved || {};
+    D.configs = cfg && Array.isArray(cfg.configs) ? cfg.configs : [];
     const savedHtml = saved === null ? '<div class="pop-note">Saved views are unavailable on this server.</div>'
       : Object.keys(saved).length ? Object.entries(saved).sort((a, b) => String(b[1].saved).localeCompare(String(a[1].saved))).map(([name, v]) =>
         `<div class="item" style="padding-right:4px"><button type="button" class="item" data-view="${esc(name)}" style="padding:0"><span class="main"><b>${esc(name)}</b><small>${esc(summarizeState(v.state))} · ${esc(v.saved || '')}</small></span></button><button type="button" class="close" data-vdel="${esc(name)}" title="Delete" aria-label="Delete view" style="border:0;background:none;color:var(--muted);width:30px;height:30px">×</button></div>`).join('')
       : '<div class="pop-note">No saved views yet. Saved views live on this server, so every device that opens it sees them.</div>';
     const html = popHead('Views') + `<div class="pop-body"><div class="pop-group">Templates · keep the current unit</div>` +
       TEMPLATES.map((t, i) => `<button type="button" class="item" data-tpl="${i}"><span class="main"><b>${esc(t.name)}</b><small>${esc(t.hint)}</small></span></button>`).join('') +
+      configsHtml(cfg) +
       `<div class="pop-group">Saved views · restore unit and settings</div>${savedHtml}</div>` +
-      `<div class="pop-foot"><button type="button" class="small" data-copylink>Copy link</button><button type="button" class="primary" data-saveview${saved === null ? ' disabled' : ''}>Save current view…</button></div>`;
+      `<div class="pop-foot" style="flex-wrap:wrap"><button type="button" class="small" data-copylink>Copy link</button><button type="button" class="small" data-openconfig>Open config file…</button><button type="button" class="primary" data-saveview${saved === null ? ' disabled' : ''}>Save current view…</button></div>`;
     openPop($('viewsBtn').offsetParent ? $('viewsBtn') : $('menuBtn'), html, {wide: true});
+  }
+  // Config files: JSON view states kept in the repository (see electro_gui/configs.py), listed under their `group`.
+  function configsHtml(cfg) {
+    if (!cfg) return '';
+    const grouped = D.configs.some(c => c.group);
+    let last = null;
+    const items = D.configs.map((c, i) => {
+      const head = grouped && c.group !== last ? `<div class="pop-note" style="padding:8px 10px 2px"><b>${esc(c.group || 'Other')}</b></div>` : '';
+      last = c.group;
+      return `${head}<button type="button" class="item" data-cfg="${i}" title="${esc(c.note ? `${c.file} — ${c.note}` : c.file)}"><span class="main"><b>${esc(c.title)}</b><small>${esc(c.hint || summarizeState(c.state))}</small></span></button>`;
+    }).join('');
+    const bad = (cfg.errors || []).slice(0, 3).map(x => `${x.file}: ${String(x.error).slice(0, 90)}`).join(' · ');
+    return `<div class="pop-group">Config files · restore a saved figure</div>` +
+      (items || '<div class="pop-note">No config files found under --config-dir.</div>') +
+      (bad ? `<div class="pop-note">Skipped ${(cfg.errors || []).length} unreadable file(s): ${esc(bad)}</div>` : '');
+  }
+  // The three shapes electro_gui/configs.py accepts: a config, a GUI settings export, a bare state.
+  function readConfigObject(obj, name) {
+    const stem = String(name || 'config').replace(/\.json$/i, '');
+    const plain = o => o && typeof o === 'object' && !Array.isArray(o);
+    if (!plain(obj)) throw new Error('the top level is not a JSON object');
+    if ('electro_gui_config' in obj) {
+      if (obj.electro_gui_config !== 1) throw new Error(`unsupported electro_gui_config version ${JSON.stringify(obj.electro_gui_config)}`);
+      if (!plain(obj.state)) throw new Error('"state" must be an object');
+      return {title: typeof obj.title === 'string' && obj.title.trim() ? obj.title.trim() : stem, state: obj.state};
+    }
+    if ('state' in obj) {
+      if (plain(obj.state) && typeof obj.tool === 'string') return {title: stem, state: obj.state};
+      throw new Error('it has a "state" key but is neither a config ("electro_gui_config": 1) nor a GUI settings export');
+    }
+    if ('align' in obj || 'unit' in obj) return {title: stem, state: obj};
+    throw new Error('not an electro_gui config, GUI settings export or bare view state');
+  }
+  // Only known state keys are taken (title, hint, ... never enter S) and the result goes through sanitize() in applyView.
+  // A config that names no session or unit keeps the current ones; an unavailable session is refused before anything changes.
+  async function applyConfig(title, raw) {
+    const state = {};
+    for (const k of Object.keys(DEFAULTS)) if (k in raw) state[k] = clone(raw[k]);
+    if (typeof state.session !== 'string') state.session = S.session;
+    if (!Number.isInteger(state.unit)) state.unit = S.unit;
+    if (!state.session || !D.catalog.some(s => s.id === state.session)) { toast(`Config “${title}”: session ${state.session || '(none)'} is not available on this server.`, true); return; }
+    toast(`Config: ${title}`);
+    await applyView({state});
+  }
+  async function openConfigFile(file) {
+    try {
+      if (file.size > 256 * 1024) throw new Error('the file is larger than 256 KiB');
+      let obj;
+      try { obj = JSON.parse(await file.text()); } catch (e) { throw new Error(`invalid JSON (${e.message})`); }
+      const c = readConfigObject(obj, file.name);
+      await applyConfig(c.title, c.state);
+    } catch (e) { toast(`Could not open ${file.name}: ${e.message}`, true); }
   }
   function summarizeState(s) {
     if (!s) return '';
@@ -1260,7 +1315,7 @@
   function openMenu() {
     const theme = localStorage.getItem('eg-theme') || 'auto';
     const other = S.mode === 'population' ? ['raster', 'Rasters', 'one unit: raster over PSTH'] : ['population', 'Population', 'many neurons: heatmap, components, trajectories'];
-    const html = popHead('electro_gui') + `<div class="pop-body"><button type="button" class="item" data-menu="mode:${other[0]}"><span class="main"><b>Switch to ${other[1]}</b><small>${other[2]}</small></span></button><button type="button" class="item" data-menu="views"><span class="main"><b>Views & templates</b><small>apply a template, save or restore a view, copy a link</small></span></button>` +
+    const html = popHead('electro_gui') + `<div class="pop-body"><button type="button" class="item" data-menu="mode:${other[0]}"><span class="main"><b>Switch to ${other[1]}</b><small>${other[2]}</small></span></button><button type="button" class="item" data-menu="views"><span class="main"><b>Views & templates</b><small>apply a template or config file, save or restore a view, copy a link</small></span></button>` +
       `<button type="button" class="item" data-menu="export"><span class="main"><b>Export</b><small>SVG, PNG, CSV, settings</small></span></button><div class="editor">` +
       `<label class="row"><span>Session</span><select id="menuSession">${D.catalog.map(s => `<option value="${esc(s.id)}"${s.id === S.session ? ' selected' : ''}>${esc(shortSession(s.id))}</option>`).join('')}</select></label>` +
       `<div class="row"><span>Theme</span><div class="seg" id="themeSeg">${['auto', 'light', 'dark'].map(t => `<button type="button" data-theme="${t}" class="${theme === t ? 'on' : ''}">${t}</button>`).join('')}</div></div>` +
@@ -2774,6 +2829,7 @@
     $('unitBtn').addEventListener('click', () => D.units.length && openUnitPicker());
     $('alignBtn').addEventListener('click', () => D.summary && openAlignPicker());
     $('viewsBtn').addEventListener('click', openViews);
+    $('cfgFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) openConfigFile(f); });
     $('exportBtn').addEventListener('click', openExport);
     $('menuBtn').addEventListener('click', openMenu);
     $('scrim').addEventListener('click', closePop);
@@ -2825,6 +2881,8 @@
       if (t.dataset.ua) { const a = t.dataset.ua; S.unitArea = S.unitArea.includes(a) ? S.unitArea.filter(x => x !== a) : [...S.unitArea, a]; t.classList.toggle('on'); fillUnitItems($('unitSearch').value); saveState(); return; }
       if (t.dataset.tpl) { closePop(); applyTemplate(TEMPLATES[Number(t.dataset.tpl)]); return; }
       if (t.dataset.view) { closePop(); applyView(D.views[t.dataset.view]); return; }
+      if (t.dataset.cfg) { closePop(); const c = D.configs[Number(t.dataset.cfg)]; if (c) applyConfig(c.title, c.state); return; }
+      if (t.hasAttribute('data-openconfig')) { closePop(); $('cfgFile').click(); return; }
       if (t.dataset.vdel) { if (confirm(`Delete saved view “${t.dataset.vdel}”?`)) getJSON('/api/views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: t.dataset.vdel, delete: true})}).then(openViews).catch(err => toast(err.message, true)); return; }
       if (t.hasAttribute('data-saveview')) { openSaveView(); return; }
       if (t.hasAttribute('data-copylink')) { saveState(); setTimeout(() => navigator.clipboard.writeText(location.href).then(() => toast('Link copied — it restores this exact view.'), () => toast(location.href)), 300); return; }

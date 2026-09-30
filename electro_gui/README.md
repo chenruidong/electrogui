@@ -45,6 +45,10 @@ python -m electro_gui --session-file /path/to/sub-Subject_ses-Date_session.nwb
 Both flags can be repeated. Explicit files must have the exact assembled-session
 filename and matching embedded session identity. No external behavioral data,
 prepared bundles or scene files are substituted when a field is missing.
+
+`--config-dir DIR` (repeatable, default `output/presentation`, relative to the current
+directory; a missing directory is simply empty) names where the Views menu looks
+for JSON config files; see **Config files** below.
 The optional canonical trial-strategy classifier is resolved through the
 repository's sibling `mworks/imitation` or `IMITATION_REPO` environment variable.
 Only its code is used, with its fingerprint recorded. If it is unavailable,
@@ -269,6 +273,58 @@ drawn); PSTHs, bars, counts and exports always use every row.
   marker times, key fields) and settings JSON.  CSVs start with a `#` line of
   provenance.
 
+### Config files
+
+A **config file** is a JSON view state kept in the repository, so a figure can be
+restored from a file that is reviewed and versioned with the analysis instead of
+from a link or a server-side saved view.  The deck configs live next to their
+slides, in `output/presentation/<deck>/electro_gui_configs/*.json`; launching from the
+repository root finds them all (`--config-dir output/presentation` is the default), and
+`--config-dir output/presentation/<deck>/electro_gui_configs` (or any folder of
+`*.json`) lists just one.  Views menu → **Config files** shows them under their
+`group`; a click applies the file, and **Open config file…** in the same menu
+applies any `.json` from disk (read in the browser, never uploaded).  The folder
+is re-scanned each time the menu opens, so an edited file needs no restart.
+
+```json
+{"electro_gui_config": 1,
+ "title": "Unit 893: touch, predator vs prey",
+ "hint": "touches aligned to contact, colour = role, style = world",
+ "group": "Slide 6 · example neurons",
+ "slide": 6,
+ "note": "shown as a tooltip; free text for the reader of the file",
+ "state": {"session": "sub-Ravel_ses-2026_09_15", "unit": 893, "align": "object_outcome",
+           "filters": [{"k": "action", "v": ["touch"]}], "color": "role", "style": "world",
+           "win": [-2.2, 0.6], "cw": [-0.5, 0]}}
+```
+
+Only `electro_gui_config` (the format version, `1`) and `state` are required;
+`title` falls back to the file name, and `hint`, `group`, `slide` (a number or a
+label, used only to order the list) and `note` are optional.  `state` is the
+explorer's own settings object, the one in the address bar's `#s=…` and in every
+export: keys not named here take the GUI defaults, except `session` and `unit`,
+which stay as they are when the file names none.  The page passes it through the
+same validation as a saved view (unknown keys are dropped, out-of-range values
+are clamped or reset), so a typo in a key or value is ignored silently; the
+test-suite checks every deck config against the page's key list and types for
+that reason.  If `state.session` is not on this server the file is refused with
+a message and nothing changes.  Two other shapes are accepted, so no
+conversion is needed: the GUI's own **Settings & provenance · JSON** export and
+a bare state object (one with an `align` or `unit` key).  That makes the round
+trip a copy: export the figure you like, save the file into a deck's
+`electro_gui_configs/` (its title is then the file name), and, to give it a
+title, hint and slide, wrap the export's `state` in the format above.  Files that are none of these, larger than 256 KiB, dotfiles and
+macOS `._*` sidecars are skipped; unreadable files are listed at the bottom of
+the section instead of stopping the menu.  `GET /api/configs` returns
+`{configs, errors}` and there is no write route.
+
+How they differ from the other ways to restore a view.  **Templates** are built
+into the page, change the figure but keep your unit and session.  **Saved views**
+are made in the GUI and live in one server-side file
+(`--views-file`, under the git-ignored `output/`).  **Config files** are
+hand-written or exported, live in git with the deck, and restore the whole view
+including the session and unit.
+
 ### Explorer API
 
 `GET /api/explorer/session?session=` (units with peak channels, alignment
@@ -287,7 +343,7 @@ stable trials as base64 bitmasks over complete trials),
 (roster, window, grid, weighting, method, groups as row IDs → coordinates,
 loadings, group means, variance, diagnostics) and `POST /api/explorer/popprobe`
 (the same body plus `probe_times` → every trial's or event's projection at
-those times); `GET`/`POST /api/views`.  The session
+those times); `GET`/`POST /api/views`; `GET /api/configs`.  The session
 must first be opened with a `load` job, which verifies the file.  Responses are
 gzip-compressed when the client accepts it.
 
