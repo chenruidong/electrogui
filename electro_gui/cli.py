@@ -26,6 +26,10 @@ def add_arguments(parser):
     parser.add_argument("--token", help="Access token for a non-loopback --host (default: random per launch).")
     parser.add_argument("--views-file", default="output/electro_gui/saved_views.json",
                         help="Named explorer views, shared across devices (default: %(default)s).")
+    parser.add_argument("--config-dir", action="append",
+                        help="Directory of JSON config files for the Views menu (a deck's electro_gui_configs/, or a folder "
+                             "holding decks); repeat for several. Relative to the current directory; a missing one is empty "
+                             "(default: output/presentation).")
     parser.add_argument("--no-browser", action="store_true", help="Print the URL without opening a browser.")
     return parser
 
@@ -36,7 +40,7 @@ def run(args):
     from .server import Application, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=Path(args.cache_dir).expanduser())
-    application = Application(store, views_path=args.views_file)
+    application = Application(store, views_path=args.views_file, config_dirs=args.config_dir if args.config_dir is not None else ["output/presentation"])
     host = "0.0.0.0" if args.lan else args.host
     token = args.token  # an explicit token also protects a loopback server fronted by a proxy (tailscale serve)
     if token is None and host not in ("127.0.0.1", "localhost", "::1"):

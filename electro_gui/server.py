@@ -21,14 +21,16 @@ from . import __version__
 from .data import SessionStore
 from .exports import export_csv, export_json, export_membership, export_statistics, export_svg
 from .annotations import annotate_result
+from .configs import discover_configs
 from .preview import preview
 from . import explorer
 
 
 class Application:
-    def __init__(self, store: SessionStore, views_path: str | Path | None = None):
+    def __init__(self, store: SessionStore, views_path: str | Path | None = None, config_dirs=()):
         self.store = store
         self.views_path = Path(views_path).expanduser() if views_path is not None else None
+        self.config_dirs = [Path(d).expanduser().absolute() for d in config_dirs or ()]
         self.views_lock = threading.Lock()
         self.jobs = OrderedDict()
         self.preview_jobs = OrderedDict()
@@ -251,6 +253,10 @@ class Application:
             os.replace(tmp, self.views_path)
             return views
 
+    def configs(self):
+        """JSON config files under ``--config-dir`` (see ``configs.py``); re-scanned on every call."""
+        return discover_configs(self.config_dirs)
+
     def snapshot(self, job_id):
         with self.lock:
             if job_id in self.jobs:
@@ -352,6 +358,8 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
                     self._send(application.explore(url.path.rsplit("/", 1)[1], parse_qs(url.query)))
                 elif url.path == "/api/views":
                     self._send(application.views())
+                elif url.path == "/api/configs":
+                    self._send(application.configs())
                 elif url.path.startswith("/api/jobs/"):
                     parts = url.path.strip("/").split("/")
                     if len(parts) not in (3, 4):
