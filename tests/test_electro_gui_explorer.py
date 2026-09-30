@@ -14,12 +14,13 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 import numpy as np
 
 from electro_gui import explorer
 from electro_gui.analysis import compute_unit, prepare_rows
-from electro_gui.data import SessionStore
+from electro_gui.data import HIDDEN_EVENTS, SessionStore, alignment_keys
 from electro_gui.server import Application, make_server
 from tests.synthetic_session import write_synthetic_session_file
 
@@ -85,6 +86,26 @@ class ExplorerPayloadTests(unittest.TestCase):
                            "stability": policy, "alignment": "object_outcome", "recipe": {"enabled": False, "cohorts": []}}
                 rows, _, _ = prepare_rows(self.loaded, request, [2])
                 self.assertEqual(shown, {r["row_id"] for r in rows}, (policy, pre, post))
+
+    def test_object_spawn_is_not_offered_anywhere(self):
+        # A trial the animal never initiates times out with every object spawned
+        # and none shown (sub-Ravel_ses-2026_09_15 trial 314), so a spawn-aligned
+        # row can belong to an object that was never presented.
+        self.assertEqual(HIDDEN_EVENTS, {"object_spawn"})
+        spawn = {"event": "object_spawn", "trial": 1, "t": 1.0, "row_id": 10 ** 6, "object_uid": "x"}
+        self.assertEqual(alignment_keys([spawn, {"event": "trial_initiation"}]), ["object_outcome", "trial_initiation"])
+        with mock.patch.object(self.loaded, "rows", [*self.loaded.rows, spawn]):
+            summary = explorer.session_summary(self.loaded)
+            self.assertNotIn("object_spawn", summary["events"])
+            self.assertNotIn("object_spawn", [a["key"] for a in summary["alignments"]])
+            with self.assertRaises(KeyError):
+                explorer.event_times(self.loaded, "object_spawn")
+            with self.assertRaises(KeyError):
+                explorer.alignment_rows(self.loaded, "object_spawn")
+            request = {"pre": -0.1, "post": 0.5, "bin": 0.05, "sigma": 0.05, "stability": "all_complete",
+                       "alignment": "object_spawn", "recipe": {"enabled": False, "cohorts": []}}
+            with self.assertRaises(ValueError):
+                prepare_rows(self.loaded, request, [2])
 
     def test_event_times_cover_every_valid_occurrence(self):
         name = next(r["event"] for r in self.loaded.rows if r["event"] in explorer.OUTCOMES)

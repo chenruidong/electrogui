@@ -79,7 +79,20 @@ with Filter / Group / Markers / Display tabs.
   by default) and area.  Units are always labelled with both unit ID and peak
   channel, since the channel survives a re-sort.  The alignment picker lists
   every recorded event with its candidate count, common ones first;
-  `object outcome (any)` is the four-outcome union.
+  `object outcome (any)` is the four-outcome union.  `object_spawn` is
+  deliberately not offered (`HIDDEN_EVENTS` in `data.py`, also absent from
+  markers and the events API): it is the task creating an object, and a trial
+  the animal never initiates times out with every object spawned and none
+  shown (`sub-Ravel_ses-2026_09_15` trial 314), so a spawn-aligned row can be an
+  object that never appeared and has no action.  Use `object_visible_onset`.
+  For the same reason every event row tied to a spawned object that was never
+  shown and never resolved (no `object_visible_onset`, no outcome) is left out
+  of the session — its spawn, `gaze_on_object_*` and `saccade_target` rows — and
+  opening the session says how many were hidden.  Gaze on the agent or the
+  starting point stays.  Such objects occur only in trials the animal never
+  initiated (all `episode_timeout`; 4 objects in 09_15, 20 in 09_02, 52 in 09_01,
+  192 in 09_04, none in 08_26).  Trial-level fields still count them, so a trial
+  with an unseen object is never classified from the shown ones alone.
 - **Filter.**  World, role and action are one-tap chips with live counts (counts
   honour every other filter and the eligibility rule).  *Filter on any field*
   opens a searchable list — Common, History, Task & trial, Timing (s from

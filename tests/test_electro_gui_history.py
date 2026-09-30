@@ -47,6 +47,47 @@ class ElectroGuiHistoryTests(unittest.TestCase):
         self.assertEqual(rows[2]["row_id"], 2)
         self.assertEqual(rows[2]["outcome"], "prey_capture")
 
+    def test_rows_on_objects_that_were_never_shown_are_hidden(self):
+        # A trial the animal never initiates times out with every object spawned
+        # and none shown (sub-Ravel_ses-2026_09_15 trial 314; also 09_01, 09_02,
+        # 09_04).  Gaze and saccade events tied to such an object are not about
+        # anything that appeared, so its rows are dropped.  Gaze on the agent or
+        # the starting point in the same trial, and every row of a shown object,
+        # stay, with their original row ids.
+        spawn = {"is_bar": False}
+        events = _events([
+            {"event": "object_spawn", "trial_index": 0, "object_uid": "ghost-1", "kind": "-", "info": {**spawn, "ordinal": 1}},
+            {"event": "object_spawn", "trial_index": 0, "object_uid": "ghost-2", "kind": "+", "info": {**spawn, "ordinal": 2}},
+            {"event": "gaze_on_object_onset", "trial_index": 0, "t_ephys_s": 1.0, "object_uid": "ghost-1", "kind": "-", "info": {}},
+            {"event": "saccade_target", "trial_index": 0, "t_ephys_s": 1.1, "object_uid": "ghost-2", "kind": "+", "info": {}},
+            {"event": "gaze_on_object_onset", "trial_index": 0, "t_ephys_s": 1.2, "object_uid": "agent", "info": {}},
+            {"event": "episode_timeout", "trial_index": 0, "t_ephys_s": 9.0},
+            {"event": "object_visible_onset", "trial_index": 1, "t_ephys_s": 11.0, "object_uid": "prey-1", "kind": "+", "info": {**spawn, "ordinal": 1}},
+            {"event": "gaze_on_object_onset", "trial_index": 1, "t_ephys_s": 11.5, "object_uid": "prey-1", "kind": "+", "info": {**spawn, "ordinal": 1}},
+            {"event": "prey_capture", "trial_index": 1, "t_ephys_s": 12.0, "object_uid": "prey-1", "kind": "+", "info": {**spawn, "ordinal": 1}},
+            # A shown object and an unseen one in the same trial: the unseen
+            # object's rows go, but the trial stays unresolved rather than being
+            # classified from the shown object alone.
+            {"event": "object_visible_onset", "trial_index": 2, "t_ephys_s": 21.0, "object_uid": "prey-2", "kind": "+", "info": {**spawn, "ordinal": 1}},
+            {"event": "prey_capture", "trial_index": 2, "t_ephys_s": 22.0, "object_uid": "prey-2", "kind": "+", "info": {**spawn, "ordinal": 1}},
+            {"event": "object_spawn", "trial_index": 2, "object_uid": "ghost-3", "kind": "+", "info": {**spawn, "ordinal": 2}},
+            {"event": "gaze_on_object_onset", "trial_index": 2, "t_ephys_s": 22.5, "object_uid": "ghost-3", "kind": "+", "info": {}},
+        ])
+        trials = pd.concat([_trials(start_time=10.0 * i, stop_time=10.0 * i + 9) for i in range(3)])
+        trials.index = pd.Index([0, 1, 2], name="trial_index")
+        report = {}
+        ordered, rows = _enrich(trials, events, classify=lambda row, include_bars=False: "PP", report=report)
+        kept = [(r["row_id"], r["event"], r["object_uid"]) for r in rows]
+        self.assertEqual(kept, [(4, "gaze_on_object_onset", "agent"), (5, "episode_timeout", None),
+                                (6, "object_visible_onset", "prey-1"), (7, "gaze_on_object_onset", "prey-1"),
+                                (8, "prey_capture", "prey-1"), (9, "object_visible_onset", "prey-2"),
+                                (10, "prey_capture", "prey-2")])
+        self.assertEqual(report, {"unseen_objects": 3, "unseen_rows": 6, "unseen_trials": [0, 2]})
+        by_id = {t["id"]: t for t in ordered}
+        self.assertEqual(by_id[1]["intention"], "PP")
+        self.assertIsNone(by_id[2]["intention"])
+        self.assertIsNone(by_id[2]["trial_error_free"])
+
     def test_previous_and_next_outcomes_use_actual_timestamps_and_ordinal_history(self):
         events = _events([
             {"event": "object_visible_onset", "t_ephys_s": 1.0, "object_uid": "prey-1", "kind": "+", "info": {"is_bar": False, "ordinal": 1}},

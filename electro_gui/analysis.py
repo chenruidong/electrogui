@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from .conditions import default_recipe, group_value, missing, select, validate
+from .data import HIDDEN_EVENTS
 
 OUTCOMES = {"prey_capture", "prey_miss", "predator_contact", "predator_avoid"}
 
@@ -98,7 +99,7 @@ def prepare_rows(loaded: Any, request: Mapping[str, Any], unit_ids: Sequence[Any
         raise ValueError("; ".join(errors))
     alignment = request.get("alignment", "object_outcome")
     if alignment != "object_outcome" and alignment not in set(getattr(loaded, "alignments", []) or []):
-        known = {r.get("event") for r in getattr(loaded, "rows", []) if r.get("event")}
+        known = {r.get("event") for r in getattr(loaded, "rows", []) if r.get("event")} - HIDDEN_EVENTS
         if alignment not in known:
             raise ValueError(f"Unknown alignment: {alignment}")
     effective_recipe = copy.deepcopy(recipe)

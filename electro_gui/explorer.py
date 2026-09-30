@@ -29,6 +29,7 @@ import numpy as np
 
 from .analysis import OUTCOMES, _runs
 from .conditions import missing
+from .data import HIDDEN_EVENTS
 
 GUARD_S = 0.4          # analysis.prepare_rows padding guard
 MAX_WINDOW_S = 10.0    # analysis._validate_settings display limit
@@ -226,7 +227,7 @@ def event_times(loaded: Any, event: str) -> dict:
     """All valid occurrences of one recorded event (or the outcome union)."""
     cache = _cache(loaded).setdefault("events", {})
     if event not in cache:
-        known = {r.get("event") for r in loaded.rows}
+        known = {r.get("event") for r in loaded.rows} - HIDDEN_EVENTS
         if event != "object_outcome" and event not in known:
             raise KeyError(f"Unknown event: {event}")
         names = OUTCOMES if event == "object_outcome" else {event}
@@ -298,7 +299,7 @@ def session_summary(loaded: Any) -> dict:
     return {"session_id": loaded.session_id, "source": meta["source"], "duration_s": meta["duration_s"],
             "counts": meta["counts"], "notices": meta.get("notices", []), "units": meta["units"],
             "alignments": [{"key": a, "n": int(counts.get(a, 0))} for a in loaded.alignments],
-            "events": sorted({r.get("event") for r in loaded.rows if r.get("event")})}
+            "events": sorted({r.get("event") for r in loaded.rows if r.get("event")} - HIDDEN_EVENTS)}
 
 
 # --------------------------------------------------------------------------- #

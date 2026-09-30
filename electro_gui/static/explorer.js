@@ -23,7 +23,7 @@
   const EVENT_NAMES = {
     object_outcome: 'object outcome (any)', prey_capture: 'prey captured', prey_miss: 'prey missed',
     predator_contact: 'predator touched', predator_avoid: 'predator avoided', object_visible_onset: 'object visible',
-    object_fully_visible: 'object fully visible', object_spawn: 'object spawn', object_offset: 'object offset',
+    object_fully_visible: 'object fully visible', object_offset: 'object offset',
     joystick_move_onset: 'joystick onset', joystick_move_offset: 'joystick offset', joystick_peak: 'joystick peak',
     joystick_reversal: 'joystick reversal', agent_move_onset: 'agent move onset', agent_move_offset: 'agent move offset',
     agent_align_object: 'agent aligned with object', trial_initiation: 'trial initiation', goal_release: 'goal release',
@@ -334,6 +334,8 @@
       S.roster = S.roster.filter(id => D.unitMap.has(id));
       if (!D.units.some(u => u.id === S.unit)) S.unit = (unitList()[0] || D.units[0]).id;
       if (!summary.alignments.some(a => a.key === S.align)) S.align = 'object_outcome';
+      // A saved marker on an event this session no longer offers (e.g. the hidden object_spawn) would 404.
+      S.markers = S.markers.filter(m => [m.e, m.end].every(e => !e || e === 'object_outcome' || summary.events.includes(e)));
       D.fatal = null;
       for (const n of summary.notices || []) toast(n);
       saveState();

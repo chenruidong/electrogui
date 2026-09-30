@@ -18,6 +18,13 @@ from imitation_phys.session_stability import get_session_stability
 
 
 _OUTCOMES = {"prey_capture", "prey_miss", "predator_contact", "predator_avoid"}
+# Recorded events the explorer never offers as an alignment, marker or event
+# list.  object_spawn is the task creating an object, not the object appearing:
+# a trial the animal never initiates times out with every object spawned and
+# none shown (sub-Ravel_ses-2026_09_15 trial 314), so a spawn-aligned row can
+# belong to an object that was never presented and has no role outcome.
+# object_visible_onset is the anchor for "the object is on screen".
+HIDDEN_EVENTS = frozenset({"object_spawn"})
 # Their value (info.tokens_at_contact) is the token count the trial pays out.
 _GOAL_CONTACTS = {"goal_contact_rewarded", "goal_contact_empty"}
 _UNAVAILABLE = {
@@ -185,8 +192,11 @@ def _joystick_directions(events: pd.DataFrame, joystick) -> dict:
     return {(int(r.trial_index), str(r.object_uid)): r.direction for r in epochs.itertuples(index=False)}
 
 
-def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None, joystick=None):
-    """Join the full chronology before selection; never fill missing worlds."""
+def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None, joystick=None, report: dict | None = None):
+    """Join the full chronology before selection; never fill missing worlds.
+
+    Rows tied to an object that was never shown are left out (see ``unseen``
+    below); ``report``, when given, is filled with what was left out."""
     from imitation_phys.decoding import object_outcomes
     canonical = object_outcomes(events)  # Validates bar flags against recorded assets.
     records = events.to_dict(orient="records")
@@ -271,6 +281,14 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None, joystick=
     directions = _joystick_directions(events, joystick) if joystick is not None else {}
     for key, obj in objects.items():
         obj["direction"] = directions.get(key)
+    # An object that was spawned but neither shown nor resolved (the animal never
+    # initiated the trial and it ended in episode_timeout) has no behaviour to
+    # label, and the gaze and saccade events tied to it are not about anything
+    # that appeared.  Its rows are dropped below.  The object itself stays in
+    # `objects`, so trial-level fields (complete_objects, intention) are still
+    # computed over every spawned object rather than over a partial set.
+    unseen = {key for key, obj in objects.items() if obj["visible_onset_t"] is None and obj["outcome"] is None}
+    dropped = 0
     by_trial = {}
     for obj in objects.values():
         by_trial.setdefault(obj["trial"], []).append(obj)
@@ -319,6 +337,9 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None, joystick=
         tid, t = _trial_id(record.get("trial_index")), _safe(record.get("t_ephys_s"))
         trial = trials_by_id.get(tid, {})
         uid = _safe(record.get("object_uid"))
+        if uid is not None and (tid, str(uid)) in unseen:
+            dropped += 1
+            continue
         obj = objects.get((tid, str(uid))) if uid is not None else None
         sequence = outcomes.get(tid, [])
         prior = obj["previous"] if obj else next((o for o in reversed(sequence) if _finite(t) and o["outcome_t"] <= t), None)
@@ -354,6 +375,9 @@ def _enrich(trials: pd.DataFrame, events: pd.DataFrame, classify=None, joystick=
         first_error = first_errors.get(tid)
         r["before_first_error"] = t < first_error if _finite(t) and first_error is not None else True if trial.get("trial_error_free") is True else None
         rows.append(r)
+    if report is not None:
+        report.update(unseen_objects=len(unseen), unseen_rows=dropped,
+                      unseen_trials=sorted({tid for tid, _ in unseen if tid is not None}))
     return ordered, rows
 
 def _registry(trials: pd.DataFrame, rows: list[dict]) -> list[dict]:
@@ -398,6 +422,11 @@ def _registry(trials: pd.DataFrame, rows: list[dict]) -> list[dict]:
     return [fields[key] for key in sorted(fields)]
 
 
+def alignment_keys(rows: Iterable[Mapping[str, Any]]) -> list[str]:
+    """Every recorded event the explorer offers as an alignment, plus the outcome union."""
+    return sorted(({r["event"] for r in rows} - HIDDEN_EVENTS) | {"object_outcome"})
+
+
 class LoadedSession:
     def __init__(self, session, cache_dir: Path):
         self.session = session; self.session_id = session.session_id; self.cache_dir = cache_dir
@@ -413,7 +442,13 @@ class LoadedSession:
             self.notices.append(f"Observed trial strategy unavailable: {exc}")
         self._code_stats = {p: (p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ctime_ns) for p in self.code_paths}
         joystick = session.behavioral_series("joystick_x") if session.has_behavioral_series("joystick_x") else None
-        self.trials, self.rows = _enrich(session.trials().table, session.events(), classify, joystick)
+        report: dict = {}
+        self.trials, self.rows = _enrich(session.trials().table, session.events(), classify, joystick, report)
+        if report.get("unseen_objects"):
+            ids = report["unseen_trials"]
+            where = (f"trial {ids[0]}" if len(ids) == 1 else "trials " + ", ".join(map(str, ids)) if len(ids) <= 5
+                     else f"{len(ids)} trials, {ids[0]}–{ids[-1]}")
+            self.notices.append(f"Hid {report['unseen_rows']} event rows on {report['unseen_objects']} objects that were never shown ({where}).")
         self.fields = _registry(session.trials().table, self.rows)
         units = session.units(); peaks = units.metadata.get("peak_channel")
         # Peak channel survives a re-sort; unit IDs do not, so every label carries both.
@@ -421,7 +456,7 @@ class LoadedSession:
                        "peak_channel": int(peaks[i]) if peaks is not None and _finite(peaks[i]) else None} for i, uid in enumerate(units.unit_ids)]
         if not self.trials or not self.rows or not self.units:
             raise ValueError("Assembled session must contain nonempty unit, trial, and event tables.")
-        self.alignments = sorted({r["event"] for r in self.rows} | {"object_outcome"})
+        self.alignments = alignment_keys(self.rows)
         self._source = session.source_identity()
 
     def _check(self):
