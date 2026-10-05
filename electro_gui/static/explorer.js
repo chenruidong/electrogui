@@ -1316,18 +1316,29 @@
     for (const k of Object.keys(DEFAULTS)) if (k in raw) state[k] = clone(raw[k]);
     if (typeof state.session !== 'string') state.session = S.session;
     if (!Number.isInteger(state.unit)) state.unit = S.unit;
-    if (!state.session || !D.catalog.some(s => s.id === state.session)) { toast(`Config “${title}”: session ${state.session || '(none)'} is not available on this server.`, true); return; }
+    if (!state.session || !D.catalog.some(s => s.id === state.session)) { toast(`Config “${title}”: session ${state.session || '(none)'} is not available on this server.`, true); return false; }
     toast(`Config: ${title}`);
+    // Same session: a raster or table not fetched yet can take a minute while the old figure stays up under a 2 px bar.
+    // A different session shows its own opening card straight away.
+    if (D.summary) showLoading(`Opening ${title}`, 'Applying the saved settings…');
     await applyView({state});
+    return true;
   }
+  // A config is slow to open in three places: reading the file (it may sit in a cloud folder), verifying a session's NWB,
+  // fetching a raster. The first and last leave the old figure up as if nothing had happened, so say what is going on
+  // from the moment a file is chosen, and put the figure back when nothing was applied.
   async function openConfigFile(file) {
+    const covered = !!D.summary;   // with no session loaded there is no figure to cover, and a session still opening shows its own card
+    if (covered) showLoading(`Opening ${file.name}`, 'Reading the file…');
+    let applied = false;
     try {
       if (file.size > 256 * 1024) throw new Error('the file is larger than 256 KiB');
       let obj;
       try { obj = JSON.parse(await file.text()); } catch (e) { throw new Error(`invalid JSON (${e.message})`); }
       const c = readConfigObject(obj, file.name);
-      await applyConfig(c.title, c.state);
+      applied = await applyConfig(c.title, c.state);
     } catch (e) { toast(`Could not open ${file.name}: ${e.message}`, true); }
+    if (covered && !applied) schedule();
   }
   function summarizeState(s) {
     if (!s) return '';

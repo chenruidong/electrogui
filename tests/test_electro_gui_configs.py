@@ -296,6 +296,18 @@ class ConfigHooksInPageTests(unittest.TestCase):
         self.assertLess(js.index("configsHtml(cfg) +"), js.index("Saved views · restore unit and settings"))
         self.assertRegex(js, r"await applyView\(\{state\}\)")
 
+    def test_opening_a_config_file_says_so_before_the_file_is_read(self):
+        # Reading the file, verifying a session and fetching a raster are the slow steps; the loading card must be up
+        # before the first await, and a config that is not applied must put the figure back.
+        js = EXPLORER_JS.read_text()
+        body = js[js.index("async function openConfigFile(file)"):js.index("function summarizeState")]
+        self.assertLess(body.index("Reading the file…"), body.index("await file.text()"))
+        self.assertIn("if (covered && !applied) schedule();", body)
+        apply_body = js[js.index("async function applyConfig("):js.index("async function openConfigFile(file)")]
+        self.assertIn("Applying the saved settings…", apply_body)
+        self.assertLess(apply_body.index("Applying the saved settings…"), apply_body.index("await applyView({state})"))
+        self.assertIn("return false; }", apply_body)
+
 
 if __name__ == "__main__":
     unittest.main()
