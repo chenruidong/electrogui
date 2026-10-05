@@ -66,8 +66,8 @@
 
   // -------------------------------------------------------------- colours
   const SEM = {
-    world: {PP: '#2b8a3e', PM: '#6741d9', MM: '#e03131'},
-    intention: {PP: '#2b8a3e', PM: '#6741d9', MM: '#e03131', NA: '#868e96'},
+    world: {PP: '#56B4E9', PM: '#999999', MM: '#E69F00'},          // imitation_utils/plot_conventions.py BLOCK_TYPE_COLORS (2026-10-01)
+    intention: {PP: '#56B4E9', PM: '#999999', MM: '#E69F00', NA: '#6f6f6f'},
     role: {prey: '#2b8a3e', predator: '#e03131'},
     action: {touch: '#1c7ed6', avoid: '#f08c00'},
     outcome: {prey_capture: '#2b8a3e', prey_miss: '#8fcf9c', predator_contact: '#e03131', predator_avoid: '#f4a3a3'},

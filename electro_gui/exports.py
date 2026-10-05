@@ -83,7 +83,7 @@ def export_svg(result, axes=(0, 1)):
     from matplotlib.backends.backend_svg import FigureCanvasSVG
     import numpy as np
 
-    colors = {"PP": "#1b7f3b", "PM": "#5f3dc4", "MM": "#b3282d", "A": "#225f72", "B": "#5f3dc4", "C": "#b3282d"}
+    colors = {"PP": "#56B4E9", "PM": "#999999", "MM": "#E69F00", "A": "#225f72", "B": "#5f3dc4", "C": "#b3282d"}   # worlds: the task repository's convention (2026-10-01)
     annotations = result.get("annotations", {})
     annotation_layers = {str(x.get("id")): x for x in annotations.get("layers", []) if x.get("visible", True)}
 
