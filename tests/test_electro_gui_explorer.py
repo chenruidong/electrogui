@@ -420,7 +420,7 @@ class ExplorerServerTests(unittest.TestCase):
         path = write_synthetic_session_file(Path(self.temp.name))
         self.sid = path.name.removesuffix("_session.nwb")
         store = SessionStore([], [path], Path(self.temp.name) / "cache")
-        self.app = Application(store, views_path=Path(self.temp.name) / "views.json")
+        self.app = Application(store, findings_dir=Path(self.temp.name) / "findings")
         self.servers = []
 
     def tearDown(self):
@@ -446,7 +446,7 @@ class ExplorerServerTests(unittest.TestCase):
         connection.close()
         return result
 
-    def test_explorer_endpoints_views_and_gzip(self):
+    def test_explorer_endpoints_findings_and_gzip(self):
         port = self.serve()
         status, _, body = self.request(port, f"/api/explorer/session?session={self.sid}")
         self.assertEqual(status, 200, body)
@@ -474,12 +474,14 @@ class ExplorerServerTests(unittest.TestCase):
         self.assertGreater(train["n"], 0)
         status, _, _ = self.request(port, f"/api/explorer/spiketrain?session={self.sid}&unit=abc")
         self.assertEqual(status, 400)
-        status, _, body = self.request(port, "/api/views", "POST", {"name": "demo", "state": {"unit": 1}})
-        self.assertEqual(status, 200, body)
-        status, _, body = self.request(port, "/api/views")
-        self.assertEqual(json.loads(body)["demo"]["state"], {"unit": 1})
-        self.request(port, "/api/views", "POST", {"name": "demo", "delete": True})
-        self.assertEqual(json.loads(self.request(port, "/api/views")[2]), {})
+        status, _, body = self.request(port, "/api/findings", "POST", {"title": "demo", "state": {"session": self.sid, "unit": 1},
+                                                                       "evidence": {"session_id": self.sid}})
+        self.assertEqual(status, 201, body)
+        saved = json.loads(body)
+        status, _, body = self.request(port, "/api/findings")
+        self.assertEqual([f["state"] for f in json.loads(body)["findings"]], [{"session": self.sid, "unit": 1}])
+        self.request(port, f"/api/findings/{saved['id']}", "POST", {"delete": True})
+        self.assertEqual(json.loads(self.request(port, "/api/findings")[2])["findings"], [])
         status, _, body = self.request(port, f"/api/explorer/popspans?session={self.sid}&alignment=object_outcome&units=1,2&policy=all_complete")
         self.assertEqual(status, 200, body)
         spans = json.loads(body)
@@ -540,7 +542,7 @@ class ExplorerServerTests(unittest.TestCase):
         from unittest import mock
         from electro_gui import cli
         args = cli.add_arguments(argparse.ArgumentParser()).parse_args(
-            ["--data-root", self.temp.name, "--cache-dir", self.temp.name, "--views-file", str(Path(self.temp.name) / "v.json"),
+            ["--data-root", self.temp.name, "--cache-dir", self.temp.name, "--findings-dir", str(Path(self.temp.name) / "f"),
              "--no-browser", "--port", "0", "--token", "fixed"])
         with mock.patch("electro_gui.server.make_server", side_effect=OSError("stop")) as fake, self.assertRaises(SystemExit):
             cli.run(args)

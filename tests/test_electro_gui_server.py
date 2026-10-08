@@ -150,7 +150,7 @@ class RestartHandoverTests(unittest.TestCase):
     def args(self, *extra):
         return cli.add_arguments(argparse.ArgumentParser()).parse_args(
             ["--data-root", self.temp.name, "--cache-dir", self.temp.name,
-             "--views-file", str(Path(self.temp.name) / "v.json"), "--port", "0", *extra])
+             "--findings-dir", str(Path(self.temp.name) / "f"), "--port", "0", *extra])
 
     def test_a_requested_restart_reexecs_the_same_command_on_the_same_port_and_token(self):
         # A random LAN token must survive the restart, or every phone would be locked out.

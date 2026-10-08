@@ -11,6 +11,7 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+import socket
 import subprocess
 import threading
 import time
@@ -22,16 +23,16 @@ from .data import SessionStore
 from .exports import export_csv, export_json, export_membership, export_statistics, export_svg
 from .annotations import annotate_result
 from .configs import discover_configs
+from .findings import FindingStore
 from .preview import preview
 from . import explorer
 
 
 class Application:
-    def __init__(self, store: SessionStore, views_path: str | Path | None = None, config_dirs=()):
+    def __init__(self, store: SessionStore, findings_dir: str | Path | None = None, config_dirs=()):
         self.store = store
-        self.views_path = Path(views_path).expanduser() if views_path is not None else None
+        self.findings = FindingStore(findings_dir) if findings_dir is not None else None
         self.config_dirs = [Path(d).expanduser().absolute() for d in config_dirs or ()]
-        self.views_lock = threading.Lock()
         self.jobs = OrderedDict()
         self.preview_jobs = OrderedDict()
         self.lock = threading.RLock()
@@ -231,33 +232,29 @@ class Application:
             loaded = self.store.get(request.get("session_id"))
             return explorer.population_probe(loaded, request)
 
-    def views(self, update=None):
-        """Named explorer views shared by every device that opens this server."""
-        if self.views_path is None:
-            raise ValueError("Saved views are disabled (no --views-file).")
-        with self.views_lock:
-            try:
-                views = json.loads(self.views_path.read_text())
-            except FileNotFoundError:
-                views = {}
-            if not isinstance(views, dict):
-                raise ValueError(f"{self.views_path} is not a JSON object of saved views.")
-            if update is None:
-                return views
-            name = update.get("name")
-            if not isinstance(name, str) or not name.strip() or len(name) > 120:
-                raise ValueError("A saved view needs a name of 1-120 characters.")
-            if update.get("delete"):
-                views.pop(name.strip(), None)
-            else:
-                if not isinstance(update.get("state"), dict):
-                    raise ValueError("A saved view needs a state object.")
-                views[name.strip()] = {"state": update["state"], "saved": time.strftime("%Y-%m-%d %H:%M")}
-            self.views_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.views_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(views, indent=1, sort_keys=True))
-            os.replace(tmp, self.views_path)
-            return views
+    def _findings(self):
+        if self.findings is None:
+            raise ValueError("Findings are disabled on this server (no --findings-dir).")
+        return self.findings
+
+    def list_findings(self):
+        return self._findings().list()
+
+    def finding(self, finding_id):
+        return self._findings().get(finding_id)
+
+    def finding_thumbnail(self, finding_id):
+        return self._findings().thumbnail(finding_id)
+
+    def save_finding(self, payload):
+        """A finding as the page measured it, stamped with this machine and the code that drew it."""
+        code = {"electro_gui": __version__, **_git_identity(_REPO)}
+        return self._findings().create(payload, saved_on=_HOST, code=code)
+
+    def change_finding(self, finding_id, request):
+        if request.get("delete") is True:
+            return self._findings().delete(finding_id)
+        return self._findings().update(finding_id, request, updated_on=_HOST)
 
     def configs(self):
         """JSON config files under ``--config-dir`` (see ``configs.py``); re-scanned on every call."""
@@ -286,6 +283,7 @@ def _git_identity(repo):
 
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
+_HOST = socket.gethostname().split(".")[0] or None
 # This process's identity: a restart (POST /api/restart, then cli.run re-execs
 # itself) gets a new BOOT_ID, which is how a page knows the new code is up.
 BOOT_ID = uuid4().hex[:12]
@@ -388,8 +386,16 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
                                 "code_changed": code_changed_since()})
                 elif url.path.startswith("/api/explorer/"):
                     self._send(application.explore(url.path.rsplit("/", 1)[1], parse_qs(url.query)))
-                elif url.path == "/api/views":
-                    self._send(application.views())
+                elif url.path == "/api/findings":
+                    self._send(application.list_findings())
+                elif url.path.startswith("/api/findings/"):
+                    parts = url.path.strip("/").split("/")
+                    if len(parts) == 3:
+                        self._send(application.finding(parts[2]))
+                    elif len(parts) == 4 and parts[3] == "thumbnail":
+                        self._send(application.finding_thumbnail(parts[2]), content_type="image/png")
+                    else:
+                        raise KeyError("Unknown findings endpoint")
                 elif url.path == "/api/configs":
                     self._send(application.configs())
                 elif url.path.startswith("/api/jobs/"):
@@ -437,20 +443,25 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
                 return
             try:
                 route = urlsplit(self.path).path
-                if route not in ("/api/jobs", "/api/views", "/api/explorer/popfit", "/api/explorer/popprobe", "/api/restart"):
+                finding = route.startswith("/api/findings/") and route.count("/") == 3
+                if route not in ("/api/jobs", "/api/findings", "/api/explorer/popfit", "/api/explorer/popprobe", "/api/restart") and not finding:
                     self._send({"error": "Unknown endpoint"}, 404)
                     return
                 if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                     raise ValueError("JSON request required.")
                 length = int(self.headers.get("Content-Length", "0"))
-                limit = 8 * 1048576 if route.startswith("/api/explorer/pop") else 262144
+                # Population fits carry row IDs; a new finding carries its figure as a PNG.
+                limit = 12 * 1048576 if route == "/api/findings" else 8 * 1048576 if route.startswith("/api/explorer/pop") else 262144
                 if not 0 < length <= limit:
                     raise ValueError(f"Request must be between 1 byte and {limit // 1024} KiB.")
                 request = json.loads(self.rfile.read(length))
                 if not isinstance(request, dict):
                     raise ValueError("Request must be a JSON object.")
-                if route == "/api/views":
-                    self._send(application.views(request))
+                if route == "/api/findings":
+                    self._send(application.save_finding(request), 201)
+                    return
+                if finding:
+                    self._send(application.change_finding(route.rsplit("/", 1)[1], request))
                     return
                 if route == "/api/restart":
                     # Stop serving; cli.run then waits for a running computation,
@@ -472,6 +483,12 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
                 self._send({"error": str(exc).strip("'\"")}, 404)
             except (ValueError, TypeError) as exc:
                 self._send({"error": str(exc)}, 400)
+            except OSError as exc:
+                if not urlsplit(self.path).path.startswith("/api/findings"):
+                    raise
+                # A findings folder that cannot be written: say so rather than drop the connection.
+                self._send({"error": f"Could not write to the findings folder: {exc.strerror or exc}"
+                                     f"{f' ({exc.filename})' if exc.filename else ''}"}, 500)
 
         def log_message(self, fmt, *args):
             # Polling is intentionally quiet. The UI reports progress and errors.

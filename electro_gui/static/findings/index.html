@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="electro_gui — saved findings: figures with notes and the numbers they rest on">
+  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#101217" media="(prefers-color-scheme: dark)">
+  <title>electro · findings</title>
+  <link rel="icon" type="image/svg+xml" href="/icons/electro.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/explorer.css">
+  <link rel="stylesheet" href="/findings/findings.css">
+</head>
+<body class="findings-page">
+<header class="top">
+  <a class="brand" href="/" title="Back to the explorer">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M5 19h5l3-10 4 16 3-9h7"/></svg>
+    <span>electro</span>
+  </a>
+  <h1 class="page-title">Findings</h1>
+  <label class="fsearch"><input type="search" id="q" placeholder="Search titles, notes, tags, units, sessions…" aria-label="Search findings" autocomplete="off"></label>
+  <a class="ghost" href="/" title="Back to the explorer"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4.5L7 10l5.5 5.5"/></svg><span>Explorer</span></a>
+</header>
+<main class="fmain">
+  <div class="fbar"><div class="chips" id="statusChips" role="group" aria-label="Filter by status"></div><span class="fcount" id="count"></span></div>
+  <div class="fgrid" id="grid"></div>
+  <div class="empty" id="empty" hidden></div>
+  <p class="foot" id="foot"></p>
+</main>
+<div class="scrim" id="scrim" hidden></div>
+<section class="fdetail" id="detail" role="dialog" aria-modal="true" aria-labelledby="dTitleLabel" hidden></section>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script src="/core.js"></script>
+<script src="/findings/findings.js"></script>
+</body>
+</html>

@@ -29,8 +29,9 @@ def add_arguments(parser):
                              "from a tablet or phone on the same network; a random access token is then required.")
     parser.add_argument("--lan", action="store_true", help="Shorthand for --host 0.0.0.0 (tablet / phone access, token-protected).")
     parser.add_argument("--token", help="Access token for a non-loopback --host (default: random per launch).")
-    parser.add_argument("--views-file", default="output/electro_gui/saved_views.json",
-                        help="Named explorer views, shared across devices (default: %(default)s).")
+    parser.add_argument("--findings-dir", default="output/electro_gui/findings",
+                        help="Folder of saved findings (one JSON file and one PNG each), shared by every device that opens "
+                             "this server; relative to the current directory (default: %(default)s).")
     parser.add_argument("--config-dir", action="append",
                         help="Directory of JSON config files for the Views menu (a deck's electro_gui_configs/, or a folder "
                              "holding decks); repeat for several. Relative to the current directory; a missing one is empty "
@@ -50,7 +51,7 @@ def run(args):
     from .server import Application, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=Path(args.cache_dir).expanduser())
-    application = Application(store, views_path=args.views_file, config_dirs=args.config_dir if args.config_dir is not None else ["output/presentation"])
+    application = Application(store, findings_dir=args.findings_dir, config_dirs=args.config_dir if args.config_dir is not None else ["output/presentation"])
     host = "0.0.0.0" if args.lan else args.host
     token = args.token  # an explicit token also protects a loopback server fronted by a proxy (tailscale serve)
     if restart and token is None:
@@ -79,7 +80,8 @@ def run(args):
             address, _, label = entry.partition(" ")
             print(f"  tablet / phone {label}: http://{address}:{port}/{query}", flush=True)
         print("  Anyone with this URL can read the sessions it serves; stop the server when done.", flush=True)
-    print(f"Found {len(store.catalog())} assembled sessions. Ctrl-C stops the server.", flush=True)
+    print(f"Found {len(store.catalog())} assembled sessions. Findings are saved in {application.findings.root}.", flush=True)
+    print("Ctrl-C stops the server.", flush=True)
     if not args.no_browser:
         webbrowser.open(url)
     try:

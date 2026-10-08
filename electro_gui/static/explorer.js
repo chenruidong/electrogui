@@ -147,7 +147,7 @@
 
   const D = {
     catalog: [], summary: null, units: [], tables: new Map(), rasters: new Map(), events: new Map(),
-    inflight: new Map(), sessionToken: 0, layout: null, model: null, views: {}, configs: [], fatal: null,
+    inflight: new Map(), sessionToken: 0, layout: null, model: null, findings: [], configs: [], fatal: null,
     unitMap: new Map(), popspans: new Map(), stab: null, fits: new Map(), fitErrors: new Map(), fitPending: null,
     heatCache: new Map(), view3d: {yaw: -0.6, pitch: 0.35}, cursor: null, playTimer: 0, popLayout: null, popFit: null, popModel: null,
     probes: new Map(), probeErrors: new Map(), probePending: null, probeShown: null, popReq: null,
@@ -346,11 +346,7 @@
       D.summary = summary;
       D.units = summary.units.map(u => ({...u, rate: u.n_spikes / Math.max(1, summary.duration_s)}));
       D.unitMap = new Map(D.units.map(u => [u.id, u]));
-      S.roster = S.roster.filter(id => D.unitMap.has(id));
-      if (!D.units.some(u => u.id === S.unit)) S.unit = (unitList()[0] || D.units[0]).id;
-      if (!summary.alignments.some(a => a.key === S.align)) S.align = 'object_outcome';
-      // A saved marker on an event this session no longer offers (e.g. the hidden object_spawn) would 404.
-      S.markers = S.markers.filter(m => [m.e, m.end].every(e => !e || e === 'object_outcome' || summary.events.includes(e)));
+      fitStateToSession(summary);
       D.fatal = null;
       for (const n of summary.notices || []) toast(n);
       saveState();
@@ -361,6 +357,16 @@
       D.fatal = e.message;
       showEmpty('Could not open this session', esc(e.message));
     }
+  }
+
+  // Make S drawable with this session: a neuron, unit, alignment or marker event it does not have is dropped or
+  // replaced.  Fine for a link; a reopened finding reports every one of these (see openFinding).
+  function fitStateToSession(summary) {
+    S.roster = S.roster.filter(id => D.unitMap.has(id));
+    if (!D.units.some(u => u.id === S.unit)) S.unit = (unitList()[0] || D.units[0]).id;
+    if (!summary.alignments.some(a => a.key === S.align)) S.align = 'object_outcome';
+    // A saved marker on an event this session no longer offers (e.g. the hidden object_spawn) would 404.
+    S.markers = S.markers.filter(m => [m.e, m.end].every(e => !e || e === 'object_outcome' || summary.events.includes(e)));
   }
 
   // --------------------------------------------------------------- model
@@ -733,13 +739,13 @@
 
   function render() {
     renderHeader();
-    if (D.fatal) return;
-    if (!D.summary) return;
-    if (S.mode === 'population') { D.layout = null; renderPopulation(); return; }
+    if (D.fatal || !D.summary) { checkFinding(); return; }
+    if (S.mode === 'population') { D.layout = null; renderPopulation(); checkFinding(); return; }
     renderRaster();
     drawPin();
     renderBehavior();
     fitRaster();  // after the timeline, so a just-collapsed panel is measured as collapsed
+    checkFinding();
   }
   // Raster height.  On a desktop window it follows the window by default ("fit"): each
   // render measures where the behavior timeline ends and resizes the rasters so it ends at
@@ -1261,20 +1267,21 @@
   }
 
   async function openViews() {
-    let saved = {}, cfg = null;
-    try { saved = await getJSON('/api/views'); } catch (e) { saved = null; }
+    let found = null, cfg = null;
+    try { found = await getJSON('/api/findings'); } catch (e) { found = null; }
     try { cfg = await getJSON('/api/configs'); } catch (e) { cfg = null; }   // an older server has no config route: no section
-    D.views = saved || {};
+    D.findings = found ? found.findings : [];
     D.configs = cfg && Array.isArray(cfg.configs) ? cfg.configs : [];
-    const savedHtml = saved === null ? '<div class="pop-note">Saved views are unavailable on this server.</div>'
-      : Object.keys(saved).length ? Object.entries(saved).sort((a, b) => String(b[1].saved).localeCompare(String(a[1].saved))).map(([name, v]) =>
-        `<div class="item" style="padding-right:4px"><button type="button" class="item" data-view="${esc(name)}" style="padding:0"><span class="main"><b>${esc(name)}</b><small>${esc(summarizeState(v.state))} · ${esc(v.saved || '')}</small></span></button><button type="button" class="close" data-vdel="${esc(name)}" title="Delete" aria-label="Delete view" style="border:0;background:none;color:var(--muted);width:30px;height:30px">×</button></div>`).join('')
-      : '<div class="pop-note">No saved views yet. Saved views live on this server, so every device that opens it sees them.</div>';
+    const findingsHtml = found === null ? '<div class="pop-note">Findings are unavailable on this server.</div>'
+      : D.findings.length ? D.findings.slice(0, 6).map((f, i) => `<button type="button" class="item" data-finding="${i}"><span class="main"><b>${esc(f.title)}</b>` +
+          `<small>${esc(findingLine(f))}</small></span><span class="st st-${esc(f.status)}">${esc(f.status)}</span></button>`).join('') +
+        (D.findings.length > 6 ? `<a class="item" href="/findings/"><span class="main"><b>All ${D.findings.length} findings…</b></span></a>` : '')
+      : '<div class="pop-note">No findings yet. <b>Save finding</b> keeps the figure with your notes and the numbers it shows; every device that opens this server sees them.</div>';
     const html = popHead('Views') + `<div class="pop-body"><div class="pop-group">Templates · keep the current unit</div>` +
       TEMPLATES.map((t, i) => `<button type="button" class="item" data-tpl="${i}"><span class="main"><b>${esc(t.name)}</b><small>${esc(t.hint)}</small></span></button>`).join('') +
       configsHtml(cfg) +
-      `<div class="pop-group">Saved views · restore unit and settings</div>${savedHtml}</div>` +
-      `<div class="pop-foot" style="flex-wrap:wrap"><button type="button" class="small" data-copylink>Copy link</button><button type="button" class="small" data-openconfig>Open config file…</button><button type="button" class="primary" data-saveview${saved === null ? ' disabled' : ''}>Save current view…</button></div>`;
+      `<div class="pop-group">Findings · reopen and check the numbers</div>${findingsHtml}</div>` +
+      `<div class="pop-foot" style="flex-wrap:wrap"><button type="button" class="small" data-copylink>Copy link</button><button type="button" class="small" data-openconfig>Open config file…</button><a class="small" href="/findings/">All findings</a><button type="button" class="primary" data-savefinding${found === null ? ' disabled' : ''}>Save finding…</button></div>`;
     openPop($('viewsBtn').offsetParent ? $('viewsBtn') : $('menuBtn'), html, {wide: true});
   }
   // Config files: JSON view states kept in the repository (see electro_gui/configs.py), listed under their `group`.
@@ -1344,22 +1351,229 @@
     if (!s) return '';
     return [s.unit !== undefined ? `unit ${s.unit}` : '', eventLabel(s.align || ''), [s.color, s.style].filter(Boolean).map(k => C.fieldLabel(k)).join(' × ')].filter(Boolean).join(' · ');
   }
-  function openSaveView() {
-    const u = D.units.find(x => x.id === S.unit);
-    const suggestion = `${unitName(u)} · ${eventLabel(S.align)}${S.color ? ` · ${C.fieldLabel(S.color)}` : ''}${S.style ? ` × ${C.fieldLabel(S.style)}` : ''}`;
-    $('popover').innerHTML = popHead('Save view') + `<form class="editor" id="saveForm"><label class="row"><span>Name</span><input type="text" id="viewName" value="${esc(suggestion)}" maxlength="120"></label>` +
-      `<p class="pop-note" style="padding:0">Stores the session, unit, alignment, filters, groups, markers and display knobs on this server.</p>` +
-      `<div class="pop-foot" style="padding:0;border:0"><button type="button" class="small" data-close>Cancel</button><button type="submit" class="primary">Save</button></div></form>`;
-    placePop();
-    $('viewName').focus(); $('viewName').select();
-    $('saveForm').addEventListener('submit', async e => {
-      e.preventDefault();
-      try {
-        await getJSON('/api/views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: $('viewName').value, state: S})});
-        closePop(); toast(`Saved “${$('viewName').value}”.`);
-      } catch (err) { toast(err.message, true); }
-    });
+  // ------------------------------------------------------------- findings
+  // A finding is this figure saved with a title, optional notes, tags and a status, its exact settings, the
+  // numbers it shows and a picture of it (electro_gui/findings.py).  Reopening one redraws it and compares.
+  const STATUSES = ['lead', 'checking', 'supported', 'dropped'];
+  const r4 = v => (Number.isFinite(v) ? Number(v.toFixed(4)) : null);
+  const unitPrint = u => (u ? {id: u.id, peak_channel: u.peak_channel ?? null, area: u.area ?? null, quality: u.quality ?? null, n_spikes: u.n_spikes ?? null} : null);
+  function findingLine(f) {
+    const st = f.state || {};
+    const who = st.mode === 'population' ? `${(st.roster || []).length} neurons` : `unit ${st.unit}`;
+    return [shortSession(st.session || ''), who, eventLabel(st.align || ''), (f.saved_at || '').slice(0, 10)].filter(Boolean).join(' · ');
   }
+  // Why the figure cannot be saved as a finding right now ('' when it can).  It must be drawn, for the current
+  // settings, with nothing still loading or fitting, so the picture, the settings and the numbers agree.
+  function figureReady() {
+    if (D.fatal || !D.summary) return 'no session is open';
+    const fig = $('figure');
+    if (!$('empty').hidden || !fig.querySelector('svg') || !D.figMeta) return 'there is no figure to save';
+    if (fig.classList.contains('stale')) return 'the figure is still updating';
+    if (S.mode === 'population') return D.popFit && D.popModel ? '' : 'the fit has not finished';
+    return D.model && D.model.rows.length ? '' : 'there is no figure to save';
+  }
+  /**
+   * What a finding rests on, read off the figure as drawn: the data's identity (session, NWB checksum, the unit's
+   * channel, area, quality and spike count, or every neuron's), the support line and each shown group's events,
+   * trials and count-window rate (population: the fit's diagnostics).  It runs when a finding is saved and again
+   * when it is reopened, and C.compareEvidence names every difference.  Nothing here is new arithmetic.
+   */
+  function evidence() {
+    const src = D.summary.source || {}, pop = S.mode === 'population';
+    const M = pop ? D.popModel : D.model;
+    const trials = new Set(); M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
+    const support = {events: M.visible.reduce((a, g) => a + g.rows.length, 0), trials: trials.size, filtered_out: M.filtered,
+      not_stable_or_complete: M.excl[1] + M.excl[2], window_leaves_stable_run: M.excl[3],
+      in_hidden_groups: M.grouping.groups.filter(g => g.hidden).reduce((a, g) => a + g.rows.length, 0),
+      yoked_trials: M.yoke ? {first: M.yoke.from, last: M.yoke.to} : null};
+    const out = {schema: 1, mode: S.mode, session_id: D.summary.session_id, source: {sha256: src.sha256 || null, size_bytes: src.size_bytes ?? null},
+      title: D.figMeta.title, subtitle: D.figMeta.subtitle, alignment: S.align, policy: S.policy, window_s: S.win.slice(),
+      count_window_s: S.cw.slice(), weighting: S.weight, support};
+    if (!pop) {
+      out.unit = unitPrint(M.unit);
+      out.groups = M.visible.map(g => ({label: g.label, panel: g.panelLabel || null, events: g.psth.events, trials: g.psth.trials,
+        rate_hz: r4(g.rate.mean), rate_sem_hz: r4(g.rate.sem), n: g.rate.n}));
+      return out;
+    }
+    const fit = D.popFit, shownKeys = new Set(M.visible.map(g => g.key));
+    support.neurons = S.roster.length; support.common_trials = M.common;
+    out.roster = S.roster.map(id => unitPrint(D.unitMap.get(id)) || {id});
+    out.groups = fit.groups.filter(g => shownKeys.has(g.key)).map(g => ({label: g.label, panel: null, events: g.events, trials: g.trials}));
+    out.fit = {method: fit.method, scaling: fit.scaling, components: fit.components, rank: fit.rank, fit_rows: fit.fit_rows,
+      common_trials: fit.common_trials, dropped_constant_units: fit.dropped_constant_units || [], converged: fit.converged, warnings: fit.warnings || [],
+      explained_variance_ratio: Array.isArray(fit.explained_variance_ratio) ? fit.explained_variance_ratio.map(r4) : null,
+      component_r2: (fit.component_r2 || []).map(r4), reconstruction_r2: r4(fit.reconstruction_r2)};
+    return out;
+  }
+  const dataURL = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
+  // The settings, the numbers and the picture, all from one drawing of the figure for the current S.
+  async function captureFinding() {
+    render();
+    const why = figureReady();
+    if (why) throw new Error(why);
+    const state = clone(S), ev = evidence(), svg = S.mode === 'population' ? popExportSVG() : exportSVG();
+    return {state, evidence: ev, thumbnail: await dataURL(await svgToPng(svg, 1.5))};
+  }
+  function suggestTitle() {
+    if (S.mode === 'population') return `${$('title').textContent} · ${eventLabel(S.align)}`;
+    const u = D.units.find(x => x.id === S.unit);
+    return `${unitName(u)} · ${eventLabel(S.align)}${S.color ? ` · ${C.fieldLabel(S.color)}` : ''}${S.style ? ` × ${C.fieldLabel(S.style)}` : ''}`;
+  }
+  let findingDraft = null;   // what was typed in the save dialog: survives closing it, cleared once saved
+  async function openSaveFinding() {
+    closePop();
+    render();
+    const why = figureReady();
+    if (why) { toast(`Nothing to save yet: ${why}.`, true); return; }
+    const draft = {title: suggestTitle(), note: '', tags: '', status: STATUSES[0], ...(findingDraft || {})};
+    if (findingDraft && !findingDraft.titleEdited) draft.title = suggestTitle();
+    let used = [];
+    try {
+      const counts = new Map();
+      for (const f of (await getJSON('/api/findings')).findings) for (const t of f.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
+      used = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 14).map(x => x[0]);
+    } catch (e) { /* tag suggestions only */ }
+    const anchor = $('saveBtn').offsetParent ? $('saveBtn') : $('menuBtn');
+    openPop(anchor, popHead('Save finding') + `<form class="editor finding-form" id="findingForm">` +
+      `<label class="row"><span>Title</span><input type="text" id="fTitle" maxlength="200" required value="${esc(draft.title)}"></label>` +
+      `<label class="row"><span>Notes <small>optional</small></span><textarea id="fNote" rows="5" maxlength="20000" placeholder="Why it matters · what this view does not control (the joystick?) · what to check next">${esc(draft.note)}</textarea></label>` +
+      `<label class="row"><span>Tags <small>optional, separated by commas</small></span><input type="text" id="fTags" autocomplete="off" value="${esc(draft.tags)}" placeholder="world, joystick"></label>` +
+      (used.length ? `<div class="chips tag-picks">${used.map(t => `<button type="button" class="chip" data-addtag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : '') +
+      `<div class="row"><span>Status <small>your judgement, not a test</small></span><div class="seg" id="fStatus">${STATUSES.map(st => `<button type="button" data-st="${st}" class="${st === draft.status ? 'on' : ''}">${st}</button>`).join('')}</div></div>` +
+      `<p class="pop-note" style="padding:0">Keeps a picture of the figure, every setting and the numbers it shows: events, trials and count-window rate per group, the unit's channel and the NWB checksum. Reopening it redraws the figure and says whether any of them has changed. Notes, tags and status can be edited later under Findings.</p>` +
+      `<div class="pop-foot" style="padding:0;border:0"><button type="button" class="small" data-close>Cancel</button><button type="submit" class="primary" id="fSave">Save finding</button></div></form>`, {wide: true});
+    const form = $('findingForm');
+    const read = () => ({title: $('fTitle').value, note: $('fNote').value, tags: $('fTags').value,
+      status: (form.querySelector('[data-st].on') || {dataset: {st: STATUSES[0]}}).dataset.st});
+    const keep = () => { findingDraft = {...read(), titleEdited: (findingDraft && findingDraft.titleEdited) || $('fTitle').value !== draft.title}; };
+    form.addEventListener('input', keep);
+    form.querySelectorAll('[data-st]').forEach(b => b.addEventListener('click', () => { form.querySelectorAll('[data-st]').forEach(x => x.classList.toggle('on', x === b)); keep(); }));
+    form.querySelectorAll('[data-addtag]').forEach(b => b.addEventListener('click', () => {
+      const have = $('fTags').value.split(',').map(t => t.trim()).filter(Boolean);
+      if (!have.some(t => t.toLowerCase() === b.dataset.addtag.toLowerCase())) $('fTags').value = [...have, b.dataset.addtag].join(', ');
+      keep();
+    }));
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const btn = $('fSave'), typed = read();
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const snap = await captureFinding();
+        const saved = await getJSON('/api/findings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({...typed, tags: typed.tags.split(','), ...snap})});
+        findingDraft = null;
+        if ($('findingForm') === form) closePop();
+        toast(`Saved finding “${saved.title}”.`);
+      } catch (err) {
+        keep();
+        btn.disabled = false; btn.textContent = 'Save finding';
+        toast(`Could not save the finding: ${err.message}. Your text is kept.`, true);
+      }
+    });
+    if (!matchMedia('(hover: none)').matches) { $('fTitle').focus(); $('fTitle').select(); }
+  }
+
+  // Reopening.  The view is restored through the page's own checks, every setting it could not restore is listed,
+  // and once the figure is drawn its numbers are measured again and compared with the saved ones.
+  const NOT_RESTORED = new Set(['session', 'unit', 'align', 'roster', 'mode']);
+  const STATE_LABELS = {align: 'alignment', roster: 'neurons', win: 'window', cw: 'count window', bin: 'bin width', sigma: 'smoothing σ',
+    weight: 'averaging', err: 'error band', policy: 'trials', filters: 'filters', color: 'colour', style: 'line style', panel: 'panels',
+    hidden: 'hidden groups', sort: 'row order', nsort: 'neuron order', axes: 'trajectory axes', ncomp: 'components', method: 'method'};
+  let openedFinding = null;   // the finding whose bar is shown: {finding, pending, changes, diff, failed, refused, key, diverged}
+  async function openFinding(f) {
+    closePop();
+    if (!f || !f.state || !D.catalog.some(s => s.id === f.state.session)) {
+      openedFinding = {finding: f || {}, refused: `Its session ${f && f.state ? f.state.session : '(none)'} is not on this server, so nothing was changed.`};
+      renderFindingBar();
+      return false;
+    }
+    const state = {};   // keys this version knows; any other is reported, as a config file's would be dropped
+    for (const k of Object.keys(DEFAULTS)) if (k in f.state) state[k] = clone(f.state[k]);
+    openedFinding = {finding: f, pending: true, changes: [], diff: null};
+    renderFindingBar();
+    $('empty').hidden = true;   // the previous view's empty card is not this finding's
+    stopPlay(); hideTip();
+    S = sanitize(state);
+    if (!D.summary || D.summary.session_id !== S.session) { saveState(); await selectSession(S.session); renderStructure(); }
+    else { fitStateToSession(D.summary); afterBigChange(); }
+    schedule();
+    return true;
+  }
+  // Called after every render: completes a pending comparison, then watches for the view moving away from it.
+  function checkFinding() {
+    const o = openedFinding;
+    if (!o || o.refused) return;
+    if (o.pending) {
+      const why = figureReady();
+      if (why) {
+        // An empty or error card once nothing is loading or fitting, not a figure still on its way.
+        if (D.fatal || (D.summary && !$('empty').hidden && !D.inflight.size && !D.fitPending)) {
+          o.pending = false;
+          o.failed = D.fatal || ($('empty').querySelector('h3') || {}).textContent || why;
+          o.changes = C.stateChanges(o.finding.state, S);
+          renderFindingBar();
+        }
+        return;
+      }
+      o.pending = false;
+      o.changes = C.stateChanges(o.finding.state, S);
+      o.diff = C.compareEvidence(o.finding.evidence, evidence());
+      o.key = C.stableJSON(S);
+      renderFindingBar();
+      return;
+    }
+    const diverged = !!o.key && C.stableJSON(S) !== o.key;
+    if (diverged !== !!o.diverged) { o.diverged = diverged; renderFindingBar(); }
+  }
+  function stateText(c) {
+    const show = v => (v === null || v === undefined ? 'none' : typeof v === 'object' ? JSON.stringify(v).slice(0, 80) : String(v));
+    if (c.now === undefined) return `the setting “${c.key}” is not used by this version of electro_gui (saved as ${show(c.saved)})`;
+    if (c.key === 'unit') return `unit ${c.saved} is not in this NWB; the figure shows unit ${c.now}`;
+    if (c.key === 'align') return `the alignment ${eventLabel(c.saved)} is not in this session; the figure is aligned to ${eventLabel(c.now)}`;
+    if (c.key === 'roster') {
+      const gone = (c.saved || []).filter(id => !(c.now || []).includes(id));
+      return `neuron${gone.length > 1 ? 's' : ''} ${gone.join(', ')} ${gone.length > 1 ? 'are' : 'is'} not in this NWB and left the population`;
+    }
+    if (c.key === 'markers') {
+      const gone = (c.saved || []).filter(m => !(c.now || []).some(n => n.id === m.id)).map(m => m.label || eventLabel(m.e));
+      return gone.length ? `marker${gone.length > 1 ? 's' : ''} ${gone.join(', ')} dropped: this session does not record the event` : `markers changed: ${show(c.saved)} → ${show(c.now)}`;
+    }
+    return `${STATE_LABELS[c.key] || c.key} was reset: saved ${show(c.saved)}, now ${show(c.now)}`;
+  }
+  function renderFindingBar() {
+    const bar = $('findingBar'), o = openedFinding;
+    if (!o) { bar.hidden = true; bar.innerHTML = ''; return; }
+    const f = o.finding, pop = (f.state || {}).mode === 'population';
+    const when = f.saved_at ? new Date(f.saved_at).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'}) : '';
+    const status = STATUSES.includes(f.status) ? f.status : STATUSES[0];
+    let tone, body;
+    const lost = (o.changes || []).filter(c => NOT_RESTORED.has(c.key)), reset = (o.changes || []).filter(c => !NOT_RESTORED.has(c.key));
+    const sentence = t => t.charAt(0).toUpperCase() + t.slice(1);
+    const items = [...lost.map(c => `<li class="bad"><b>Not restored:</b> ${esc(stateText(c))}.</li>`),
+      ...(o.diff || []).map(t => `<li>${esc(t)}</li>`), ...reset.map(c => `<li>${esc(sentence(stateText(c)))}.</li>`)];
+    if (o.refused) { tone = 'bad'; body = `<p>${esc(o.refused)}</p>`; }
+    else if (o.pending) { tone = 'wait'; body = '<p>Redrawing the saved figure, then comparing its numbers with the saved ones…</p>'; }
+    else if (o.failed) { tone = 'bad'; body = `<p>The saved figure could not be redrawn: ${esc(o.failed)}.</p>${items.length ? `<ul>${items.join('')}</ul>` : ''}`; }
+    else if (!items.length) {
+      tone = 'ok';
+      body = `<p>✓ Same data, same numbers: the NWB file, the ${pop ? 'neurons' : 'unit'} and every group's events, trials and ${pop ? 'fit' : 'count-window rate'} match what was saved.</p>`;
+    } else {
+      tone = lost.length ? 'bad' : 'warn';
+      body = `<p>${items.length} difference${items.length > 1 ? 's' : ''} from when it was saved:</p><ul>${items.join('')}</ul>`;
+    }
+    const tags = (f.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join('');
+    bar.className = `finding-bar ${tone}`;
+    if (o.notesOpen === undefined && !o.pending) o.notesOpen = !matchMedia('(max-width: 959px)').matches;   // on a phone the figure comes first
+    bar.innerHTML = `<div class="fb-head"><div class="fb-title"><span class="st st-${status}">${status}</span><b>${esc(f.title || 'Finding')}</b>` +
+      `<small>${when ? `saved ${esc(when)}` : ''}${f.saved_on ? ` on ${esc(f.saved_on)}` : ''}</small></div>` +
+      (f.id ? `<a class="link" href="/findings/#${esc(f.id)}">Notes &amp; edit</a>` : '') +
+      `<button type="button" class="close" data-fbclose aria-label="Close the finding">×</button></div>` + body +
+      (f.note ? `<details class="fb-note"${o.notesOpen ? ' open' : ''}><summary>Notes</summary><p>${esc(f.note)}</p></details>` : '') +
+      (tags ? `<div class="chips fb-tags">${tags}</div>` : '') +
+      (o.diverged ? '<p class="fb-div">The view has changed since this finding was opened. <button type="button" class="link" data-fbback>Back to the saved view</button></p>' : '');
+    bar.hidden = false;
+  }
+
   function applyTemplate(t) {
     const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, tick: S.tick, rasterH: S.rasterH, rasterFit: S.rasterFit, psthH: S.psthH, bars: S.bars, err: S.err,
       mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, tdrFactors: S.tdrFactors, tdrWin: S.tdrWin, worldCoding: S.worldCoding, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes, popSplit: S.popSplit};
@@ -1442,7 +1656,9 @@
   function openMenu() {
     const theme = localStorage.getItem('eg-theme') || 'auto';
     const other = S.mode === 'population' ? ['raster', 'Rasters', 'one unit: raster over PSTH'] : ['population', 'Population', 'many neurons: heatmap, components, trajectories'];
-    const html = popHead('electro_gui') + `<div class="pop-body"><button type="button" class="item" data-menu="mode:${other[0]}"><span class="main"><b>Switch to ${other[1]}</b><small>${other[2]}</small></span></button><button type="button" class="item" data-menu="views"><span class="main"><b>Views & templates</b><small>apply a template or config file, save or restore a view, copy a link</small></span></button>` +
+    const html = popHead('electro_gui') + `<div class="pop-body"><button type="button" class="item" data-menu="mode:${other[0]}"><span class="main"><b>Switch to ${other[1]}</b><small>${other[2]}</small></span></button><button type="button" class="item" data-menu="views"><span class="main"><b>Views & templates</b><small>apply a template or config file, reopen a finding, copy a link</small></span></button>` +
+      `<button type="button" class="item" data-menu="savefinding"><span class="main"><b>Save finding…</b><small>this figure, with notes and the numbers it shows</small></span></button>` +
+      `<a class="item" href="/findings/"><span class="main"><b>Findings</b><small>every saved finding, with its picture, notes and status</small></span></a>` +
       `<button type="button" class="item" data-menu="export"><span class="main"><b>Export</b><small>SVG, PNG, CSV, settings</small></span></button>` +
       `<button type="button" class="item" data-menu="restart"><span class="main"><b>Restart server</b><small id="restartInfo">load the code now on disk, then reload this page</small></span></button><div class="editor">` +
       `<label class="row"><span>Session</span><select id="menuSession">${D.catalog.map(s => `<option value="${esc(s.id)}"${s.id === S.session ? ' selected' : ''}>${esc(shortSession(s.id))}</option>`).join('')}</select></label>` +
@@ -2419,16 +2635,18 @@
       download(`${stem}_rows.csv`, new Blob([`# ${JSON.stringify(provenance(M))}\n` + lines.join('\n')], {type: 'text/csv'}));
     } else if (kind === 'json') download(`${stem}_settings.json`, new Blob([JSON.stringify(provenance(M), null, 2)], {type: 'application/json'}));
   }
-  async function pngFromSVG(svg, name) {
+  async function svgToPng(svg, scale) {
     const img = new Image();
     const url = URL.createObjectURL(new Blob([svg], {type: 'image/svg+xml'}));
-    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
-    const canvas = document.createElement('canvas');
-    canvas.width = img.width * 2; canvas.height = img.height * 2;
-    const ctx = canvas.getContext('2d'); ctx.scale(2, 2); ctx.drawImage(img, 0, 0);
-    URL.revokeObjectURL(url);
-    canvas.toBlob(b => download(name, b), 'image/png');
+    try {
+      await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('the figure could not be drawn as a picture')); img.src = url; });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale); canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d'); ctx.scale(scale, scale); ctx.drawImage(img, 0, 0);
+      return await new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error('the browser could not encode the picture'))), 'image/png'));
+    } finally { URL.revokeObjectURL(url); }
   }
+  async function pngFromSVG(svg, name) { download(name, await svgToPng(svg, 2)); }
   const csv = v => { if (v === null || v === undefined) return ''; const s = String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 
   // ---------------------------------------------------------- interaction
@@ -3069,6 +3287,12 @@
     $('unitBtn').addEventListener('click', () => D.units.length && openUnitPicker());
     $('alignBtn').addEventListener('click', () => D.summary && openAlignPicker());
     $('viewsBtn').addEventListener('click', openViews);
+    $('saveBtn').addEventListener('click', openSaveFinding);
+    $('findingBar').addEventListener('toggle', e => { if (openedFinding && e.target.matches('.fb-note')) openedFinding.notesOpen = e.target.open; }, true);
+    $('findingBar').addEventListener('click', e => {
+      if (e.target.closest('[data-fbclose]')) { openedFinding = null; renderFindingBar(); }
+      else if (e.target.closest('[data-fbback]') && openedFinding) openFinding(openedFinding.finding);
+    });
     $('cfgFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) openConfigFile(f); });
     $('exportBtn').addEventListener('click', openExport);
     $('menuBtn').addEventListener('click', openMenu);
@@ -3100,7 +3324,14 @@
       const t = e.target.closest('button, [data-close]');
       if (!t) return;
       if (t.hasAttribute('data-close')) { closePop(); return; }
-      if (t.dataset.menu) { closePop(); if (t.dataset.menu.startsWith('mode:')) setMode(t.dataset.menu.slice(5)); else if (t.dataset.menu === 'restart') restartServer(); else (t.dataset.menu === 'views' ? openViews : openExport)(); return; }
+      if (t.dataset.menu) {
+        closePop();
+        if (t.dataset.menu.startsWith('mode:')) setMode(t.dataset.menu.slice(5));
+        else if (t.dataset.menu === 'restart') restartServer();
+        else if (t.dataset.menu === 'savefinding') openSaveFinding();
+        else (t.dataset.menu === 'views' ? openViews : openExport)();
+        return;
+      }
       if (t.dataset.ru) {
         const id = Number(t.dataset.ru), set = new Set(S.roster);
         set.has(id) ? set.delete(id) : set.add(id);
@@ -3120,11 +3351,10 @@
       if (t.dataset.uq) { const q = t.dataset.uq; S.unitQ = S.unitQ.includes(q) ? S.unitQ.filter(x => x !== q) : [...S.unitQ, q]; t.classList.toggle('on'); fillUnitItems($('unitSearch').value); saveState(); return; }
       if (t.dataset.ua) { const a = t.dataset.ua; S.unitArea = S.unitArea.includes(a) ? S.unitArea.filter(x => x !== a) : [...S.unitArea, a]; t.classList.toggle('on'); fillUnitItems($('unitSearch').value); saveState(); return; }
       if (t.dataset.tpl) { closePop(); applyTemplate(TEMPLATES[Number(t.dataset.tpl)]); return; }
-      if (t.dataset.view) { closePop(); applyView(D.views[t.dataset.view]); return; }
+      if (t.dataset.finding) { const f = D.findings[Number(t.dataset.finding)]; if (f) openFinding(f); return; }
       if (t.dataset.cfg) { closePop(); const c = D.configs[Number(t.dataset.cfg)]; if (c) applyConfig(c.title, c.state); return; }
       if (t.hasAttribute('data-openconfig')) { closePop(); $('cfgFile').click(); return; }
-      if (t.dataset.vdel) { if (confirm(`Delete saved view “${t.dataset.vdel}”?`)) getJSON('/api/views', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: t.dataset.vdel, delete: true})}).then(openViews).catch(err => toast(err.message, true)); return; }
-      if (t.hasAttribute('data-saveview')) { openSaveView(); return; }
+      if (t.hasAttribute('data-savefinding')) { openSaveFinding(); return; }
       if (t.hasAttribute('data-copylink')) { saveState(); setTimeout(() => navigator.clipboard.writeText(location.href).then(() => toast('Link copied — it restores this exact view.'), () => toast(location.href)), 300); return; }
       if (t.dataset.exp) { closePop(); (S.mode === 'population' ? popExport : doExport)(t.dataset.exp).catch(err => toast(err.message, true)); return; }
       if (t.dataset.mdel) { S.markers = S.markers.filter(m => m.id !== t.dataset.mdel); if (S.sort === `marker:${t.dataset.mdel}`) S.sort = 'session'; closePop(); renderStructure(); changed(); return; }
@@ -3355,6 +3585,14 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, error ? 6000 : 2600);
   }
 
+  // #f=<id> (the Findings page's Open) opens that finding once; the address bar then holds the view as usual.
+  async function openFindingLink() {
+    const m = location.hash.match(/[#&]f=([\w-]+)/);
+    if (!m) return false;
+    history.replaceState(null, '', location.pathname);
+    try { return await openFinding(await getJSON(`/api/findings/${encodeURIComponent(m[1])}`)); }
+    catch (e) { toast(`Could not open finding ${m[1]}: ${e.message}`, true); return false; }
+  }
   async function start() {
     // Drop a one-time ?token= from the address bar once the cookie is set.
     if (location.search.includes('token=')) history.replaceState(null, '', location.pathname + location.hash);
@@ -3366,6 +3604,7 @@
       const cat = await getJSON('/api/catalog');
       D.catalog = cat.sessions;
       $('sessionSelect').innerHTML = D.catalog.map(s => `<option value="${esc(s.id)}" title="${esc(s.id)}">${esc(shortSession(s.id))}</option>`).join('') || '<option>No sessions</option>';
+      if (await openFindingLink()) return;
       const sid = D.catalog.some(s => s.id === S.session) ? S.session : cat.default_session;
       if (!sid) { showEmpty('No assembled sessions found', 'Mount the results drive (for example /Volumes/T7) or start electro_gui with --session-file.'); return; }
       await selectSession(sid);
@@ -3377,8 +3616,10 @@
   // Read-only hooks for QA scripts and the browser console.
   window.EGDebug = {state: () => clone(S), model: () => D.model, exportSVG: () => exportSVG(), layout: () => D.layout,
     popExportSVG: () => popExportSVG(), popFit: () => D.popFit, popLayout: () => D.popLayout,
-    behavior: () => D.behavior, btLayout: () => D.btLayout, pin: p => (p === undefined ? S.pin : setPin(p))};
+    behavior: () => D.behavior, btLayout: () => D.btLayout, pin: p => (p === undefined ? S.pin : setPin(p)),
+    evidence: () => evidence(), figureReady: () => figureReady(), finding: () => openedFinding};
   addEventListener('hashchange', () => {
+    if (/[#&]f=/.test(location.hash)) { openFindingLink(); return; }
     const m = location.hash.match(/[#&]s=([^&]+)/);
     if (!m) return;
     try {

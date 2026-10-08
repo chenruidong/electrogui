@@ -48,7 +48,9 @@ prepared bundles or scene files are substituted when a field is missing.
 
 `--config-dir DIR` (repeatable, default `output/presentation`, relative to the current
 directory; a missing directory is simply empty) names where the Views menu looks
-for JSON config files; see **Config files** below.
+for JSON config files; see **Config files** below.  `--findings-dir DIR` (default
+`output/electro_gui/findings`, also relative to the current directory) is where
+findings are saved; see **Findings** below.
 The optional canonical trial-strategy classifier is resolved through the
 repository's sibling `mworks/imitation` or `IMITATION_REPO` environment variable.
 Only its code is used, with its fingerprint recorded. If it is unavailable,
@@ -305,9 +307,9 @@ drawn); PSTHs, bars, counts and exports always use every row.
   *Touch: predator vs prey* (unit 893 style), *Prey touch: world × previous
   object* (unit 315 style), *World × role × action*, *PM touches: did the trial
   go wrong?*, *Trial initiation by world*, *Prey visible, sorted by touch time*.
-- **Saved views** store the session, unit and every setting on the server
-  (`--views-file`, default `output/electro_gui/saved_views.json`), so every
-  device that opens the server sees them.
+- **Findings** (the **Save** button) keep a figure with a title, notes, tags and
+  a status, its exact settings, its picture and the numbers it shows; reopening
+  one redraws it and says whether any of them has changed.  See **Findings**.
 - **Links.**  The address bar always holds the complete view (`#s=…`); *Copy
   link* shares it.  The last view is also restored from browser storage.
 - **Export**: figure SVG (vector, with title, legend and the settings plus
@@ -316,11 +318,72 @@ drawn); PSTHs, bars, counts and exports always use every row.
   marker times, key fields) and settings JSON.  CSVs start with a `#` line of
   provenance.
 
+### Findings
+
+A **finding** is a figure you want to come back to, saved with what it shows.
+**Save** (beside Views; ⋯ → *Save finding…* on a phone) asks for a title and,
+optionally, notes, tags and a status: *lead* (the default), *checking*,
+*supported* or *dropped*.  The status is your judgement; the program never sets
+it.  Saving is possible only once the figure is fully drawn for the current
+settings, so not while a session, raster or fit is loading and not from an empty
+or failed figure.  A save that fails says why and keeps what you typed, and so
+does closing the dialog by accident.
+
+A finding keeps three things taken from one drawing of the figure, so they
+cannot disagree: the picture, as *Export → PNG* draws it; the exact settings
+(the state object of the address bar's `#s=…`); and the evidence.  The evidence
+is the session ID and the NWB's SHA256 and size; the unit's ID, peak channel,
+area, quality and spike count, or every neuron's in Population; the support line
+(events, trials, and the rows filtered out, outside stable trials, whose window
+leaves the stable run, in hidden groups or outside yoked trials); and each shown
+group's events, trials and count-window rate ± SEM, or the fit's method, rank,
+variance explained, constant neurons left out, convergence and warnings.  It
+also records when and on which machine it was saved, with the electro_gui
+version and git commit.  No spike times, rows or recordings are stored.
+
+**Reopening** a finding (Views → Findings, or *Open in electro_gui* on the
+Findings page) redraws it through the page's usual checks, then measures the
+same evidence again.  A banner above the figure says *Same data, same numbers*,
+or lists each difference: an NWB with another checksum (unit IDs may then name
+other neurons, since they do not survive a re-sort and the channel does); a unit
+whose channel, area, quality or spike count changed; support, group events,
+trials or rates that moved; new fit warnings.  Settings the page could not
+restore are named instead of silently replaced: a unit or alignment the session
+does not have (the figure then shows another, and the banner says so in red),
+neurons no longer in the NWB, markers on events the session does not record, and
+keys this version does not know.  A finding whose session is not on this server
+is refused, and nothing changes.  The banner also shows the notes, and says so
+once the view has moved away from the saved one.
+
+The **Findings page** (`/findings/`; ⋯ → *Findings*) shows every finding as a
+card with its picture, status, tags and the start of its notes, newest first.
+Every word in the search box must appear in the title, notes, tags, status,
+session, unit, channel, alignment or saving machine; chips filter by status.  A
+card opens to its picture, its title, notes, tags and status (editable), its
+saved evidence and its exact settings.  Only those four can be edited: the
+settings and evidence stay as saved, so a finding keeps saying what was seen
+then.  *Download file* gives its JSON; *Delete…* moves its files to `.deleted/`.
+
+Each finding is one `<id>.json` and one `<id>.png` in `--findings-dir`,
+written atomically.  In the main checkout `output/` links into Dropbox
+(`projects/analysis_imitation/data/output`), so a finding saved on either Mac,
+from any device, appears on both, and because each finding is its own file two
+machines only ever write the same file when they edit the same finding.  A
+server started from a git worktree has no such link: give it an explicit
+`--findings-dir`, or its findings stay in the worktree.  The launcher prints the
+folder.  Each JSON is also a config file (`electro_gui_config: 1` with `title`,
+`note` and `state`), so copying it into a deck's `electro_gui_configs/` makes it
+a slide config, with the finding's notes as its tooltip.
+
+A finding records a view and a judgement; it is not a test.  Nothing is
+recomputed on the server, no statistic is attached, and nothing corrects for
+the views browsed before it.
+
 ### Config files
 
 A **config file** is a JSON view state kept in the repository, so a figure can be
 restored from a file that is reviewed and versioned with the analysis instead of
-from a link or a server-side saved view.  The deck configs live next to their
+from a link or a finding.  The deck configs live next to their
 slides, in `output/presentation/<deck>/electro_gui_configs/*.json`; launching from the
 repository root finds them all (`--config-dir output/presentation` is the default), and
 `--config-dir output/presentation/<deck>/electro_gui_configs` (or any folder of
@@ -347,7 +410,7 @@ label, used only to order the list) and `note` are optional.  `state` is the
 explorer's own settings object, the one in the address bar's `#s=…` and in every
 export: keys not named here take the GUI defaults, except `session` and `unit`,
 which stay as they are when the file names none.  The page passes it through the
-same validation as a saved view (unknown keys are dropped, out-of-range values
+same validation as a link (unknown keys are dropped, out-of-range values
 are clamped or reset), so a typo in a key or value is ignored silently; the
 test-suite checks every deck config against the page's key list and types for
 that reason.  If `state.session` is not on this server the file is refused with
@@ -362,11 +425,12 @@ the section instead of stopping the menu.  `GET /api/configs` returns
 `{configs, errors}` and there is no write route.
 
 How they differ from the other ways to restore a view.  **Templates** are built
-into the page, change the figure but keep your unit and session.  **Saved views**
-are made in the GUI and live in one server-side file
-(`--views-file`, under the git-ignored `output/`).  **Config files** are
-hand-written or exported, live in git with the deck, and restore the whole view
-including the session and unit.
+into the page, change the figure but keep your unit and session.  **Findings**
+are made in the GUI, keep their notes, picture and numbers, live in
+`--findings-dir` (under the git-ignored, Dropbox-linked `output/`), and check
+their numbers when reopened.  **Config files** are hand-written, exported or
+copied from a finding, live with the deck, and restore the whole view including
+the session and unit.
 
 ### Explorer API
 
@@ -391,7 +455,12 @@ stable trials as base64 bitmasks over complete trials),
 (roster, window, grid, weighting, method, groups as row IDs → coordinates,
 loadings, group means, variance, diagnostics) and `POST /api/explorer/popprobe`
 (the same body plus `probe_times` → every trial's or event's projection at
-those times); `GET`/`POST /api/views`; `GET /api/configs`.  The session
+those times); `GET /api/configs`; and for findings `GET /api/findings`
+(`{findings, errors, folder}`), `GET /api/findings/<id>`,
+`GET /api/findings/<id>/thumbnail` (the PNG), `POST /api/findings` (title, note,
+tags, status, state, evidence and the picture as a PNG data URL, up to 12 MiB →
+the stored finding) and `POST /api/findings/<id>` (any of title, note, tags and
+status, or `{"delete": true}`).  The session
 must first be opened with a `load` job, which verifies the file.  Responses are
 gzip-compressed when the client accepts it.
 

@@ -726,9 +726,107 @@
     return {first, last};
   }
 
+  // -------------------------------------------------------------- findings
+  /** JSON with object keys sorted, so two equal values always compare equal. */
+  function stableJSON(v) {
+    if (Array.isArray(v)) return `[${v.map(stableJSON).join(',')}]`;
+    if (v && typeof v === 'object') return `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stableJSON(v[k])}`).join(',')}}`;
+    return JSON.stringify(v === undefined ? null : v);
+  }
+  /** The keys of a saved view state that came back different once the page applied it: [{key, saved, now}]. */
+  function stateChanges(saved, applied) {
+    return Object.keys(saved || {}).filter(k => stableJSON(saved[k]) !== stableJSON((applied || {})[k]))
+      .map(k => ({key: k, saved: saved[k], now: (applied || {})[k]}));
+  }
+  const RATE_TOL = 1e-3;   // spikes/s; the saved rates are rounded to 4 decimals
+  const FRACTION_TOL = 1e-3;
+  const listed = (items, k = 5) => items.slice(0, k).join(', ') + (items.length > k ? ` and ${items.length - k} more` : '');
+  /** What differs between two {id, peak_channel, area, quality, n_spikes} records of one unit ID, as phrases. */
+  function unitDrift(a, b) {
+    const out = [];
+    if (a.peak_channel !== b.peak_channel) out.push(`peak channel ${a.peak_channel ?? '?'} → ${b.peak_channel ?? '?'}`);
+    if (a.area !== b.area) out.push(`area ${a.area ?? '?'} → ${b.area ?? '?'}`);
+    if (String(a.quality ?? '').toLowerCase() !== String(b.quality ?? '').toLowerCase()) out.push(`quality ${a.quality ?? '?'} → ${b.quality ?? '?'}`);
+    if (a.n_spikes !== b.n_spikes) out.push(`${a.n_spikes ?? '?'} → ${b.n_spikes ?? '?'} spikes`);
+    return out;
+  }
+  /**
+   * A finding's saved evidence against the same measurement of the redrawn figure
+   * (explorer.js evidence()): one sentence per difference in the data or the numbers,
+   * the identity of the data first.  An empty list means the same data gave the same
+   * numbers.  Settings the page could not restore are reported by stateChanges().
+   */
+  function compareEvidence(saved, now) {
+    if (!saved || !now) return ['The finding has no saved evidence to compare with.'];
+    const out = [];
+    if (saved.session_id !== now.session_id) out.push(`It was saved from session ${saved.session_id}; the figure shows ${now.session_id}.`);
+    const a = (saved.source || {}).sha256, b = (now.source || {}).sha256;
+    if (a && b && a !== b) out.push(`The session NWB is not the file it was saved from (SHA256 ${a.slice(0, 12)}… then, ${b.slice(0, 12)}… now): unit IDs may name other neurons.`);
+    else if (a && !b) out.push('The server did not report the NWB checksum, so the file cannot be matched.');
+    if (saved.unit && now.unit) {
+      if (saved.unit.id !== now.unit.id) out.push(`It was saved for unit ${saved.unit.id}; the figure shows unit ${now.unit.id}.`);
+      else {
+        const drift = unitDrift(saved.unit, now.unit);
+        if (drift.length) out.push(`Unit ${saved.unit.id} is not the neuron it was saved for: ${drift.join(', ')}.`);
+      }
+    }
+    if (saved.roster && now.roster) {
+      const was = new Map(saved.roster.map(u => [u.id, u])), is = new Map(now.roster.map(u => [u.id, u]));
+      const gone = [...was.keys()].filter(id => !is.has(id)), added = [...is.keys()].filter(id => !was.has(id));
+      const moved = [...was.keys()].filter(id => is.has(id) && unitDrift(was.get(id), is.get(id)).length)
+        .map(id => `${id} (${unitDrift(was.get(id), is.get(id)).join(', ')})`);
+      if (gone.length) out.push(`Neurons in the saved population but not now: ${listed(gone)}.`);
+      if (added.length) out.push(`Neurons in the population now but not when saved: ${listed(added)}.`);
+      if (moved.length) out.push(`Neurons that are not the ones saved: ${listed(moved, 3)}.`);
+    }
+    const sv = saved.support || {}, nv = now.support || {};
+    const tot = [['events', 'events'], ['trials', 'trials'], ['common_trials', 'trials shared by every neuron']]
+      .filter(([k]) => sv[k] !== undefined && sv[k] !== nv[k]).map(([k, label]) => `${label} ${sv[k]} → ${nv[k] ?? '?'}`);
+    if (tot.length) out.push(`Support changed: ${tot.join('; ')}.`);
+    const key = g => `${g.label}${g.panel ? ` · ${g.panel}` : ''}`;
+    const was = new Map((saved.groups || []).map(g => [key(g), g])), is = new Map((now.groups || []).map(g => [key(g), g]));
+    for (const [k, g] of was) {
+      const h = is.get(k);
+      if (!h) { out.push(`Group “${k}” is not in the redrawn figure.`); continue; }
+      const bits = [];
+      if (g.events !== h.events) bits.push(`${g.events} → ${h.events} events`);
+      if (g.trials !== h.trials) bits.push(`${g.trials} → ${h.trials} trials`);
+      if (Number.isFinite(g.rate_hz) && !(Math.abs(g.rate_hz - h.rate_hz) <= RATE_TOL)) bits.push(`${fmtNum(g.rate_hz, 2)} → ${fmtNum(h.rate_hz, 2)} spikes/s in the count window`);
+      if (bits.length) out.push(`“${k}”: ${bits.join(', ')}.`);
+    }
+    const fresh = [...is.keys()].filter(k => !was.has(k));
+    if (fresh.length) out.push(`Groups that were not in the saved figure: ${listed(fresh.map(k => `“${k}”`))}.`);
+    const sf = saved.fit, nf = now.fit;
+    if (sf && nf) {
+      if (stableJSON(sf.dropped_constant_units || []) !== stableJSON(nf.dropped_constant_units || []))
+        out.push(`Neurons left out of the fit as constant: ${listed(sf.dropped_constant_units || []) || 'none'} → ${listed(nf.dropped_constant_units || []) || 'none'}.`);
+      if (sf.rank !== nf.rank) out.push(`Fit rank ${sf.rank} → ${nf.rank}.`);
+      if (sf.converged !== false && nf.converged === false) out.push('The fit no longer converges.');
+      const newWarnings = (nf.warnings || []).filter(w => !(sf.warnings || []).includes(w));
+      if (newWarnings.length) out.push(`New fit warnings: ${listed(newWarnings, 3)}.`);
+      for (const [k, label] of [['explained_variance_ratio', 'variance explained'], ['component_r2', 'R²']]) {
+        const x = sf[k], y = nf[k];
+        if (!Array.isArray(x) || !Array.isArray(y)) continue;
+        const diff = x.map((v, i) => (Math.abs(v - y[i]) > FRACTION_TOL || !Number.isFinite(y[i]) ? `component ${i + 1} ${fmtNum(100 * v, 1)}% → ${Number.isFinite(y[i]) ? fmtNum(100 * y[i], 1) : '?'}%` : null)).filter(Boolean);
+        if (diff.length) out.push(`${label[0].toUpperCase()}${label.slice(1)} changed: ${listed(diff, 3)}.`);
+      }
+    }
+    return out;
+  }
+  /** Does a finding match every word of a search?  Title, note, tags, status, session, unit, channel, alignment, host. */
+  function findingMatches(f, text) {
+    const words = String(text || '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return true;
+    const st = f.state || {}, ev = f.evidence || {}, u = ev.unit || {};
+    const hay = [f.title, f.note, ...(f.tags || []), f.status, st.session, `unit ${st.unit}`, u.peak_channel !== undefined && u.peak_channel !== null ? `ch ${u.peak_channel}` : '',
+      u.area, st.align, humanize(st.align || ''), st.mode, ev.title, f.saved_on, f.saved_at].filter(Boolean).join(' \n ').toLowerCase();
+    return words.every(w => hay.includes(w));
+  }
+
   return {GUARD_S, MISSING, SEP, FIELD_LABELS, LEVEL_ORDER, fieldLabel, formatLevel, fmtNum, humanize, levelKey,
     stimulusColor, prepareBehavior, decodeSpikeTrain, spikeColumns, timeAtPos, posAtTime, behaviorView, viewTrials, yokedTrials, upperBound,
     prepareTable, rawValue, fieldLevels, filterMask, eligibility, quantileEdges, groupRows, indexEvents,
     markerTimes, median, countIn, lowerBound, psthGrid, rowCurve, psth, psthFromCurves, thin, windowRates, sortRows, encodeState, decodeState,
-    decodeMask, andMask, andCount, popcount, fullMask, bestSubset, heatColor, project3d, hash};
+    decodeMask, andMask, andCount, popcount, fullMask, bestSubset, heatColor, project3d, hash,
+    stableJSON, stateChanges, compareEvidence, findingMatches};
 });
