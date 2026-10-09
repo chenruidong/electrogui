@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "electro_gui",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": [
+        "-c",
+        "for p in \"$HOME/miniconda/envs/imitation-phys/bin/python\" \"$HOME/miniforge3/envs/imitation-phys/bin/python\"; do [ -x \"$p\" ] && exec \"$p\" -m electro_gui --no-browser --port 8778; done; echo 'no imitation-phys python found' >&2; exit 1"
+      ],
+      "port": 8778
+    },
+    {
+      "name": "electro_gui_8779",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": [
+        "-c",
+        "for p in \"$HOME/miniconda/envs/imitation-phys/bin/python\" \"$HOME/miniforge3/envs/imitation-phys/bin/python\"; do [ -x \"$p\" ] && exec \"$p\" -m electro_gui --no-browser --port 8779; done; echo 'no imitation-phys python found' >&2; exit 1"
+      ],
+      "port": 8779
+    }
+  ]
+}

@@ -27,7 +27,7 @@ There are two equivalent entry points:
 
 ```bash
 python -m electro_gui --no-browser --port 0
-# After installing this repository with pip install -e .:
+# After installing it (README.md at the repository root, Install):
 electro-gui --version
 electro-gui
 ```
@@ -63,8 +63,9 @@ checkout shares them (`electro_gui/paths.py`):
 whatever the Mac mounts Dropbox under.  `ELECTRO_GUI_OUTPUT=/some/folder` moves
 the cache and findings together.  Without Dropbox or that variable the launcher
 stops and asks for `--cache-dir` and `--findings-dir`.
-The optional canonical trial-strategy classifier is resolved through the
-repository's sibling `mworks/imitation` or `IMITATION_REPO` environment variable.
+The optional canonical trial-strategy classifier is resolved by imitation_phys:
+the analysis_imitation checkout's sibling `mworks/imitation`, or the
+`IMITATION_REPO` environment variable.
 Only its code is used, with its fingerprint recorded. If it is unavailable,
 strategy-dependent comparisons are unavailable; other fields remain usable.
 
@@ -651,7 +652,6 @@ No pipeline/cluster job or remote publication is launched.
 ## Verification
 
 ```bash
-python -m unittest discover -s tests -p 'test_electro_gui*.py' -v
 python -m unittest discover -s tests -t . -v
 ```
 
