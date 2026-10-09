@@ -26,7 +26,7 @@ server with Ctrl-C.
 There are two equivalent entry points:
 
 ```bash
-python -m imitation_phys electro-gui --no-browser --port 0
+python -m electro_gui --no-browser --port 0
 # After installing this repository with pip install -e .:
 electro-gui --version
 electro-gui
@@ -94,7 +94,7 @@ with Filter / Group / Markers / Display tabs.
   channel, since the channel survives a re-sort.  The alignment picker lists
   every recorded event with its candidate count, common ones first;
   `object outcome (any)` is the four-outcome union.  `object_spawn` is
-  deliberately not offered (`HIDDEN_EVENTS` in `data.py`, also absent from
+  deliberately not offered (`HIDDEN_EVENTS` in `imitation_phys/session_store.py`, also absent from
   markers and the events API): it is the task creating an object, and a trial
   the animal never initiates times out with every object spawned and none
   shown (`sub-Ravel_ses-2026_09_15` trial 314), so a spawn-aligned row can be an
@@ -226,7 +226,7 @@ Neurons tab on phones) and a model block at the top of *Model & display*.
   neuron's group-mean rates on the explorer's grid (per-event or per-trial
   weighting as chosen) and fits one PCA, ICA or factor-analysis basis to all
   groups' condition-time rows jointly — the classic workspace's sklearn fit
-  (`population.fit_basis`), with the same constant-neuron and rank checks.
+  (`imitation_phys.explorer_core.fit_basis`), with the same constant-neuron and rank checks.
   Every event is re-checked on the server against the common-trial eligibility
   rule for this roster and window.  Component signs are set so each
   component's largest loading is positive; ICA/FA components are listed by

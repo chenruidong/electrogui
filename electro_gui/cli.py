@@ -47,7 +47,7 @@ def run(args):
     if restart:
         args.port, args.no_browser = int(restart["port"]), True
     os.environ.setdefault("MPLCONFIGDIR", str(Path(args.cache_dir).expanduser() / "matplotlib"))
-    from .data import SessionStore
+    from imitation_phys.session_store import SessionStore
     from .server import Application, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=Path(args.cache_dir).expanduser())

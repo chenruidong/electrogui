@@ -18,6 +18,10 @@ the sync-fit window, and a display window that, padded by the same fixed
 0.4 s guard, lies inside the run of consecutive eligible trials that
 contains the event.  The browser applies the window part of that rule from
 the returned span, so moving the window never needs a server round trip.
+
+The rows, spans, time grid, rates and basis fit themselves live in
+:mod:`imitation_phys.explorer_core`, which the world-axis stages call to
+reproduce an exported population view; this module imports them.
 """
 from __future__ import annotations
 
@@ -28,11 +32,12 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .analysis import OUTCOMES, UNION_ALIGNMENTS, _runs
-from .conditions import missing
-from .data import HIDDEN_EVENTS
+from imitation_phys.explorer_core import (GUARD_S, OUTCOMES, UNION_ALIGNMENTS, _cache, _candidate, _spans,
+                                         _unit_ids, alignment_rows, fit_basis, grid, group_means, row_rates)
+from imitation_phys.session_store import HIDDEN_EVENTS
 
-GUARD_S = 0.4          # analysis.prepare_rows padding guard
+from .conditions import missing
+
 MAX_WINDOW_S = 10.0    # analysis._validate_settings display limit
 MAX_COMPONENTS = 50    # population fit; static/explorer.js MAX_NCOMP
 SPIKE_DECIMALS = 5     # 10 us; well below a 30 kHz sample
@@ -51,14 +56,6 @@ def _finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
-def _cache(loaded: Any) -> dict:
-    cache = getattr(loaded, "_explorer_cache", None)
-    if cache is None:
-        cache = {}
-        setattr(loaded, "_explorer_cache", cache)
-    return cache
-
-
 def alignment_counts(loaded: Any) -> dict[str, int]:
     """Candidate rows per alignment, including the four-outcome union."""
     cache = _cache(loaded)
@@ -69,27 +66,6 @@ def alignment_counts(loaded: Any) -> dict[str, int]:
             counts[name] = sum(counts.get(k, 0) for k in members)
         cache["counts"] = dict(counts)
     return cache["counts"]
-
-
-def _candidate(row: Mapping[str, Any], complete: set) -> bool:
-    return (row.get("trial") in complete and _finite(row.get("t"))
-            and row.get("within_ephys_recording", True) is not False
-            and row.get("within_sync_fit_window", True) is not False)
-
-
-def alignment_rows(loaded: Any, alignment: str) -> list[Mapping[str, Any]]:
-    """Candidate rows of one alignment in session order (cached per session)."""
-    cache = _cache(loaded).setdefault("rows", {})
-    if alignment not in cache:
-        known = set(getattr(loaded, "alignments", []) or [])
-        if alignment not in UNION_ALIGNMENTS and alignment not in known:
-            raise KeyError(f"Unknown alignment: {alignment}")
-        events = UNION_ALIGNMENTS.get(alignment, {alignment})
-        complete = {t["id"] for t in loaded.trials if t.get("complete") is True}
-        rows = [r for r in loaded.rows if r.get("event") in events and _candidate(r, complete)]
-        rows.sort(key=lambda r: (float(r["t"]), int(r.get("row_id", 0))))
-        cache[alignment] = rows
-    return cache[alignment]
 
 
 def _column(key: str, values: list, info: Mapping[str, Any], anchors: list[float]) -> dict | None:
@@ -173,25 +149,6 @@ def _window(value: Any, name: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"{name} must be finite")
     return number
-
-
-def _spans(loaded: Any, rows: list, eligible: set) -> tuple[list, list]:
-    """Each row's eligible run relative to its event (clipped to the recording), or None + status."""
-    duration = float(getattr(loaded, "duration_s", math.inf) or math.inf)
-    runs = [(max(a, 0.0), min(b, duration)) for a, b, _ in _runs(loaded, eligible)]
-    run_lo = np.array([a for a, _ in runs]) if runs else np.zeros(0)
-    spans, status = [], []
-    for row in rows:
-        t = float(row["t"])
-        if row.get("trial") not in eligible:
-            spans.append(None); status.append(1)          # trial not eligible under the policy
-            continue
-        k = int(np.searchsorted(run_lo, t + 1e-9, side="right")) - 1
-        if k < 0 or not runs[k][0] - 1e-9 <= t <= runs[k][1] + 1e-9:
-            spans.append(None); status.append(2)          # event outside every eligible run
-            continue
-        spans.append([round(runs[k][0] - t, 6), round(runs[k][1] - t, 6)]); status.append(0)
-    return spans, status
 
 
 def unit_raster(loaded: Any, alignment: str, unit_id: int, policy: str, lo: float, hi: float) -> dict:
@@ -328,31 +285,6 @@ def session_summary(loaded: Any) -> dict:
 # Population workspace
 # --------------------------------------------------------------------------- #
 
-def _unit_ids(loaded: Any, ids: Any, minimum: int = 1) -> list[int]:
-    if not isinstance(ids, list) or any(isinstance(i, bool) or not isinstance(i, int) for i in ids):
-        raise ValueError("Unit IDs must be a list of integers.")
-    if len(ids) < minimum:
-        raise ValueError(f"Choose at least {minimum} neurons.")
-    if len(set(ids)) != len(ids):
-        raise ValueError("The neuron roster contains duplicates.")
-    unknown = set(ids) - {int(u["id"]) for u in loaded.units}
-    if unknown:
-        raise ValueError(f"Unknown unit IDs: {sorted(unknown)}")
-    return ids
-
-
-def population_spans(loaded: Any, alignment: str, unit_ids: list[int], policy: str) -> dict:
-    """Row eligibility when every roster unit must be eligible (v0.1's common-trial rule)."""
-    ids = _unit_ids(loaded, unit_ids)
-    rows = alignment_rows(loaded, alignment)
-    eligible, provenance = loaded.eligibility(ids, policy)
-    spans, status = _spans(loaded, rows, set(eligible))
-    return {"session_id": loaded.session_id, "alignment": alignment, "policy": policy, "unit_ids": ids,
-            "n": len(rows), "row_id": [int(r["row_id"]) for r in rows], "span": spans, "status": status,
-            "guard_s": GUARD_S, "common_trials": len(eligible),
-            "eligibility": {k: v for k, v in (provenance or {}).items() if k != "source"}}
-
-
 def stability_masks(loaded: Any) -> dict:
     """Verified-stable trials of every unit as base64 bitmasks over complete trials."""
     import base64
@@ -380,7 +312,6 @@ TDR_DEFAULT_FACTORS = ("world", "action", "joystick_direction")
 
 def _fit_inputs(loaded: Any, request: Mapping[str, Any]) -> dict:
     """Validate a population request and resolve its groups to eligible rows."""
-    from .population import grid
     ids = _unit_ids(loaded, request.get("unit_ids"), minimum=2)
     alignment = request.get("alignment")
     policy = request.get("policy", "verified_stable")
@@ -466,7 +397,6 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
     The fitted transform is linear; its operator is cached so single-trial
     projections (:func:`population_probe`) never need a refit.
     """
-    from .population import fit_basis, group_means, row_rates
     inp = _fit_inputs(loaded, request)
     ids, members, flat, weight = inp["ids"], inp["members"], inp["flat"], inp["weight"]
     method, scaling, components = inp["method"], inp["scaling"], inp["components"]

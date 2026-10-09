@@ -1,115 +1,15 @@
-"""Descriptive population transforms fitted jointly to selected condition means."""
+"""Descriptive population transforms fitted jointly to selected condition means.
+
+The rates and the basis fit are :mod:`imitation_phys.explorer_core`'s
+``_rates`` and ``fit_basis``, shared with the world-axis stages.
+"""
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
-from sklearn.decomposition import FactorAnalysis, FastICA, PCA
-from sklearn.exceptions import ConvergenceWarning
+
+from imitation_phys.explorer_core import _rates, fit_basis
 
 from .analysis import prepare_rows
-
-
-def _rates(spikes, anchors, pre, post, bin_s, sigma):
-    n_bins = int(round((post - pre) / bin_s))
-    radius = int(np.ceil(4 * sigma / bin_s))
-    edges = pre + np.arange(-radius, n_bins + radius + 1) * bin_s
-    counts = np.diff(np.searchsorted(spikes, anchors[:, None] + edges[None, :], side="left"), axis=1)
-    rates = counts / bin_s
-    if radius:
-        kernel = np.exp(-.5 * (np.arange(-radius, radius + 1) * bin_s / sigma) ** 2)
-        kernel /= kernel.sum()
-        rates = np.apply_along_axis(lambda a: np.convolve(a, kernel, mode="valid"), 1, rates)
-    return rates
-
-
-def fit_basis(means, ids, method, scaling, components):
-    """Fit one basis jointly to condition means shaped (groups, times, units).
-
-    Constant units are dropped and reported.  Rows of the fit matrix are the
-    condition-time points, each weighted equally.
-    """
-    raw = means.reshape(-1, len(ids))
-    center = raw.mean(axis=0)
-    std = raw.std(axis=0, ddof=0)
-    varying = std > max(1e-12, float(std.max()) * 1e-12)
-    active_ids = [uid for uid, keep in zip(ids, varying) if keep]
-    dropped = [uid for uid, keep in zip(ids, varying) if not keep]
-    if len(active_ids) < components:
-        raise ValueError(f"Only {len(active_ids)} nonconstant units support this selection; reduce component count or change the roster/recipe.")
-    scale = std[varying] if scaling == "zscore" else np.ones(varying.sum())
-    x = (raw[:, varying] - center[varying]) / scale
-    rank = int(np.linalg.matrix_rank(x))
-    if components > rank:
-        raise ValueError(f"Requested {components} components but the selected condition matrix has rank {rank}.")
-    if method == "pca":
-        estimator = PCA(n_components=components, svd_solver="full")
-    elif method == "ica":
-        estimator = FastICA(n_components=components, whiten="unit-variance", random_state=0, max_iter=2000, tol=1e-5)
-    else:
-        estimator = FactorAnalysis(n_components=components, svd_method="lapack", random_state=0, max_iter=2000, tol=1e-4)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", ConvergenceWarning)
-        coordinates = estimator.fit_transform(x)
-    notices = [str(w.message) for w in caught]
-    converged = not any(issubclass(w.category, ConvergenceWarning) for w in caught)
-    # Mixing/loadings express a one-component reconstruction in normalized units.
-    if method == "ica":
-        loadings = estimator.mixing_
-        reconstruction = estimator.inverse_transform(coordinates)
-    else:
-        loadings = estimator.components_.T
-        reconstruction = coordinates @ estimator.components_ + estimator.mean_
-    denom = float(np.sum((x - x.mean(axis=0)) ** 2))
-    reconstruction_r2 = 1 - float(np.sum((x - reconstruction) ** 2)) / denom
-    models = {"components": estimator.components_.tolist(), "mean": estimator.mean_.tolist()}
-    for attr in ("mixing_", "whitening_", "noise_variance_", "explained_variance_", "explained_variance_ratio_", "singular_values_"):
-        if hasattr(estimator, attr):
-            models[attr.rstrip("_")] = getattr(estimator, attr).tolist()
-    return {"coordinates": coordinates, "loadings": loadings, "operators": models, "active_ids": active_ids,
-            "dropped_ids": dropped, "rank": rank, "converged": converged, "warnings": notices, "estimator": estimator,
-            "center": center, "varying": varying, "scale": scale, "x": x, "reconstruction_r2": reconstruction_r2}
-
-
-def grid(pre, post, bin_s, sigma):
-    """The explorer's time grid (static/core.js psthGrid): bins, kernel radius, kernel, centres."""
-    n = int(round((post - pre) / bin_s))
-    if abs(n * bin_s - (post - pre)) > 1e-9:
-        n = int(np.ceil((post - pre) / bin_s - 1e-9))
-    n = max(1, n)
-    radius = int(np.ceil(4 * sigma / bin_s - 1e-9)) if sigma > 0 else 0
-    kernel = np.exp(-.5 * (np.arange(-radius, radius + 1) * bin_s / sigma) ** 2) if radius else np.ones(1)
-    return n, radius, kernel / kernel.sum(), pre + (np.arange(n) + .5) * bin_s
-
-
-def group_means(spikes, anchors, weights, pre, bin_s, n, radius, kernel):
-    """Weighted group means of smoothed rates, shaped (groups, n).
-
-    ``weights`` (groups x rows) holds each row's share of its group mean.  Averaging
-    the binned counts before smoothing equals smoothing each row first, because the
-    kernel is linear, and it is much cheaper for large rosters.
-    """
-    edges = pre + np.arange(-radius, n + radius + 1) * bin_s
-    counts = np.diff(np.searchsorted(spikes, anchors[:, None] + edges[None, :], side="left"), axis=1)
-    means = (weights @ counts) / bin_s
-    if not radius:
-        return means
-    out = np.zeros((means.shape[0], n))
-    for k, w in enumerate(kernel):
-        out += w * means[:, k:k + n]
-    return out
-
-
-def row_rates(spikes, anchors, pre, bin_s, n, radius, kernel):
-    """Smoothed rate of every event, shaped (events, n); the per-row twin of :func:`group_means`."""
-    edges = pre + np.arange(-radius, n + radius + 1) * bin_s
-    counts = np.diff(np.searchsorted(spikes, anchors[:, None] + edges[None, :], side="left"), axis=1) / bin_s
-    if not radius:
-        return counts
-    out = np.zeros((len(anchors), n))
-    for k, w in enumerate(kernel):
-        out += w * counts[:, k:k + n]
-    return out
 
 
 def compute_population(loaded, request):

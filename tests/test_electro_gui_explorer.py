@@ -20,8 +20,9 @@ import numpy as np
 
 from electro_gui import explorer
 from electro_gui.analysis import compute_unit, prepare_rows
-from electro_gui.data import HIDDEN_EVENTS, SessionStore, alignment_keys
 from electro_gui.server import Application, make_server
+from imitation_phys import explorer_core
+from imitation_phys.session_store import HIDDEN_EVENTS, SessionStore, alignment_keys
 from tests.synthetic_session import write_synthetic_session_file
 
 CORE_JS = Path(__file__).resolve().parents[1] / "electro_gui" / "static" / "core.js"
@@ -339,7 +340,7 @@ class PopulationWorkspaceTests(unittest.TestCase):
     def test_fit_rejects_rows_outside_the_eligibility_rule(self):
         request, v01 = self.v01()
         table = explorer.alignment_table(self.loaded, "object_outcome")
-        spans = explorer.population_spans(self.loaded, "object_outcome", [1, 2], "all_complete")
+        spans = explorer_core.population_spans(self.loaded, "object_outcome", [1, 2], "all_complete")
         wide = next((rid for rid, span in zip(spans["row_id"], spans["span"]) if span and -6 - 0.4 < span[0]), None)
         with self.assertRaises(ValueError):
             self.fit(request, v01, groups=[{"key": "a", "row_ids": [table["row_id"][0], table["row_id"][0]]}])
@@ -410,7 +411,7 @@ class PopulationWorkspaceTests(unittest.TestCase):
             bits = base64.b64decode(masks["units"][str(unit["id"])])
             decoded = {t for i, t in enumerate(masks["trials"]) if bits[i >> 3] >> (i & 7) & 1}
             self.assertEqual(decoded, set(self.loaded.eligibility([unit["id"]], "verified_stable")[0]))
-        common = explorer.population_spans(self.loaded, "object_outcome", [1, 2, 3], "verified_stable")["common_trials"]
+        common = explorer_core.population_spans(self.loaded, "object_outcome", [1, 2, 3], "verified_stable")["common_trials"]
         self.assertEqual(common, len(self.loaded.eligibility([1, 2, 3], "verified_stable")[0]))
 
 

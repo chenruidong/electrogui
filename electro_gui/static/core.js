@@ -489,7 +489,7 @@
   }
   /**
    * Subset of `masks` maximising (members x shared trials): multistart greedy growth,
-   * as electro_gui.selection.select_stable_population, over at most 60 seeds.
+   * as imitation_phys.explorer_core.select_stable_population, over at most 60 seeds.
    * Returns indices into masks and the shared-trial count.
    */
   function bestSubset(masks, nbits, maxSeeds = 60) {

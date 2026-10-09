@@ -14,16 +14,10 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from .conditions import default_recipe, group_value, missing, select, validate
-from .data import HIDDEN_EVENTS
+from imitation_phys.explorer_core import UNION_ALIGNMENTS, _runs
+from imitation_phys.session_store import HIDDEN_EVENTS
 
-OUTCOMES = {"prey_capture", "prey_miss", "predator_contact", "predator_avoid"}
-# Pooled alignments: a name that stands for several recorded outcome events.
-UNION_ALIGNMENTS = {
-    "object_outcome": OUTCOMES,
-    "object_touched": {"prey_capture", "predator_contact"},
-    "object_avoided": {"prey_miss", "predator_avoid"},
-}
+from .conditions import default_recipe, group_value, missing, select, validate
 
 
 def _finite(x: Any) -> bool:
@@ -43,24 +37,6 @@ def _eligibility(loaded: Any, unit_ids: Sequence[Any], policy: str) -> tuple[set
 
 def _trial_map(loaded: Any) -> dict[Any, Mapping[str, Any]]:
     return {t.get("id"): t for t in getattr(loaded, "trials", [])}
-
-
-def _runs(loaded: Any, eligible: set[Any]) -> list[tuple[float, float, list[Any]]]:
-    trials = list(getattr(loaded, "trials", []))
-    trials.sort(key=lambda t: (float(t["start"]) if _finite(t.get("start")) else float("inf"), float(t["stop"]) if _finite(t.get("stop")) else float("inf")))
-    runs: list[tuple[float, float, list[Any]]] = []
-    for t in trials:
-        usable = t.get("id") in eligible and t.get("complete") is True and _finite(t.get("start")) and _finite(t.get("stop"))
-        if not usable:
-            continue
-        prior = runs[-1][2][-1] if runs else None
-        ordered_ids = [x.get("id") for x in trials]
-        adjacent = prior is not None and ordered_ids.index(t.get("id")) == ordered_ids.index(prior) + 1
-        if not runs or not adjacent:
-            runs.append((float(t["start"]), float(t["stop"]), [t["id"]]))
-        else:
-            a, b, ids = runs[-1]; runs[-1] = (a, max(b, float(t["stop"])), ids + [t["id"]])
-    return runs
 
 
 def _validate_settings(request: Mapping[str, Any]) -> tuple[float, float, float, float, float, float]:

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 from electro_gui import explorer
-from electro_gui.data import _enrich, _registry
+from imitation_phys.session_store import _enrich, _registry
 from electro_gui.analysis import prepare_rows
 
 

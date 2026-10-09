@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from electro_gui import cli, server as server_module
-from electro_gui.data import SessionStore
+from imitation_phys.session_store import SessionStore
 from electro_gui.server import Application, code_changed_since, make_server
 from tests.synthetic_session import write_synthetic_session_file
 

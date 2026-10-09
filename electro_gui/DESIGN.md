@@ -7,7 +7,13 @@ reports remain unchanged under `output/unit_explorer_design/`.
 
 ## Internal interfaces
 
-`data.SessionStore(roots, session_files, cache_dir)` discovers only exact
+The session loader and the arithmetic the world-axis stages share live in the
+pipeline package, and electro_gui imports them: `imitation_phys.session_store`
+(the loader below) and `imitation_phys.explorer_core` (alignment rows, eligible
+spans, the time grid, rates, the basis fit and the stable roster).  No
+`imitation_phys` module imports `electro_gui`.
+
+`imitation_phys.session_store.SessionStore(roots, session_files, cache_dir)` discovers only exact
 `<sid>/analysis/nwb/<sid>_session.nwb` products (explicit session files are also
 accepted). `catalog()` returns `{id, path}` entries. `get(session_id)` loads and
 validates the source lazily and returns a `LoadedSession`. Its interface is:

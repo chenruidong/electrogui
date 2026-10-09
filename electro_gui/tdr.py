@@ -105,7 +105,7 @@ def axis_name(label):
 def fit_axes(means, ids, rates, X, described, bins, scaling, dims=DENOISE_DIMS, world_coding="linear"):
     """Axes, coordinates and diagnostics.
 
-    ``means``  (groups, times, units) condition means, as :func:`fit_basis` takes.
+    ``means``  (groups, times, units) condition means, as :func:`imitation_phys.explorer_core.fit_basis` takes.
     ``rates``  (events, window bins, units) single-event rates for the events in ``X``.
     ``bins``   indices into the time axis that ``rates`` covers.
     """

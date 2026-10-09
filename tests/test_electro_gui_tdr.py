@@ -6,7 +6,8 @@ import unittest
 import numpy as np
 
 from electro_gui import explorer, tdr
-from electro_gui.data import SessionStore
+from imitation_phys import explorer_core
+from imitation_phys.session_store import SessionStore
 from tests.synthetic_session import default_spikes, write_synthetic_session_file
 
 UNITS = [1, 2, 3]
@@ -15,7 +16,7 @@ PRE, POST, BIN = -0.5, 1.0, 0.05
 
 def body(loaded, **extra):
     rows = explorer.alignment_rows(loaded, "object_outcome")
-    spans = explorer.population_spans(loaded, "object_outcome", UNITS, "all_complete")["span"]
+    spans = explorer_core.population_spans(loaded, "object_outcome", UNITS, "all_complete")["span"]
     groups = {}
     for row, span in zip(rows, spans):
         if span and PRE - 0.4 >= span[0] - 1e-9 and POST + 0.4 <= span[1] + 1e-9:

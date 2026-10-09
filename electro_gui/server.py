@@ -18,8 +18,10 @@ import time
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
+from imitation_phys import explorer_core
+from imitation_phys.session_store import SessionStore
+
 from . import __version__
-from .data import SessionStore
 from .exports import export_csv, export_json, export_membership, export_statistics, export_svg
 from .annotations import annotate_result
 from .configs import discover_configs
@@ -96,7 +98,7 @@ class Application:
             if request["action"] == "load":
                 result = loaded.metadata()
             elif request["action"] == "stable_selection":
-                from .selection import select_stable_population
+                from imitation_phys.explorer_core import select_stable_population
                 with self.lock:
                     job["message"] = "Selecting SUA/MUA units for shared stable neuron × trial coverage."
                 result = select_stable_population(loaded)
@@ -214,11 +216,11 @@ class Application:
                 policy = one("policy", "verified_stable")
                 if policy not in ("verified_stable", "all_complete"):
                     raise ValueError("policy must be verified_stable or all_complete")
-                return explorer.population_spans(loaded, one("alignment"), ids, policy)
+                return explorer_core.population_spans(loaded, one("alignment"), ids, policy)
             if what == "stability":
                 return explorer.stability_masks(loaded)
             if what == "stable_roster":
-                from .selection import select_stable_population
+                from imitation_phys.explorer_core import select_stable_population
                 return select_stable_population(loaded)
         raise KeyError("Unknown explorer endpoint")
 

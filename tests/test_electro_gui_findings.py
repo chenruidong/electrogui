@@ -14,7 +14,7 @@ import zlib
 
 from electro_gui import __version__
 from electro_gui.configs import discover_configs, parse_config
-from electro_gui.data import SessionStore
+from imitation_phys.session_store import SessionStore
 from electro_gui.findings import FindingStore
 from electro_gui.server import Application, make_server
 from tests.synthetic_session import write_synthetic_session_file

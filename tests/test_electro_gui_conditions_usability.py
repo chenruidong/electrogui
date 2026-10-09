@@ -3,7 +3,7 @@ import unittest
 import pandas as pd
 
 from electro_gui.conditions import group_value, select, validate, validate_group
-from electro_gui.data import _alignment_metadata, _registry
+from imitation_phys.session_store import _alignment_metadata, _registry
 
 
 class ElectroGuiConditionContract(unittest.TestCase):
