@@ -12,6 +12,7 @@ import time
 import webbrowser
 
 from . import __version__
+from .paths import OUTPUT_ENV, output_root, presentation_dir
 
 DEFAULT_ROOTS = ("/Volumes/T7/engaging-results", "/Volumes/Transfer/engaging_results")
 # Set by _restart for the process that replaces this one: {"port": ..., "token": ...}.
@@ -22,22 +23,37 @@ def add_arguments(parser):
     parser.add_argument("--version", action="version", version=f"electro_gui {__version__}")
     parser.add_argument("--data-root", action="append", help="Session product root; repeat for multiple roots. Defaults to T7 and Transfer.")
     parser.add_argument("--session-file", action="append", help="Exact assembled <session>_session.nwb; repeat to add sessions.")
-    parser.add_argument("--cache-dir", default="output/electro_gui/cache", help="Disposable verified stability cache (default: %(default)s).")
+    parser.add_argument("--cache-dir", help="Disposable verified stability cache (default: <Dropbox>/projects/electro_gui/output/cache).")
     parser.add_argument("--port", type=int, default=8765, help="Port; 0 chooses a free port (default: %(default)s).")
     parser.add_argument("--host", default="127.0.0.1",
                         help="Interface to listen on (default: loopback only). Use --lan, or e.g. 0.0.0.0, to open it "
                              "from a tablet or phone on the same network; a random access token is then required.")
     parser.add_argument("--lan", action="store_true", help="Shorthand for --host 0.0.0.0 (tablet / phone access, token-protected).")
     parser.add_argument("--token", help="Access token for a non-loopback --host (default: random per launch).")
-    parser.add_argument("--findings-dir", default="output/electro_gui/findings",
+    parser.add_argument("--findings-dir",
                         help="Folder of saved findings (one JSON file and one PNG each), shared by every device that opens "
-                             "this server; relative to the current directory (default: %(default)s).")
+                             "this server (default: <Dropbox>/projects/electro_gui/output/findings).")
     parser.add_argument("--config-dir", action="append",
                         help="Directory of JSON config files for the Views menu (a deck's electro_gui_configs/, or a folder "
                              "holding decks); repeat for several. Relative to the current directory; a missing one is empty "
-                             "(default: output/presentation).")
+                             "(default: <Dropbox>/projects/analysis_imitation/data/output/presentation).")
     parser.add_argument("--no-browser", action="store_true", help="Print the URL without opening a browser.")
     return parser
+
+
+def _folders(args):
+    """The cache, findings and config folders: the flags where given, else the Dropbox defaults (paths.py)."""
+    output = output_root()
+    if output is None and (args.cache_dir is None or args.findings_dir is None):
+        raise SystemExit(f"electro_gui: no Dropbox found for its output folder; set {OUTPUT_ENV} "
+                         "or pass --cache-dir and --findings-dir.")
+    cache_dir = Path(args.cache_dir).expanduser() if args.cache_dir is not None else output / "cache"
+    findings_dir = Path(args.findings_dir).expanduser() if args.findings_dir is not None else output / "findings"
+    if args.config_dir is not None:
+        config_dirs = args.config_dir
+    else:
+        config_dirs = [d for d in (presentation_dir(),) if d is not None]
+    return cache_dir, findings_dir, config_dirs
 
 
 def run(args):
@@ -46,12 +62,13 @@ def run(args):
     restart = json.loads(os.environ.pop(RESTART_ENV, "") or "null")
     if restart:
         args.port, args.no_browser = int(restart["port"]), True
-    os.environ.setdefault("MPLCONFIGDIR", str(Path(args.cache_dir).expanduser() / "matplotlib"))
+    cache_dir, findings_dir, config_dirs = _folders(args)
+    os.environ.setdefault("MPLCONFIGDIR", str(cache_dir / "matplotlib"))
     from imitation_phys.session_store import SessionStore
     from .server import Application, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
-    store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=Path(args.cache_dir).expanduser())
-    application = Application(store, findings_dir=args.findings_dir, config_dirs=args.config_dir if args.config_dir is not None else ["output/presentation"])
+    store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=cache_dir)
+    application = Application(store, findings_dir=findings_dir, config_dirs=config_dirs)
     host = "0.0.0.0" if args.lan else args.host
     token = args.token  # an explicit token also protects a loopback server fronted by a proxy (tailscale serve)
     if restart and token is None:

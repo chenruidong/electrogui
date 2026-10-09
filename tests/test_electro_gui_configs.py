@@ -12,7 +12,7 @@ from electro_gui.cli import add_arguments
 from electro_gui.configs import MAX_BYTES, discover_configs
 from imitation_phys.session_store import SessionStore
 from electro_gui.server import Application, make_server
-from tests.synthetic_session import write_synthetic_session_file
+from imitation_phys.synthetic_session import write_synthetic_session_file
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPLORER_JS = ROOT / "electro_gui" / "static" / "explorer.js"

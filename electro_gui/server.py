@@ -18,6 +18,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
+import imitation_phys
 from imitation_phys import explorer_core
 from imitation_phys.session_store import SessionStore
 
@@ -130,9 +131,7 @@ class Application:
                 from imitation_phys.derived_cache import computation_identity, cache_key
                 from .analysis import compute_unit
                 from .population import compute_population
-                package = Path(__file__).resolve().parent
-                repo = package.parent
-                code = list(package.rglob("*.py")) + list((repo / "imitation_phys").rglob("*.py"))
+                code = [path for root in _PACKAGES.values() for path in root.rglob("*.py")]
                 code += list(getattr(loaded, "code_paths", []))
                 identity = computation_identity(kind=f"electro_gui_{request['action']}", schema=1,
                                                 source=loaded.session.source_identity(), parameters=request, code_paths=code)
@@ -147,7 +146,8 @@ class Application:
                 provenance.update(version=__version__, source_path=str(loaded.session.path),
                                   computation_identity=identity, computation_key=cache_key(identity),
                                   upstream_freshness="not audited; exact assembled NWB is the empirical source",
-                                  repository=_git_identity(repo))
+                                  repository=_git_identity(_REPO),
+                                  imitation_phys_repository=_git_identity(_PACKAGES["imitation_phys"].parent))
             # Reject nonfinite / unserializable payloads before claiming completion.
             json.dumps(result, allow_nan=False)
             with self.lock:
@@ -250,7 +250,8 @@ class Application:
 
     def save_finding(self, payload):
         """A finding as the page measured it, stamped with this machine and the code that drew it."""
-        code = {"electro_gui": __version__, **_git_identity(_REPO)}
+        code = {"electro_gui": __version__, **_git_identity(_REPO),
+                "imitation_phys": {"version": imitation_phys.__version__, **_git_identity(_PACKAGES["imitation_phys"].parent)}}
         return self._findings().create(payload, saved_on=_HOST, code=code)
 
     def change_finding(self, finding_id, request):
@@ -290,22 +291,26 @@ _HOST = socket.gethostname().split(".")[0] or None
 # itself) gets a new BOOT_ID, which is how a page knows the new code is up.
 BOOT_ID = uuid4().hex[:12]
 STARTED = time.time()
-_REPO = Path(__file__).resolve().parents[1]
+# The two packages the explorer runs, wherever each is installed: its own and
+# the pipeline's (imitation_phys lives in the analysis_imitation repository).
+_PACKAGES = {"electro_gui": Path(__file__).resolve().parent,
+             "imitation_phys": Path(imitation_phys.__file__).resolve().parent}
+_REPO = _PACKAGES["electro_gui"].parent
 
 
 def code_changed_since(started=None):
-    """Python files of electro_gui/ and imitation_phys/ modified after this server started.
+    """Python files of electro_gui and imitation_phys modified after this server started, as ``package/path``.
 
     Those are what a restart picks up; static files are read from disk on every
     request, so a page reload already gets them.
     """
     started = STARTED if started is None else started
     changed = []
-    for package in ("electro_gui", "imitation_phys"):
-        for path in sorted((_REPO / package).rglob("*.py")):
+    for name, root in _PACKAGES.items():
+        for path in sorted(root.rglob("*.py")):
             try:
                 if path.stat().st_mtime > started:
-                    changed.append(str(path.relative_to(_REPO)))
+                    changed.append(f"{name}/{path.relative_to(root).as_posix()}")
             except OSError:
                 pass
     return changed

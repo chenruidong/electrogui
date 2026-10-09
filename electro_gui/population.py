@@ -1,13 +1,13 @@
 """Descriptive population transforms fitted jointly to selected condition means.
 
 The rates and the basis fit are :mod:`imitation_phys.explorer_core`'s
-``_rates`` and ``fit_basis``, shared with the world-axis stages.
+``smoothed_rates`` and ``fit_basis``, shared with the world-axis stages.
 """
 from __future__ import annotations
 
 import numpy as np
 
-from imitation_phys.explorer_core import _rates, fit_basis
+from imitation_phys.explorer_core import fit_basis, smoothed_rates
 
 from .analysis import prepare_rows
 
@@ -57,7 +57,7 @@ def compute_population(loaded, request):
         group_trials.append([np.array([i for i in idx if rows[i]["trial"] == t]) for t in trials])
     means = np.empty((len(names), n_bins, len(ids)), dtype=float)
     for u, unit_id in enumerate(ids):
-        rates = _rates(loaded.spikes(unit_id), anchors, pre, post, bin_s, sigma)
+        rates = smoothed_rates(loaded.spikes(unit_id), anchors, pre, post, bin_s, sigma)
         for g, trial_indices in enumerate(group_trials):
             means[g, :, u] = np.mean([rates[ix].mean(axis=0) for ix in trial_indices], axis=0)
     fit = fit_basis(means, ids, method, scaling, components)

@@ -23,7 +23,7 @@ from electro_gui.analysis import compute_unit, prepare_rows
 from electro_gui.server import Application, make_server
 from imitation_phys import explorer_core
 from imitation_phys.session_store import HIDDEN_EVENTS, SessionStore, alignment_keys
-from tests.synthetic_session import write_synthetic_session_file
+from imitation_phys.synthetic_session import write_synthetic_session_file
 
 CORE_JS = Path(__file__).resolve().parents[1] / "electro_gui" / "static" / "core.js"
 

@@ -17,7 +17,7 @@ from electro_gui.configs import discover_configs, parse_config
 from imitation_phys.session_store import SessionStore
 from electro_gui.findings import FindingStore
 from electro_gui.server import Application, make_server
-from tests.synthetic_session import write_synthetic_session_file
+from imitation_phys.synthetic_session import write_synthetic_session_file
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "electro_gui" / "static"

@@ -32,8 +32,9 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from imitation_phys.explorer_core import (GUARD_S, OUTCOMES, UNION_ALIGNMENTS, _cache, _candidate, _spans,
-                                         _unit_ids, alignment_rows, fit_basis, grid, group_means, row_rates)
+from imitation_phys.explorer_core import (GUARD_S, OUTCOMES, UNION_ALIGNMENTS, alignment_rows, checked_unit_ids,
+                                         eligible_spans, explorer_cache, fit_basis, grid, group_means, is_candidate,
+                                         row_rates)
 from imitation_phys.session_store import HIDDEN_EVENTS
 
 from .conditions import missing
@@ -58,10 +59,10 @@ def _finite(value: Any) -> bool:
 
 def alignment_counts(loaded: Any) -> dict[str, int]:
     """Candidate rows per alignment, including the four-outcome union."""
-    cache = _cache(loaded)
+    cache = explorer_cache(loaded)
     if "counts" not in cache:
         complete = {t["id"] for t in loaded.trials if t.get("complete") is True}
-        counts = Counter(r["event"] for r in loaded.rows if _candidate(r, complete))
+        counts = Counter(r["event"] for r in loaded.rows if is_candidate(r, complete))
         for name, members in UNION_ALIGNMENTS.items():
             counts[name] = sum(counts.get(k, 0) for k in members)
         cache["counts"] = dict(counts)
@@ -101,7 +102,7 @@ def _natural(text: str):
 
 def alignment_table(loaded: Any, alignment: str) -> dict:
     """Columnar joined fields for one alignment; the order defines row indices."""
-    cache = _cache(loaded).setdefault("tables", {})
+    cache = explorer_cache(loaded).setdefault("tables", {})
     if alignment in cache:
         return cache[alignment]
     rows = alignment_rows(loaded, alignment)
@@ -168,7 +169,7 @@ def unit_raster(loaded: Any, alignment: str, unit_id: int, policy: str, lo: floa
     unit_id = int(unit_id)
     rows = alignment_rows(loaded, alignment)
     eligible, provenance = loaded.eligibility([unit_id], policy)
-    spans, status = _spans(loaded, rows, set(eligible))
+    spans, status = eligible_spans(loaded, rows, set(eligible))
     spikes = np.sort(np.asarray(loaded.spikes(unit_id), dtype=float))
     anchors = np.array([float(r["t"]) for r in rows])
     starts = np.searchsorted(spikes, anchors + lo, side="left")
@@ -203,7 +204,7 @@ def spike_train(loaded: Any, unit_id: int) -> dict:
 
 def event_times(loaded: Any, event: str) -> dict:
     """All valid occurrences of one recorded event (or the outcome union)."""
-    cache = _cache(loaded).setdefault("events", {})
+    cache = explorer_cache(loaded).setdefault("events", {})
     if event not in cache:
         known = {r.get("event") for r in loaded.rows} - HIDDEN_EVENTS
         if event not in UNION_ALIGNMENTS and event not in known:
@@ -228,7 +229,7 @@ def behavior_timeline(loaded: Any) -> dict:
     not listed.  Nothing here is inferred: role, action, correctness, bar and
     image identity are the joined fields every explorer row already carries.
     """
-    cache = _cache(loaded)
+    cache = explorer_cache(loaded)
     if "behavior" in cache:
         return cache["behavior"]
 
@@ -312,7 +313,7 @@ TDR_DEFAULT_FACTORS = ("world", "action", "joystick_direction")
 
 def _fit_inputs(loaded: Any, request: Mapping[str, Any]) -> dict:
     """Validate a population request and resolve its groups to eligible rows."""
-    ids = _unit_ids(loaded, request.get("unit_ids"), minimum=2)
+    ids = checked_unit_ids(loaded, request.get("unit_ids"), minimum=2)
     alignment = request.get("alignment")
     policy = request.get("policy", "verified_stable")
     if policy not in ("verified_stable", "all_complete"):
@@ -358,7 +359,7 @@ def _fit_inputs(loaded: Any, request: Mapping[str, Any]) -> dict:
     rows = alignment_rows(loaded, alignment)
     by_id = {int(r["row_id"]): (i, r) for i, r in enumerate(rows)}
     eligible, provenance = loaded.eligibility(ids, policy)
-    spans, _ = _spans(loaded, rows, set(eligible))
+    spans, _ = eligible_spans(loaded, rows, set(eligible))
     members, seen = [], set()
     for g in groups:
         row_ids = g.get("row_ids") if isinstance(g, Mapping) else None
@@ -475,7 +476,7 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
         for k in range(components):
             resid -= np.outer(coords[:, k] - coords[:, k].mean(), loadings[:, k])
             cumulative.append(1 - float(np.sum(resid ** 2)) / total)
-    fits = _cache(loaded).setdefault("fits", OrderedDict())
+    fits = explorer_cache(loaded).setdefault("fits", OrderedDict())
     fits[inp["key"]] = {"active_ids": list(fit["active_ids"]), "center": fit["center"][fit["varying"]], "scale": fit["scale"],
                         "operator": operator, "offset": offset_b}
     while len(fits) > 8:
@@ -515,7 +516,7 @@ def population_probe(loaded: Any, request: Mapping[str, Any]) -> dict:
     group's cloud is centred exactly on its trajectory point at that bin.
     """
     inp = _fit_inputs(loaded, request)
-    fits = _cache(loaded).setdefault("fits", OrderedDict())
+    fits = explorer_cache(loaded).setdefault("fits", OrderedDict())
     if inp["key"] not in fits:
         population_fit(loaded, request)
     op = fits[inp["key"]]

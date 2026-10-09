@@ -1,7 +1,8 @@
 """Findings: saved explorer views that keep their picture, notes and the numbers they rest on.
 
 A finding is one JSON file, plus the figure as a PNG, in the findings folder
-(``--findings-dir``, default ``output/electro_gui/findings``):
+(``--findings-dir``, default ``<Dropbox>/projects/electro_gui/output/findings``,
+see paths.py):
 
 * ``<id>.json`` is a config file (``electro_gui_config: 1``, see configs.py)
   holding ``title``, ``note`` and the page's view ``state``, so copying it into

@@ -46,11 +46,23 @@ Both flags can be repeated. Explicit files must have the exact assembled-session
 filename and matching embedded session identity. No external behavioral data,
 prepared bundles or scene files are substituted when a field is missing.
 
-`--config-dir DIR` (repeatable, default `output/presentation`, relative to the current
-directory; a missing directory is simply empty) names where the Views menu looks
-for JSON config files; see **Config files** below.  `--findings-dir DIR` (default
-`output/electro_gui/findings`, also relative to the current directory) is where
-findings are saved; see **Findings** below.
+`--config-dir DIR` (repeatable; a missing directory is simply empty) names where
+the Views menu looks for JSON config files; see **Config files** below.
+`--findings-dir DIR` is where findings are saved; see **Findings** below.  Their
+defaults, and the stability cache's, are in Dropbox, so every Mac and every
+checkout shares them (`electro_gui/paths.py`):
+
+| what | default |
+|---|---|
+| `--cache-dir` | `<Dropbox>/projects/electro_gui/output/cache` |
+| `--findings-dir` | `<Dropbox>/projects/electro_gui/output/findings` |
+| `--config-dir` | `<Dropbox>/projects/analysis_imitation/data/output/presentation` |
+
+`<Dropbox>` is `DROPBOX_ROOT`, else the business (then personal) path in
+`~/.dropbox/info.json` -- the rule the thread-handoff kit uses -- so it is right
+whatever the Mac mounts Dropbox under.  `ELECTRO_GUI_OUTPUT=/some/folder` moves
+the cache and findings together.  Without Dropbox or that variable the launcher
+stops and asks for `--cache-dir` and `--findings-dir`.
 The optional canonical trial-strategy classifier is resolved through the
 repository's sibling `mworks/imitation` or `IMITATION_REPO` environment variable.
 Only its code is used, with its fingerprint recorded. If it is unavailable,
@@ -365,13 +377,11 @@ settings and evidence stay as saved, so a finding keeps saying what was seen
 then.  *Download file* gives its JSON; *Delete…* moves its files to `.deleted/`.
 
 Each finding is one `<id>.json` and one `<id>.png` in `--findings-dir`,
-written atomically.  In the main checkout `output/` links into Dropbox
-(`projects/analysis_imitation/data/output`), so a finding saved on either Mac,
-from any device, appears on both, and because each finding is its own file two
-machines only ever write the same file when they edit the same finding.  A
-server started from a git worktree has no such link: give it an explicit
-`--findings-dir`, or its findings stay in the worktree.  The launcher prints the
-folder.  Each JSON is also a config file (`electro_gui_config: 1` with `title`,
+written atomically.  The default folder is in Dropbox
+(`projects/electro_gui/output/findings`), so a finding saved on either Mac, from
+any device and any checkout, appears on both, and because each finding is its
+own file two machines only ever write the same file when they edit the same
+finding.  The launcher prints the folder.  Each JSON is also a config file (`electro_gui_config: 1` with `title`,
 `note` and `state`), so copying it into a deck's `electro_gui_configs/` makes it
 a slide config, with the finding's notes as its tooltip.
 
@@ -384,10 +394,10 @@ the views browsed before it.
 A **config file** is a JSON view state kept in the repository, so a figure can be
 restored from a file that is reviewed and versioned with the analysis instead of
 from a link or a finding.  The deck configs live next to their
-slides, in `output/presentation/<deck>/electro_gui_configs/*.json`; launching from the
-repository root finds them all (`--config-dir output/presentation` is the default), and
-`--config-dir output/presentation/<deck>/electro_gui_configs` (or any folder of
-`*.json`) lists just one.  Views menu → **Config files** shows them under their
+slides, in analysis_imitation's `output/presentation/<deck>/electro_gui_configs/*.json`
+(in Dropbox, `projects/analysis_imitation/data/output/presentation`), which is the
+default `--config-dir`, so every deck's configs are listed; `--config-dir
+<that folder>/<deck>/electro_gui_configs` (or any folder of `*.json`) lists just one.  Views menu → **Config files** shows them under their
 `group`; a click applies the file, and **Open config file…** in the same menu
 applies any `.json` from disk (read in the browser, never uploaded).  The folder
 is re-scanned each time the menu opens, so an edited file needs no restart.
@@ -427,7 +437,7 @@ the section instead of stopping the menu.  `GET /api/configs` returns
 How they differ from the other ways to restore a view.  **Templates** are built
 into the page, change the figure but keep your unit and session.  **Findings**
 are made in the GUI, keep their notes, picture and numbers, live in
-`--findings-dir` (under the git-ignored, Dropbox-linked `output/`), and check
+`--findings-dir` (in Dropbox, `projects/electro_gui/output/findings`), and check
 their numbers when reopened.  **Config files** are hand-written, exported or
 copied from a finding, live with the deck, and restore the whole view including
 the session and unit.
@@ -629,7 +639,7 @@ separately labeled.
   Population SVG exports the selected X/Y component plane, also when viewing 3D.
 
 Downloads go through the browser. Persistent eligibility caches default to
-`output/electro_gui/cache` (`--cache-dir` changes this). Cached stability is
+`<Dropbox>/projects/electro_gui/output/cache` (`--cache-dir` changes this). Cached stability is
 validated against source bytes, code, parameters, runtime and payload hashes.
 Upstream source freshness is separate and is not asserted from successful NWB
 loading. The server keeps two prepared sessions, at most twelve analysis/load job records
@@ -649,6 +659,7 @@ The focused tests cover synthetic assembled NWBs, identity/discovery rules,
 missingness, histories, membership, raw count boundaries, trial/block weighting,
 permutation references, transform reconstruction, HTTP jobs and portable exports.
 HTTP integration tests require permission to bind a loopback socket.
-The original release evidence remains under `output/electro_gui/validation/`.
-Usability implementation, independent real-data checks and browser evidence are
-in `output/electro_gui/usability_implementation_20260926/VALIDATION.md`.
+The original release evidence remains in analysis_imitation's Dropbox output,
+`projects/analysis_imitation/data/output/electro_gui/validation/`.  Usability
+implementation, independent real-data checks and browser evidence are in
+`…/output/electro_gui/usability_implementation_20260926/VALIDATION.md` there.

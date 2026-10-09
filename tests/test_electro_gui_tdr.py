@@ -8,7 +8,7 @@ import numpy as np
 from electro_gui import explorer, tdr
 from imitation_phys import explorer_core
 from imitation_phys.session_store import SessionStore
-from tests.synthetic_session import default_spikes, write_synthetic_session_file
+from imitation_phys.synthetic_session import default_spikes, write_synthetic_session_file
 
 UNITS = [1, 2, 3]
 PRE, POST, BIN = -0.5, 1.0, 0.05

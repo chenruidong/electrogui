@@ -14,7 +14,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from imitation_phys.explorer_core import UNION_ALIGNMENTS, _runs
+from imitation_phys.explorer_core import UNION_ALIGNMENTS, eligible_runs
 from imitation_phys.session_store import HIDDEN_EVENTS
 
 from .conditions import default_recipe, group_value, missing, select, validate
@@ -70,7 +70,7 @@ def prepare_rows(loaded: Any, request: Mapping[str, Any], unit_ids: Sequence[Any
     policy = request.get("stability", "verified_stable")
     eligible, elig_prov = _eligibility(loaded, unit_ids, policy)
     trials = _trial_map(loaded)
-    runs = _runs(loaded, eligible)
+    runs = eligible_runs(loaded, eligible)
     recipe = request.get("recipe")
     if recipe is None:
         recipe = default_recipe()
