@@ -28,6 +28,13 @@ from imitation_phys.synthetic_session import write_synthetic_session_file
 CORE_JS = Path(__file__).resolve().parents[1] / "electro_gui" / "static" / "core.js"
 
 
+class _Tailnet:
+    """server.Tailnet stand-in: a fixed owner and MagicDNS name, no tailscale CLI."""
+
+    def __init__(self, owner="owner@example.com", names=("mac.tail.ts.net",)):
+        self.owner, self.names = owner, set(names)
+
+
 class ExplorerPayloadTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -537,6 +544,64 @@ class ExplorerServerTests(unittest.TestCase):
         status, _, _ = self.request(port, "/api/catalog?token=s3cret",
                                    headers={"Host": "mac.tail.ts.net:8443", "Origin": "https://evil.example"})
         self.assertEqual(status, 403)
+
+    def test_tailnet_owner_needs_no_token(self):
+        # tailscale serve forwards the device's Host and adds Tailscale-User-Login for the
+        # tailnet user; this node's owner is let in on that alone, nobody else.
+        port = self.serve(tailnet=_Tailnet())
+        node = {"Host": "mac.tail.ts.net:8443", "Origin": "https://mac.tail.ts.net:8443"}
+        owner = {**node, "Tailscale-User-Login": "owner@example.com"}
+        self.assertEqual(self.request(port, "/api/catalog", headers=owner)[0], 200)
+        status, headers, body = self.request(port, "/api/findings", "POST", {"title": "t", "state": {"session": self.sid, "unit": 1},
+                                                                            "evidence": {"session_id": self.sid}}, owner)
+        self.assertEqual(status, 201, body)
+        self.assertNotIn("Set-Cookie", headers)
+        self.assertEqual(self.request(port, "/api/catalog")[0], 200)  # this Mac's browser, as before
+        refused = [node,  # no tailnet identity (a tagged device)
+                   {**node, "Tailscale-User-Login": "someone@example.com"},  # another tailnet user
+                   {"Host": "evil.example", "Tailscale-User-Login": "owner@example.com"},  # DNS rebinding
+                   {**owner, "Origin": "https://evil.example"},
+                   {"Tailscale-User-Login": "someone@example.com"}]  # loopback Host, wrong login
+        for headers in refused:
+            self.assertEqual(self.request(port, "/api/catalog", headers=headers)[0], 403, headers)
+        unknown = self.serve(tailnet=_Tailnet(owner=None, names=()))  # tailscale CLI missing or down
+        self.assertEqual(self.request(unknown, "/api/catalog", headers=owner)[0], 403)
+
+    def test_tailnet_identity_is_not_trusted_off_loopback(self):
+        # On --lan anyone on the network can send Tailscale-User-Login; only the token counts there.
+        with mock.patch("electro_gui.server.ThreadingHTTPServer") as fake:
+            make_server(self.app, host="0.0.0.0", port=0, token="s3cret", tailnet=_Tailnet())
+        handler_class = fake.call_args.args[1]
+        handler = handler_class.__new__(handler_class)
+        handler.path = "/api/catalog"
+        handler.headers = {"Host": "mac.tail.ts.net:8443", "Tailscale-User-Login": "owner@example.com"}
+        sent = []
+        handler._send = lambda body, status=200, **_: sent.append(status)
+        self.assertFalse(handler._local_request())
+        self.assertEqual(sent, [403])
+
+    def test_tailnet_reads_this_nodes_name_and_owner(self):
+        from electro_gui.server import Tailnet
+        status = {"Self": {"DNSName": "Mac.tail.ts.net.", "UserID": 7}, "User": {"7": {"LoginName": "owner@example.com"}}}
+        done = subprocess.CompletedProcess([], 0, stdout=json.dumps(status), stderr="")
+        with mock.patch("electro_gui.server.shutil.which", return_value="/usr/bin/tailscale"), \
+                mock.patch("electro_gui.server.subprocess.run", return_value=done) as run:
+            tailnet = Tailnet()
+            self.assertEqual((tailnet.owner, tailnet.names), ("owner@example.com", {"mac.tail.ts.net"}))
+            self.assertEqual(Tailnet("other@example.com").owner, "other@example.com")  # --owner wins
+        self.assertEqual(run.call_args.args[0], ["/usr/bin/tailscale", "status", "--json"])
+
+    def test_cli_hands_the_owner_to_the_server(self):
+        import argparse
+        from electro_gui import cli
+        args = cli.add_arguments(argparse.ArgumentParser()).parse_args(
+            ["--data-root", self.temp.name, "--cache-dir", self.temp.name, "--findings-dir", str(Path(self.temp.name) / "f"),
+             "--no-browser", "--port", "0", "--owner", "owner@example.com"])
+        with mock.patch("electro_gui.server.make_server", side_effect=OSError("stop")) as fake, \
+                mock.patch("electro_gui.server.Tailnet._read", return_value=None), self.assertRaises(SystemExit):
+            cli.run(args)
+        self.assertIsNone(fake.call_args.kwargs["token"])
+        self.assertEqual(fake.call_args.kwargs["tailnet"].owner, "owner@example.com")
 
     def test_explicit_token_is_kept_on_a_loopback_host(self):
         import argparse

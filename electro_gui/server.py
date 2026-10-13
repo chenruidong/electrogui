@@ -11,8 +11,10 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -287,6 +289,64 @@ def _git_identity(repo):
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 _HOST = socket.gethostname().split(".")[0] or None
+TAILSCALE_CANDIDATES = ("tailscale", "/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale",
+                        "/Applications/Tailscale.app/Contents/MacOS/Tailscale")
+
+
+class Tailnet:
+    """This node's MagicDNS name and owner login, from ``tailscale status --json``.
+
+    ``tailscale serve --https=<p> http://127.0.0.1:<p>`` forwards a tailnet
+    device's request with its ``Host`` (``<node>.ts.net:<p>``) and adds
+    ``Tailscale-User-Login``; the owner of this node is let in on that alone,
+    as in result-viewer and the apps dashboard.  Read lazily and retried every
+    30 s until found, so a server started at boot before Tailscale is up still
+    learns them.  An ``owner`` given on the command line wins.
+    """
+
+    def __init__(self, owner=None):
+        self._fixed_owner = owner
+        self._owner = owner
+        self._dns = None
+        self._checked = None  # time.monotonic() may start near 0 at process start, so no 0.0 sentinel
+        self._lock = threading.Lock()
+
+    def _read(self):
+        exe = next(filter(None, (shutil.which(c) for c in TAILSCALE_CANDIDATES)), None)
+        if not exe:
+            print("tailnet: no tailscale CLI found; tailnet requests are refused", file=sys.stderr, flush=True)
+            return None
+        try:
+            done = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=5,
+                                  stdin=subprocess.DEVNULL)
+            data = json.loads(done.stdout)
+            me = data["Self"]
+            return me.get("DNSName", "").rstrip(".").lower() or None, data["User"][str(me["UserID"])]["LoginName"]
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+            print(f"tailnet: `{exe} status --json` failed: {exc!r}", file=sys.stderr, flush=True)
+            return None
+
+    def refresh(self):
+        with self._lock:
+            if self._dns and self._owner:
+                return
+            if self._checked is not None and time.monotonic() - self._checked < 30:
+                return
+            self._checked = time.monotonic()
+            found = self._read()
+            if found:
+                self._dns = found[0]
+                self._owner = self._fixed_owner or found[1]
+
+    @property
+    def owner(self):
+        self.refresh()
+        return self._owner
+
+    @property
+    def names(self):
+        self.refresh()
+        return {self._dns} if self._dns else set()
 # This process's identity: a restart (POST /api/restart, then cli.run re-execs
 # itself) gets a new BOOT_ID, which is how a page knows the new code is up.
 BOOT_ID = uuid4().hex[:12]
@@ -317,16 +377,22 @@ def code_changed_since(started=None):
 _COMPRESSIBLE = ("application/json", "text/", "application/javascript", "image/svg+xml")
 
 
-def make_server(application, host="127.0.0.1", port=8765, token=None):
+def make_server(application, host="127.0.0.1", port=8765, token=None, tailnet=None):
     """Serve on ``host``.  Any non-loopback host requires ``token``.
 
     On loopback the Host header must be local (DNS-rebinding guard).  With a
     token, a request is served only when it carries ``?token=`` (which also
     sets a same-site cookie) or that cookie, so a phone or tablet on the LAN
-    can open the printed URL once and then browse normally.
+    can open the printed URL once and then browse normally.  With ``tailnet``
+    (a :class:`Tailnet`), a request through ``tailscale serve`` from this
+    node's owner needs no token: its Host must be this node's MagicDNS name
+    and its ``Tailscale-User-Login`` the owner.  That header is trusted only
+    on loopback, which nothing but this Mac and ``tailscale serve`` can reach.
     """
     if host not in LOOPBACK and not token:
         raise ValueError("A non-loopback --host requires an access token.")
+    if host not in LOOPBACK:
+        tailnet = None  # anyone on the network could send Tailscale-User-Login
     static = Path(__file__).resolve().parent / "static"
 
     class Handler(BaseHTTPRequestHandler):
@@ -360,7 +426,17 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
 
         def _local_request(self):
             # A local tool must not be callable by arbitrary websites/DNS rebinding.
-            if token:
+            login = self.headers.get("Tailscale-User-Login") if tailnet else None
+            if login is not None:
+                authority = (urlsplit("http://" + self.headers.get("Host", "")).hostname or "").lower()
+                if authority not in LOOPBACK and authority not in tailnet.names:
+                    self._send({"error": "Unknown Host header."}, 403)
+                    return False
+                owner = tailnet.owner
+                if not owner or not hmac.compare_digest(login.encode(), owner.encode()):
+                    self._send({"error": "Only this tailnet node's owner may use electro_gui."}, 403)
+                    return False
+            elif token:
                 offered = parse_qs(urlsplit(self.path).query).get("token", [None])[0]
                 cookie = SimpleCookie(self.headers.get("Cookie", "")).get("electro_token")
                 if offered and hmac.compare_digest(offered, token):

@@ -82,6 +82,21 @@ token are refused, and without `--lan`/`--host` the server stays on loopback as
 before.  Anyone holding the URL can read the sessions it serves, so stop the
 server when you are done.  `--token` fixes the token instead of drawing one.
 
+### Over the tailnet
+
+```bash
+python -m electro_gui --no-browser --port 8778
+tailscale serve --bg --https=8778 http://127.0.0.1:8778
+```
+
+`https://<node>.ts.net:8778/` then opens on any of your tailnet devices with no
+token, as result-viewer and the apps dashboard do: the server stays on loopback,
+and a request through `tailscale serve` is served when its `Host` is this node's
+MagicDNS name and its `Tailscale-User-Login` is this node's owner (read from
+`tailscale status --json`; `--owner LOGIN` names another).  Other tailnet users,
+tagged devices and a foreign `Host` get 403.  The identity header is trusted only
+on loopback: with `--lan`/`--host` the token is still the only way in.
+
 **Restart server** (in the ⋯ menu) restarts electro_gui from the page, which is
 the way to load new Python code from a phone.  The item says when the server
 started and whether any `.py` file under `electro_gui/` or `imitation_phys/`

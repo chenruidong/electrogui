@@ -38,6 +38,7 @@ pip install --no-deps --no-build-isolation -e .
 ```bash
 python -m electro_gui            # or: electro-gui
 python -m electro_gui --lan      # token-protected, for a tablet or phone
+tailscale serve --bg --https=8765 http://127.0.0.1:8765   # tailnet, owner only, no token
 ```
 
 Sessions are discovered under `/Volumes/T7/engaging-results` and

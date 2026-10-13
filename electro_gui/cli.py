@@ -30,6 +30,8 @@ def add_arguments(parser):
                              "from a tablet or phone on the same network; a random access token is then required.")
     parser.add_argument("--lan", action="store_true", help="Shorthand for --host 0.0.0.0 (tablet / phone access, token-protected).")
     parser.add_argument("--token", help="Access token for a non-loopback --host (default: random per launch).")
+    parser.add_argument("--owner", metavar="LOGIN",
+                        help="Tailnet login let in through tailscale serve without a token (default: this node's owner).")
     parser.add_argument("--findings-dir",
                         help="Folder of saved findings (one JSON file and one PNG each), shared by every device that opens "
                              "this server (default: <Dropbox>/projects/electro_gui/output/findings).")
@@ -65,19 +67,19 @@ def run(args):
     cache_dir, findings_dir, config_dirs = _folders(args)
     os.environ.setdefault("MPLCONFIGDIR", str(cache_dir / "matplotlib"))
     from imitation_phys.session_store import SessionStore
-    from .server import Application, make_server
+    from .server import Application, Tailnet, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=cache_dir)
     application = Application(store, findings_dir=findings_dir, config_dirs=config_dirs)
     host = "0.0.0.0" if args.lan else args.host
-    token = args.token  # an explicit token also protects a loopback server fronted by a proxy (tailscale serve)
+    token = args.token  # optional on loopback: tailscale serve lets this node's owner in without one (server.Tailnet)
     if restart and token is None:
         token = restart.get("token")
     if token is None and host not in ("127.0.0.1", "localhost", "::1"):
         token = secrets.token_urlsafe(12)
     for attempt in range(20 if restart else 1):  # the old socket may take a moment to let go
         try:
-            server = make_server(application, host=host, port=args.port, token=token)
+            server = make_server(application, host=host, port=args.port, token=token, tailnet=Tailnet(args.owner))
             break
         except OSError as exc:
             if attempt + 1 < (20 if restart else 1):
@@ -97,6 +99,9 @@ def run(args):
             address, _, label = entry.partition(" ")
             print(f"  tablet / phone {label}: http://{address}:{port}/{query}", flush=True)
         print("  Anyone with this URL can read the sessions it serves; stop the server when done.", flush=True)
+    if host in ("127.0.0.1", "localhost", "::1"):
+        print(f"  tailnet: `tailscale serve --bg --https={port} http://127.0.0.1:{port}` lets this node's owner in, "
+              "no token needed.", flush=True)
     print(f"Found {len(store.catalog())} assembled sessions. Findings are saved in {application.findings.root}.", flush=True)
     print("Ctrl-C stops the server.", flush=True)
     if not args.no_browser:
