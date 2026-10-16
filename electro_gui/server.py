@@ -251,10 +251,23 @@ class Application:
         return self._findings().thumbnail(finding_id)
 
     def save_finding(self, payload):
-        """A finding as the page measured it, stamped with this machine and the code that drew it."""
+        """A finding as the page measured it, stamped with this machine and the code that drew it.
+
+        The reply adds ``path``, where the JSON file now is, which the page shows (the record
+        itself never holds it, so it cannot end up inside the file).
+        """
         code = {"electro_gui": __version__, **_git_identity(_REPO),
                 "imitation_phys": {"version": imitation_phys.__version__, **_git_identity(_PACKAGES["imitation_phys"].parent)}}
-        return self._findings().create(payload, saved_on=_HOST, code=code)
+        saved = self._findings().create(payload, saved_on=_HOST, code=code)
+        return {**saved, "path": str(self._findings().file(saved["id"]))}
+
+    def reveal_finding(self, finding_id):
+        """Select the finding's file in a Finder window on this Mac."""
+        path = self._findings().file(finding_id)
+        if not REVEALS:
+            raise ValueError("Show in Finder works only where electro_gui runs on a Mac.")
+        _reveal_in_finder(path)
+        return {"revealed": str(path)}
 
     def change_finding(self, finding_id, request):
         if request.get("delete") is True:
@@ -285,6 +298,17 @@ def _git_identity(repo):
         except (OSError, subprocess.SubprocessError):
             return None
     return {"commit": run("rev-parse", "HEAD"), "dirty": bool(run("status", "--porcelain", "--untracked-files=no"))}
+
+
+REVEALS = sys.platform == "darwin"   # Finder is a Mac thing
+
+
+def _reveal_in_finder(path):
+    """``open -R``: a Finder window with ``path`` selected, on the Mac this server runs on."""
+    try:
+        subprocess.run(["open", "-R", str(path)], capture_output=True, timeout=10, check=True, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"Could not show the file in Finder: {exc}") from exc
 
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
@@ -455,6 +479,11 @@ def make_server(application, host="127.0.0.1", port=8765, token=None, tailnet=No
                 return False
             return True
 
+        def _page_is_at_localhost(self):
+            # Finder opens on this Mac's screen, so only a page loaded at localhost (not through
+            # tailscale serve or a LAN address, whose browser may be on another device) may ask for it.
+            return (urlsplit("http://" + self.headers.get("Host", "")).hostname or "").lower() in LOOPBACK
+
         def do_GET(self):
             if not self._local_request():
                 return
@@ -527,7 +556,9 @@ def make_server(application, host="127.0.0.1", port=8765, token=None, tailnet=No
             try:
                 route = urlsplit(self.path).path
                 finding = route.startswith("/api/findings/") and route.count("/") == 3
-                if route not in ("/api/jobs", "/api/findings", "/api/explorer/popfit", "/api/explorer/popprobe", "/api/restart") and not finding:
+                reveal = route.startswith("/api/findings/") and route.endswith("/reveal") and route.count("/") == 4
+                if route not in ("/api/jobs", "/api/findings", "/api/explorer/popfit", "/api/explorer/popprobe", "/api/restart") \
+                        and not finding and not reveal:
                     self._send({"error": "Unknown endpoint"}, 404)
                     return
                 if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -541,7 +572,13 @@ def make_server(application, host="127.0.0.1", port=8765, token=None, tailnet=No
                 if not isinstance(request, dict):
                     raise ValueError("Request must be a JSON object.")
                 if route == "/api/findings":
-                    self._send(application.save_finding(request), 201)
+                    # can_reveal: whether this page may also ask for the file to be shown in Finder.
+                    self._send({**application.save_finding(request), "can_reveal": REVEALS and self._page_is_at_localhost()}, 201)
+                    return
+                if reveal:
+                    if not self._page_is_at_localhost():
+                        raise ValueError("Show in Finder works only from a page opened at localhost on the Mac that runs electro_gui.")
+                    self._send(application.reveal_finding(route.split("/")[3]))
                     return
                 if finding:
                     self._send(application.change_finding(route.rsplit("/", 1)[1], request))

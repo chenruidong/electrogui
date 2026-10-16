@@ -355,7 +355,12 @@ optionally, notes, tags and a status: *lead* (the default), *checking*,
 it.  Saving is possible only once the figure is fully drawn for the current
 settings, so not while a session, raster or fit is loading and not from an empty
 or failed figure.  A save that fails says why and keeps what you typed, and so
-does closing the dialog by accident.
+does closing the dialog by accident.  Once saved, the dialog stays open and
+shows where the finding's file is: *Copy path* puts it on the clipboard, and
+*Show in Finder* selects it in a Finder window.  Finder opens on the Mac that
+runs the server, so that button appears only on a page loaded at `localhost`
+(not through `tailscale serve` or a LAN address, whose browser may be on another
+device); elsewhere the dialog says to paste the path into Finder's ⇧⌘G.
 
 A finding keeps three things taken from one drawing of the figure, so they
 cannot disagree: the picture, as *Export → PNG* draws it; the exact settings
@@ -485,8 +490,10 @@ those times); `GET /api/configs`; and for findings `GET /api/findings`
 (`{findings, errors, folder}`), `GET /api/findings/<id>`,
 `GET /api/findings/<id>/thumbnail` (the PNG), `POST /api/findings` (title, note,
 tags, status, state, evidence and the picture as a PNG data URL, up to 12 MiB →
-the stored finding) and `POST /api/findings/<id>` (any of title, note, tags and
-status, or `{"delete": true}`).  The session
+the stored finding plus its file's `path` and `can_reveal`), `POST
+/api/findings/<id>` (any of title, note, tags and status, or `{"delete": true}`)
+and `POST /api/findings/<id>/reveal` (body `{}`: `open -R` on its file; macOS,
+from a page at localhost only).  The session
 must first be opened with a `load` job, which verifies the file.  Responses are
 gzip-compressed when the client accepts it.
 

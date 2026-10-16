@@ -1457,20 +1457,55 @@
       e.preventDefault();
       const btn = $('fSave'), typed = read();
       btn.disabled = true; btn.textContent = 'Saving…';
+      let saved;
       try {
         const snap = await captureFinding();
-        const saved = await getJSON('/api/findings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        saved = await getJSON('/api/findings', {method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({...typed, tags: typed.tags.split(','), ...snap})});
         findingDraft = null;
-        if ($('findingForm') === form) closePop();
-        toast(`Saved finding “${saved.title}”.`);
       } catch (err) {
         keep();
         btn.disabled = false; btn.textContent = 'Save finding';
         toast(`Could not save the finding: ${err.message}. Your text is kept.`, true);
+        return;
       }
+      // Still the open dialog: say where the file is.  Closed or replaced meanwhile: a toast does.
+      if ($('findingForm') === form && !$('popover').hidden) showSavedFinding(saved);
+      else toast(`Saved finding “${saved.title}” in ${saved.path}.`);
     });
     if (!matchMedia('(hover: none)').matches) { $('fTitle').focus(); $('fTitle').select(); }
+  }
+  // Copy to the clipboard; where the browser refuses (a plain-http LAN address), select the text so ⌘C works.
+  async function copyText(text, field) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* insecure origin or denied */ }
+    const range = document.createRange(), sel = getSelection();
+    range.selectNodeContents(field); sel.removeAllRanges(); sel.addRange(range);
+    try { return document.execCommand('copy'); } catch (e) { return false; }
+  }
+  // The save dialog once the finding is written: where its JSON file is (the picture is beside it), to copy, or
+  // to select in Finder when this page is open on the Mac that holds the file (the server says so: can_reveal).
+  function showSavedFinding(saved) {
+    const path = saved.path || '', id = encodeURIComponent(saved.id);
+    $('popover').innerHTML = popHead('Finding saved') + `<div class="editor finding-saved">` +
+      `<p>Saved “${esc(saved.title)}”.</p>` +
+      `<div class="row"><span>File <small>its picture, ${esc(saved.id)}.png, is beside it</small></span><code class="file-path" id="fPath">${esc(path)}</code></div>` +
+      `<div class="saved-actions"><button type="button" class="small" id="fCopy">Copy path</button>` +
+      (saved.can_reveal ? `<button type="button" class="small" id="fReveal">Show in Finder</button>` : '') + `</div>` +
+      (saved.can_reveal ? '' : `<p class="pop-note" style="padding:0">This page is not open on the Mac that holds the file. In Finder, press ⇧⌘G and paste the path (Dropbox keeps the same folder on each Mac).</p>`) +
+      `<div class="pop-foot" style="padding:0;border:0"><a class="small" href="/findings/#${id}">Notes &amp; edit</a><button type="button" class="primary" data-close>Done</button></div></div>`;
+    $('fCopy').addEventListener('click', async () => {
+      toast(await copyText(path, $('fPath')) ? 'Path copied.' : 'Could not copy; the path is selected, press ⌘C.');
+    });
+    const reveal = $('fReveal');
+    if (reveal) reveal.addEventListener('click', async () => {
+      reveal.disabled = true;
+      try {
+        await getJSON(`/api/findings/${id}/reveal`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+        toast('Shown in Finder.');
+      } catch (err) { toast(`Could not show it in Finder: ${err.message}`, true); }
+      reveal.disabled = false;
+    });
+    placePop();
   }
 
   // Reopening.  The view is restored through the page's own checks, every setting it could not restore is listed,

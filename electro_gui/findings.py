@@ -163,11 +163,15 @@ class FindingStore:
         findings.sort(key=lambda f: str(f.get("saved_at", "")), reverse=True)
         return {"findings": findings, "errors": errors, "folder": str(self.root)}
 
-    def get(self, finding_id):
+    def file(self, finding_id):
+        """The finding's JSON file (its picture is beside it); KeyError when there is none."""
         path = self._path(finding_id)
         if not path.is_file():
             raise KeyError(f"No finding {finding_id}")
-        return self._read(path)
+        return path
+
+    def get(self, finding_id):
+        return self._read(self.file(finding_id))
 
     def thumbnail(self, finding_id):
         path = self._path(finding_id, ".png")

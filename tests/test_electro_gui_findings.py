@@ -10,9 +10,10 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import zlib
 
-from electro_gui import __version__
+from electro_gui import __version__, server as server_module
 from electro_gui.configs import discover_configs, parse_config
 from imitation_phys.session_store import SessionStore
 from electro_gui.findings import FindingStore
@@ -130,6 +131,13 @@ class FindingStoreTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.store.thumbnail("20261008T000000Z-000000")
 
+    def test_a_findings_file_is_where_the_store_wrote_it(self):
+        fid = self.store.create(payload())["id"]
+        self.assertEqual(self.store.file(fid), self.root / f"{fid}.json")
+        for bad in ("../findings", "20261008T000000Z-000000", None):
+            with self.subTest(bad=bad), self.assertRaises(KeyError):
+                self.store.file(bad)
+
     def test_delete_moves_the_files_aside(self):
         fid = self.store.create(payload())["id"]
         self.assertEqual(self.store.delete(fid), {"deleted": fid})
@@ -215,6 +223,62 @@ class FindingRoutesTests(unittest.TestCase):
         status, _, raw = self.request(port, f"/api/findings/{fid}", "POST", {"delete": True})
         self.assertEqual((status, json.loads(raw)), (200, {"deleted": fid}))
         self.assertEqual(self.request(port, f"/api/findings/{fid}")[0], 404)
+
+    def test_a_saved_finding_says_where_its_file_is_and_whether_finder_can_show_it(self):
+        port = self.serve()
+        lan = self.serve(token="s3cret")
+        with mock.patch.object(server_module, "REVEALS", True):
+            status, _, raw = self.request(port, "/api/findings", "POST", self.body())
+            self.assertEqual(status, 201, raw)
+            saved = json.loads(raw)
+            path = self.root / f"{saved['id']}.json"
+            self.assertEqual(saved["path"], str(path))
+            self.assertIs(saved["can_reveal"], True)   # opened at localhost, on a Mac
+            on_disk = json.loads(path.read_text())
+            self.assertNotIn("path", on_disk)          # shown to the page, never written into the file
+            self.assertNotIn("can_reveal", on_disk)
+            # The same save from a page whose browser may be on another device (a LAN address, a tailnet name).
+            via = {"Host": "node.local:8778", "Cookie": "electro_token=s3cret"}
+            saved = json.loads(self.request(lan, "/api/findings", "POST", self.body(), headers=via)[2])
+            self.assertEqual(saved["path"], str(self.root / f"{saved['id']}.json"))
+            self.assertIs(saved["can_reveal"], False)
+        with mock.patch.object(server_module, "REVEALS", False):   # no Finder off a Mac
+            self.assertIs(json.loads(self.request(port, "/api/findings", "POST", self.body())[2])["can_reveal"], False)
+
+    def test_show_in_finder_is_for_a_page_open_at_localhost_on_a_mac(self):
+        fid = self.app.save_finding(self.body())["id"]
+        path = self.root / f"{fid}.json"
+        port, lan = self.serve(), self.serve(token="s3cret")
+        route = f"/api/findings/{fid}/reveal"
+        opened = mock.Mock()
+        with mock.patch.object(server_module, "_reveal_in_finder", opened), mock.patch.object(server_module, "REVEALS", True):
+            status, _, raw = self.request(port, route, "POST", {})
+            self.assertEqual((status, json.loads(raw)), (200, {"revealed": str(path)}))
+            opened.assert_called_once_with(path)
+            for missing in ("20261008T000000Z-000000", "..%2F..%2Fpyproject"):   # no such finding; an id that is a path
+                with self.subTest(missing=missing):
+                    self.assertEqual(self.request(port, f"/api/findings/{missing}/reveal", "POST", {})[0], 404)
+            self.assertEqual(self.request(port, route)[0], 404)   # only a POST acts
+            via = {"Host": "node.local:8778", "Cookie": "electro_token=s3cret"}
+            status, _, raw = self.request(lan, route, "POST", {}, headers=via)
+            self.assertEqual(status, 400)
+            self.assertIn("localhost", json.loads(raw)["error"])
+            self.assertEqual(self.request(lan, route, "POST", {})[0], 403)   # and still needs the token
+            opened.assert_called_once()   # none of those opened a Finder window
+        with mock.patch.object(server_module, "REVEALS", False):
+            status, _, raw = self.request(port, route, "POST", {})
+            self.assertEqual((status, "Mac" in json.loads(raw)["error"]), (400, True))
+
+    def test_open_r_selects_the_file_and_a_failure_says_so(self):
+        target = self.root / "20261008T000000Z-000000.json"
+        with mock.patch.object(server_module.subprocess, "run") as run:
+            server_module._reveal_in_finder(target)
+        self.assertEqual(run.call_args.args[0], ["open", "-R", str(target)])
+        for failure in (subprocess.CalledProcessError(1, "open"), FileNotFoundError("open")):
+            with self.subTest(failure=type(failure).__name__), \
+                    mock.patch.object(server_module.subprocess, "run", side_effect=failure), \
+                    self.assertRaisesRegex(ValueError, "Could not show the file in Finder"):
+                server_module._reveal_in_finder(target)
 
     def test_a_refused_save_says_why(self):
         port = self.serve()
@@ -377,8 +441,13 @@ class FindingHooksInPageTests(unittest.TestCase):
         for needle in ("/api/findings", "function figureReady()", "function evidence()", "async function captureFinding()",
                        "C.compareEvidence(o.finding.evidence, evidence())", "C.stateChanges(o.finding.state, S)",
                        "fitStateToSession(summary);", "openFindingLink", "data-savefinding", "Your text is kept.",
-                       "Findings · reopen and check the numbers"):
+                       "Findings · reopen and check the numbers", "function showSavedFinding(saved)", "saved.can_reveal",
+                       "/reveal`", "id=\"fCopy\">Copy path", "Show in Finder"):
             self.assertIn(needle, js, needle)
+        # Once saved, the dialog stays open to show the file instead of closing on a toast.
+        submit = js[js.index("form.addEventListener('submit'"):js.index("async function copyText(")]
+        self.assertIn("showSavedFinding(saved)", submit)
+        self.assertNotIn("closePop()", submit)
         for gone in ("/api/views", "data-saveview", "openSaveView", "Saved views"):
             self.assertNotIn(gone, js, gone)
         self.assertIn('id="saveBtn"', html)
