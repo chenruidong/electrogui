@@ -317,7 +317,7 @@ def code_changed_since(started=None):
 _COMPRESSIBLE = ("application/json", "text/", "application/javascript", "image/svg+xml")
 
 
-def make_server(application, host="127.0.0.1", port=8765, token=None):
+def make_server(application, host="127.0.0.1", port=8765, token=None, tailnet_origin=None):
     """Serve on ``host``.  Any non-loopback host requires ``token``.
 
     On loopback the Host header must be local (DNS-rebinding guard).  With a
@@ -327,6 +327,15 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
     """
     if host not in LOOPBACK and not token:
         raise ValueError("A non-loopback --host requires an access token.")
+    if tailnet_origin:
+        origin = urlsplit(tailnet_origin)
+        if (host not in LOOPBACK or origin.scheme != "https" or not origin.hostname
+                or not origin.hostname.endswith(".ts.net") or origin.username or origin.password
+                or origin.path or origin.query or origin.fragment
+                or origin.netloc != origin.hostname + (":" + str(origin.port) if origin.port else "")
+                or tailnet_origin != "https://" + origin.netloc):
+            raise ValueError("--tailnet-origin requires an exact HTTPS .ts.net origin and a loopback listener.")
+        tailnet_host = origin.netloc
     static = Path(__file__).resolve().parent / "static"
 
     class Handler(BaseHTTPRequestHandler):
@@ -360,6 +369,26 @@ def make_server(application, host="127.0.0.1", port=8765, token=None):
 
         def _local_request(self):
             # A local tool must not be callable by arbitrary websites/DNS rebinding.
+            if tailnet_origin:
+                # Only private Tailscale Serve reaches this loopback listener remotely.
+                # Its network permissions include shared users and tagged devices.
+                hosts = self.headers.get_all("Host", [])
+                local_hosts = {f"127.0.0.1:{self.server.server_port}",
+                               f"localhost:{self.server.server_port}",
+                               f"[::1]:{self.server.server_port}"}
+                if hosts == [tailnet_host]:
+                    expected_origin = tailnet_origin
+                elif (len(hosts) == 1 and hosts[0] in local_hosts
+                      and not any(k.lower().startswith(("tailscale-", "x-forwarded-")) for k in self.headers)):
+                    expected_origin = "http://" + hosts[0]
+                else:
+                    self._send({"error": "Private Host required."}, 403)
+                    return False
+                origins = self.headers.get_all("Origin", [])
+                if origins and origins != [expected_origin]:
+                    self._send({"error": "Same-origin requests required."}, 403)
+                    return False
+                return True
             if token:
                 offered = parse_qs(urlsplit(self.path).query).get("token", [None])[0]
                 cookie = SimpleCookie(self.headers.get("Cookie", "")).get("electro_token")

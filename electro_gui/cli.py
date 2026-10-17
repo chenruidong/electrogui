@@ -30,6 +30,7 @@ def add_arguments(parser):
                              "from a tablet or phone on the same network; a random access token is then required.")
     parser.add_argument("--lan", action="store_true", help="Shorthand for --host 0.0.0.0 (tablet / phone access, token-protected).")
     parser.add_argument("--token", help="Access token for a non-loopback --host (default: random per launch).")
+    parser.add_argument("--tailnet-origin", help="Exact private HTTPS .ts.net origin served directly by Tailscale Serve; loopback only.")
     parser.add_argument("--findings-dir",
                         help="Folder of saved findings (one JSON file and one PNG each), shared by every device that opens "
                              "this server (default: <Dropbox>/projects/electro_gui/output/findings).")
@@ -77,7 +78,8 @@ def run(args):
         token = secrets.token_urlsafe(12)
     for attempt in range(20 if restart else 1):  # the old socket may take a moment to let go
         try:
-            server = make_server(application, host=host, port=args.port, token=token)
+            server = make_server(application, host=host, port=args.port, token=token,
+                                 tailnet_origin=args.tailnet_origin)
             break
         except OSError as exc:
             if attempt + 1 < (20 if restart else 1):
@@ -86,11 +88,13 @@ def run(args):
             application.close()
             raise SystemExit(f"Cannot start electro_gui: {exc}. Use --port 0 to choose a free port.") from None
     port = server.server_address[1]
-    query = f"?token={token}" if token else ""
+    query = f"?token={token}" if token and not args.tailnet_origin else ""
     specific = host not in ("0.0.0.0", "::", "", "127.0.0.1", "localhost", "::1")
     url = f"http://{host if specific else '127.0.0.1'}:{port}/{query}"
     print(f"electro_gui {__version__}: {url}", flush=True)
-    if token:
+    if args.tailnet_origin:
+        print(f"  private Tailscale Serve: {args.tailnet_origin}/", flush=True)
+    elif token:
         # Bound to one address, only that address answers.
         entries = [e for e in _lan_addresses() if e.split(" ")[0] == host] if specific else _lan_addresses()
         for entry in entries:

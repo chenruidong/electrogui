@@ -71,6 +71,22 @@ strategy-dependent comparisons are unavailable; other fields remain usable.
 
 ### On a tablet or phone
 
+For persistent private tailnet hosting, keep the server on loopback and use
+native Tailscale Serve ingress:
+
+```bash
+python -m electro_gui --no-browser --port 8790 \
+  --tailnet-origin https://macmini.tail62f972.ts.net:8443
+tailscale serve --bg --https=8443 http://127.0.0.1:8790
+```
+
+This mode accepts only the configured external Host and matching HTTPS Origin,
+or a plain Mac-local request to the actual loopback port. Existing Tailscale
+network permissions authorize shared users and tagged devices. It requires a
+private Serve route, never Funnel; no gateway, secret URL or browser token is
+needed. Mac-local callers use `http://127.0.0.1:8790/`. Without
+`--tailnet-origin`, the existing standalone token mode below is unchanged.
+
 ```bash
 /Users/rc/miniforge3/envs/imitation-phys/bin/python -m electro_gui --lan --port 8777
 ```
