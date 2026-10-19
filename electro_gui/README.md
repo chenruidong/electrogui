@@ -97,6 +97,21 @@ MagicDNS name and its `Tailscale-User-Login` is this node's owner (read from
 tagged devices and a foreign `Host` get 403.  The identity header is trusted only
 on loopback: with `--lan`/`--host` the token is still the only way in.
 
+To follow the private tailnet route's network permissions, including access
+already granted to shared users and tagged devices, select an exact origin:
+
+```bash
+python -m electro_gui --no-browser --port 8778 --tailnet-origin https://<node>.ts.net:8778
+```
+
+`--tailnet-origin` requires a loopback listener and an exact HTTPS `.ts.net`
+origin without a trailing slash. Requests must use that Host and, when present,
+the matching Origin. Local tools may use the loopback URL without forwarded
+headers. This mode needs no browser token; it relies on private Tailscale Serve
+and the tailnet's network permissions. `--owner` selects the separate identity
+mode above and cannot be combined with `--tailnet-origin`. Keep the route
+private; this option is not for a public proxy or Funnel.
+
 **Restart server** (in the ⋯ menu) restarts electro_gui from the page, which is
 the way to load new Python code from a phone.  The item says when the server
 started and whether any `.py` file under `electro_gui/` or `imitation_phys/`

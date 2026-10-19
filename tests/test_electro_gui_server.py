@@ -185,6 +185,18 @@ class RestartHandoverTests(unittest.TestCase):
             self.run_cli(self.args("--token", "fixed"))
         self.assertEqual(make.call_args.kwargs["token"], "fixed")
 
+    def test_native_launch_uses_the_exact_origin_without_printing_the_token(self):
+        origin = "https://node.ts.net:8443"
+        output = io.StringIO()
+        with mock.patch("electro_gui.server.make_server", return_value=_StoppedServer(False)) as make, \
+                mock.patch("electro_gui.server.Tailnet") as tailnet, contextlib.redirect_stdout(output):
+            cli.run(self.args("--no-browser", "--tailnet-origin", origin, "--token", "private-browser-token"))
+        self.assertEqual(make.call_args.kwargs["tailnet_origin"], origin)
+        self.assertIsNone(make.call_args.kwargs["tailnet"])
+        tailnet.assert_not_called()
+        self.assertIn(origin, output.getvalue())
+        self.assertNotIn("private-browser-token", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

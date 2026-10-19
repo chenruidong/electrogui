@@ -48,6 +48,14 @@ others).  The stability cache and findings live in Dropbox,
 read from analysis_imitation's presentation decks; see the folder table in
 [electro_gui/README.md](electro_gui/README.md) and `electro_gui/paths.py`.
 
+Persistent services can run directly from a source checkout: set their working
+directory and, if configured, `PYTHONPATH` to that checkout, and use the same
+Python environment as the interactive launcher. No release-directory copy is
+needed. Update the clean checkout through the checked Git workflow, then restart
+its LaunchAgent and verify its existing HTTPS URL. Python changes need a restart;
+static assets are read from the checkout on each request. See the manual's
+tailnet section for the owner-login and explicit private-origin access modes.
+
 ## Tests
 
 ```bash
