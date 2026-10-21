@@ -523,6 +523,28 @@
     return out;
   }
 
+  /** One list for the picker, buttons and keyboard; never widen quality/area filters. */
+  function populationUnitList(units, roster, order, quality, areas, useRoster) {
+    const byId = new Map(units.map(u => [u.id, u])), selected = new Set(roster);
+    const ids = useRoster ? [...new Set([...(order || []), ...roster])].filter(id => selected.has(id)) : units.map(u => u.id);
+    return ids.map(id => byId.get(id)).filter(u => u && (!quality.length || quality.includes(String(u.quality).toLowerCase())) &&
+      (!areas.length || areas.includes(u.area)));
+  }
+  /** Raw A minus B before a common training-derived scale; both axes come from one fit. */
+  function populationDifference(fit, a, b, norm) {
+    const A = fit.groups[a], B = fit.groups[b], U = fit.active_unit_ids.length, n = fit.times.length;
+    if (!A || !B || a === b || !fit.normalization) throw Error('Choose two distinct groups from one population fit.');
+    const scale = norm === 'z' ? fit.normalization.heat_sd : fit.normalization.heat_peak;
+    if (!Array.isArray(scale) || scale.length !== U || scale.some(v => !Number.isFinite(v) || v < 0)) throw Error('Invalid shared heatmap scale.');
+    if ([A, B].some(g => g.means.length !== n || g.means.some(row => row.length !== U || row.some(v => !Number.isFinite(v)))))
+      throw Error('Difference heatmaps require identical finite unit/time axes.');
+    let limit = 0;
+    const values = A.means.map((row, t) => row.map((v, u) => {
+      const d = (v - B.means[t][u]) / (scale[u] || 1); limit = Math.max(limit, Math.abs(d)); return d;
+    }));
+    return {values, limit: limit || 1};
+  }
+
   const VIRIDIS = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
   /** Heatmap colour: 'z' is diverging blue-neutral-red over [-2.5, 2.5]; 'peak' is viridis over [0, 1]. */
   function heatColor(v, norm, dark) {
@@ -827,6 +849,6 @@
     stimulusColor, prepareBehavior, decodeSpikeTrain, spikeColumns, timeAtPos, posAtTime, behaviorView, viewTrials, yokedTrials, upperBound,
     prepareTable, rawValue, fieldLevels, filterMask, eligibility, quantileEdges, groupRows, indexEvents,
     markerTimes, median, countIn, lowerBound, psthGrid, rowCurve, psth, psthFromCurves, thin, windowRates, sortRows, encodeState, decodeState,
-    decodeMask, andMask, andCount, popcount, fullMask, bestSubset, heatColor, project3d, hash,
+    populationUnitList, populationDifference, decodeMask, andMask, andCount, popcount, fullMask, bestSubset, heatColor, project3d, hash,
     stableJSON, stateChanges, compareEvidence, findingMatches};
 });

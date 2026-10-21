@@ -115,7 +115,7 @@
     filters: [], color: 'role', style: 'action', panel: null, qbins: 3, hidden: [],
     sort: 'session', dir: 1, grouped: true, markers: [], refs: [], medians: true,
     tick: 'line', rasterH: 260, rasterFit: true, psthH: 205, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
-    mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, tdrFactors: ['world', 'action', 'joystick_direction'], tdrWin: null, worldCoding: 'linear', dims: '2', heatNorm: 'z',
+    unitStep: 'all', fitGroups: null, fitSplit: 'all', heatCompare: null, mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, tdrFactors: ['world', 'action', 'joystick_direction'], tdrWin: null, worldCoding: 'linear', dims: '2', heatNorm: 'z',
     nsort: 'loading:0', axes: [0, 1, 2], heatGroup: null, cloud: false, cloudAlpha: 0.3, cloudZero: true, cloudFit: 'traj',
     bt: true, btN: 16, pin: null, yoke: false, popSplit: 0.5,
   };
@@ -173,8 +173,10 @@
     s.qbins = [2, 3, 4, 5].includes(Number(s.qbins)) ? Number(s.qbins) : 3;
     s.dir = s.dir === -1 ? -1 : 1;
     if (!s.gstyle || typeof s.gstyle !== 'object' || Array.isArray(s.gstyle)) s.gstyle = {};
-    for (const [k, allowed] of Object.entries({mode: ['raster', 'population'], method: ['pca', 'ica', 'fa', 'tdr'], scaling: ['zscore', 'center'], dims: ['2', '3'], heatNorm: ['z', 'peak'], cloudFit: ['traj', 'cloud']}))
+    for (const [k, allowed] of Object.entries({mode: ['raster', 'population'], method: ['pca', 'ica', 'fa', 'tdr'], scaling: ['zscore', 'center'], dims: ['2', '3'], heatNorm: ['z', 'peak'], cloudFit: ['traj', 'cloud'], unitStep: ['all', 'roster'], fitSplit: ['all', 'odd', 'even']}))
       if (!allowed.includes(String(s[k]))) s[k] = DEFAULTS[k]; else s[k] = String(s[k]);
+    s.fitGroups = s.fitGroups === null ? null : Array.isArray(s.fitGroups) ? [...new Set(s.fitGroups.filter(k => typeof k === 'string'))] : null;
+    s.heatCompare = typeof s.heatCompare === 'string' ? s.heatCompare : null;
     s.roster = Array.isArray(s.roster) ? [...new Set(s.roster.filter(Number.isInteger))].sort((a, b) => a - b) : [];
     s.ncomp = Number.isInteger(s.ncomp) ? clamp(s.ncomp, 2, MAX_NCOMP) : DEFAULTS.ncomp;
     s.tdrFactors = Array.isArray(s.tdrFactors) ? [...new Set(s.tdrFactors.filter(k => typeof k === 'string'))].slice(0, 10) : clone(DEFAULTS.tdrFactors);
@@ -947,6 +949,7 @@
       if (document.activeElement !== $('tdrHiN')) $('tdrHiN').value = w[1];
     }
     $('ncomp').value = Math.min(S.ncomp, 10); if (document.activeElement !== $('ncompN')) $('ncompN').value = S.ncomp;
+    $('fitSplit').value = S.fitSplit; $('fitGroupsBtn').textContent = S.fitGroups === null ? 'Fit groups: all' : `Fit groups: ${S.fitGroups.length} selected`;
     $('cloudOn').checked = S.cloud; $('cloudZero').checked = S.cloudZero;
     $('cloudAlpha').value = Math.round(S.cloudAlpha * 100); $('cloudAlphaOut').textContent = `${Math.round(S.cloudAlpha * 100)}%`;
     $('cloudKnob').classList.toggle('off', !S.cloud); $('cloudZeroWrap').classList.toggle('off', !S.cloud); $('cloudFitWrap').classList.toggle('off', !S.cloud);
@@ -1071,16 +1074,23 @@
     if (top + h > innerHeight - 12) top = r.top - h - 6 >= 12 ? r.top - h - 6 : Math.max(12, innerHeight - 12 - h);
     pop.style.left = `${left}px`; pop.style.top = `${top}px`;
   }
-  function closePop() { $('popover').hidden = true; $('scrim').hidden = true; popAnchor = null; }
+  function closePop() { const anchor = popAnchor; $('popover').hidden = true; $('scrim').hidden = true; popAnchor = null; if (anchor && anchor.isConnected) anchor.focus({preventScroll: true}); }
   const popHead = title => `<div class="pop-head"><h3>${esc(title)}</h3><button class="close" type="button" data-close aria-label="Close">×</button></div>`;
 
+  function navOrderKey() {
+    return JSON.stringify([S.session, S.roster, S.align, S.policy, S.win, S.filters, S.color, S.style,
+      S.bin, S.sigma, S.weight, S.method, S.scaling, S.ncomp, S.tdrFactors, S.tdrWin, S.worldCoding, S.fitGroups, S.fitSplit, S.nsort, S.heatGroup]);
+  }
   function unitList() {
-    return D.units.filter(u => (!S.unitQ.length || S.unitQ.includes(String(u.quality).toLowerCase())) && (!S.unitArea.length || S.unitArea.includes(u.area)));
+    const order = D.navOrder && D.navOrder.key === navOrderKey() ? D.navOrder.ids : null;
+    return C.populationUnitList(D.units, S.roster, order, S.unitQ, S.unitArea, S.unitStep === 'roster');
   }
   function openUnitPicker() {
     const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))];
     const qs = [...new Set(D.units.map(u => String(u.quality).toLowerCase()))];
     const html = popHead('Choose a unit') +
+      `<div class="pop-note"><label><input id="rosterStep" type="checkbox" ${S.unitStep === 'roster' ? 'checked' : ''}> Step through population roster</label><br>Uses the last displayed population order; falls back to roster ID order after settings change. Units absent from the fit follow in roster ID order. Filters below still apply.</div>` +
+      (!unitList().some(u => u.id === S.unit) ? '<div class="pop-note">The current unit is outside this stepping list. Arrows start at its first/last unit.</div>' : '') +
       `<div class="pop-search"><input type="search" id="unitSearch" placeholder="unit id, channel, area…" autocomplete="off">` +
       `<div class="chips">${qs.map(q => `<button type="button" class="chip${S.unitQ.includes(q) ? ' on' : ''}" data-uq="${esc(q)}">${esc(q.toUpperCase())}</button>`).join('')}` +
       `${areas.map(a => `<button type="button" class="chip${S.unitArea.includes(a) ? ' on' : ''}" data-ua="${esc(a)}">${esc(a)}</button>`).join('')}</div></div>` +
@@ -1396,7 +1406,7 @@
       return out;
     }
     const fit = D.popFit, shownKeys = new Set(M.visible.map(g => g.key));
-    support.neurons = S.roster.length; support.common_trials = M.common;
+    support.neurons = fit.active_unit_ids.length; support.common_trials = M.common; out.training = fit.training;
     out.roster = S.roster.map(id => unitPrint(D.unitMap.get(id)) || {id});
     out.groups = fit.groups.filter(g => shownKeys.has(g.key)).map(g => ({label: g.label, panel: null, events: g.events, trials: g.trials}));
     out.fit = {method: fit.method, scaling: fit.scaling, components: fit.components, rank: fit.rank, fit_rows: fit.fit_rows,
@@ -1611,7 +1621,7 @@
 
   function applyTemplate(t) {
     const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, tick: S.tick, rasterH: S.rasterH, rasterFit: S.rasterFit, psthH: S.psthH, bars: S.bars, err: S.err,
-      mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, tdrFactors: S.tdrFactors, tdrWin: S.tdrWin, worldCoding: S.worldCoding, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes, popSplit: S.popSplit};
+      unitStep: S.unitStep, fitGroups: S.fitGroups, fitSplit: S.fitSplit, mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, tdrFactors: S.tdrFactors, tdrWin: S.tdrWin, worldCoding: S.worldCoding, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes, popSplit: S.popSplit};
     S = sanitize({...clone(DEFAULTS), ...keep, ...clone(t.state)});
     afterBigChange();
     toast(`Template: ${t.name}`);
@@ -1921,9 +1931,16 @@
   function fitRequest(M) {
     return {session_id: S.session, unit_ids: S.roster.slice(), alignment: S.align, policy: S.policy,
       pre: S.win[0], post: S.win[1], bin: S.bin, sigma: S.sigma, weight: S.weight, method: S.method,
-      scaling: S.scaling, components: nComp(),
+      scaling: S.scaling, components: nComp(), fit_group_keys: S.fitGroups, fit_split: S.fitSplit,
       ...(S.method === 'tdr' ? {factors: S.tdrFactors.slice(), tdr_window: tdrWindow(), world_coding: S.worldCoding} : {}),
       groups: M.grouping.groups.map(g => ({key: g.key, label: g.label, row_ids: g.rows.map(i => M.T.rowId[i])}))};
+  }
+  function openFitGroups() {
+    const M = buildPopModel(); if (!M || !M.grouping) return;
+    const keys = S.fitGroups === null ? M.grouping.groups.map(g => g.key) : S.fitGroups;
+    openPop($('fitGroupsBtn'), popHead('Groups used to fit the basis') + '<div class="pop-note">All groups are displayed. Projected groups can share trials with training groups. Use a trial split to hold out whole trial IDs.</div><div class="pop-body">' +
+      M.grouping.groups.map(g => `<button class="item${keys.includes(g.key) ? ' on' : ''}" type="button" data-fitgroup="${esc(g.key)}"><span class="main">${esc(g.label)}</span><span>${keys.includes(g.key) ? 'fit' : 'project'}</span></button>`).join('') +
+      '</div><div class="pop-note"><button type="button" data-fitall>Fit all groups</button></div>');
   }
   function prepareFit(fit) {
     fit.groupIndex = new Map(fit.groups.map((g, i) => [g.key, i]));
@@ -1934,7 +1951,7 @@
     for (let u = 0; u < U; u++) mu[u] /= Math.max(1, count);
     for (const g of fit.groups) for (const row of g.means) for (let u = 0; u < U; u++) sd[u] += (row[u] - mu[u]) ** 2;
     for (let u = 0; u < U; u++) sd[u] = Math.sqrt(sd[u] / Math.max(1, count)) || 1;
-    fit.stats = {mu, sd, mx, n};
+    fit.stats = fit.normalization ? {mu: fit.normalization.center, sd: fit.normalization.heat_sd.map(v => v || 1), mx: fit.normalization.heat_peak, n} : {mu, sd, mx, n};
   }
   let fitTimer = 0;
   function requestFit(req, key) {
@@ -2003,8 +2020,15 @@
     else idx.sort((a, b) => fit.active_unit_ids[a] - fit.active_unit_ids[b]);
     return idx;
   }
+  function heatDifference(fit, a, b) {
+    const key = `${a}|${b}|${S.heatNorm}`;
+    if (!fit.heatDifference || fit.heatDifference.key !== key)
+      fit.heatDifference = {key, value: C.populationDifference(fit, a, b, S.heatNorm)};
+    return fit.heatDifference.value;
+  }
   function heatImage(fit, gi, order) {
-    const key = `${D.popKey}|${gi}|${S.heatNorm}|${S.nsort}|${isDark()}`;
+    const bi = compareIndex(fit, gi), diff = bi === null ? null : heatDifference(fit, gi, bi);
+    const key = `${D.popKey}|${gi}|${bi}|${S.heatNorm}|${S.nsort}|${isDark()}`;
     if (D.heatCache.has(key)) return D.heatCache.get(key);
     const M = fit.groups[gi].means, n = M.length, U = order.length;
     const canvas = document.createElement('canvas');
@@ -2013,7 +2037,7 @@
     order.forEach((u, r) => {
       for (let t = 0; t < n; t++) {
         const v = S.heatNorm === 'z' ? (M[t][u] - fit.stats.mu[u]) / fit.stats.sd[u] : M[t][u] / (fit.stats.mx[u] || 1);
-        const [R, G, B] = C.heatColor(v, S.heatNorm, dark);
+        const [R, G, B] = diff ? C.heatColor(2.5 * diff.values[t][u] / diff.limit, 'z', dark) : C.heatColor(v, S.heatNorm, dark);
         const o = (r * n + t) * 4;
         img.data[o] = R; img.data[o + 1] = G; img.data[o + 2] = B; img.data[o + 3] = 255;
       }
@@ -2023,6 +2047,11 @@
     D.heatCache.set(key, url);
     if (D.heatCache.size > 12) D.heatCache.delete(D.heatCache.keys().next().value);
     return url;
+  }
+  function compareIndex(fit, gi) {
+    const bi = fit.groupIndex.get(S.heatCompare);
+    const vis = D.popModel && D.popModel.visible || [];
+    return vis.length >= 2 && vis.length <= 4 && vis.some(g => g.key === S.heatCompare) && bi !== undefined && bi !== gi ? bi : null;
   }
   const loadingComp = fit => (String(S.nsort).startsWith('loading:') ? Math.min(Number(S.nsort.split(':')[1]) || 0, fit.components - 1) : 0);
   function heatGroupIndex(M, fit) {
@@ -2231,10 +2260,14 @@
     const hg = heatGroupIndex(M, fit);
     if (hg) {
       const order = neuronOrder(fit, hg.gi);
+      if (!opts.export) D.navOrder = {key: navOrderKey(), ids: order.map(u => fit.active_unit_ids[u])};
+      const bi = compareIndex(fit, hg.gi), diff = bi === null ? null : heatDifference(fit, hg.gi, bi);
+      const heatLabel = diff ? `A − B: ${hg.g.label} − ${fit.groups[bi].label}` : hg.g.label;
+      const scaleLabel = diff ? (S.heatNorm === 'z' ? 'ΔHz / training SD' : 'ΔHz / training peak') : (S.heatNorm === 'z' ? 'z-scored with training means/SD' : 'rate / training neuron peak');
       const ml = 50, x0 = heat.x + ml, x1 = heat.x + heat.w, pw = x1 - x0, rowH = heat.h / Math.max(1, U);
       const X = t => x0 + (t - pre) / (post - pre) * pw;
       const sortName = {loading: `${compName(loadingComp(fit))} loading`, peak: 'peak time', rate: 'mean rate', id: 'unit ID', channel: 'peak channel', area: 'area'}[String(S.nsort).split(':')[0]] || 'unit ID';
-      out.push(`<text x="${f(heat.x)}" y="${f(heat.y - 8)}" font-size="12" font-weight="600" fill="${ink}">neurons × time · <tspan fill="${hg.g.color}">${esc(hg.g.label)}</tspan><tspan font-weight="400" fill="${muted}"> · ${S.heatNorm === 'z' ? 'z-scored per neuron across all groups' : 'rate / neuron peak'} · sorted by ${sortName}</tspan></text>`);
+      out.push(`<text x="${f(heat.x)}" y="${f(heat.y - 8)}" font-size="12" font-weight="600" fill="${ink}">neurons × time · <tspan fill="${hg.g.color}">${esc(heatLabel)}</tspan><tspan font-weight="400" fill="${muted}"> · ${scaleLabel} · sorted by ${sortName}</tspan></text>`);
       out.push(`<image href="${heatImage(fit, hg.gi, order)}" x="${f(x0)}" y="${f(heat.y)}" width="${f(pw)}" height="${f(heat.h)}" preserveAspectRatio="none" style="image-rendering:pixelated"/>`);
       let runStart = 0;
       for (let r = 1; r <= U; r++) {
@@ -2253,9 +2286,9 @@
       out.push(`<text transform="translate(${f(heat.x + 14)},${f(heat.y + heat.h / 2)}) rotate(-90)" text-anchor="middle" font-size="11" fill="${muted}">${U} neurons</text>`);
       // colour bar and area key
       const cbW = Math.min(120, pw * 0.3), cbX = x1 - cbW, cbY = yb + 22;
-      const stops = [0, 0.25, 0.5, 0.75, 1].map(s => { const v = S.heatNorm === 'z' ? -2.5 + 5 * s : s; const [R, G, B] = C.heatColor(v, S.heatNorm, isDark()); return `<stop offset="${s}" stop-color="rgb(${R},${G},${B})"/>`; }).join('');
+      const stops = [0, 0.25, 0.5, 0.75, 1].map(s => { const v = diff || S.heatNorm === 'z' ? -2.5 + 5 * s : s; const [R, G, B] = C.heatColor(v, diff ? 'z' : S.heatNorm, isDark()); return `<stop offset="${s}" stop-color="rgb(${R},${G},${B})"/>`; }).join('');
       out.push(`<defs><linearGradient id="heatbar">${stops}</linearGradient></defs><rect x="${f(cbX)}" y="${f(cbY)}" width="${f(cbW)}" height="7" rx="2" fill="url(#heatbar)"/>`,
-        `<text x="${f(cbX - 4)}" y="${f(cbY + 7)}" text-anchor="end" font-size="9.5" fill="${muted}">${S.heatNorm === 'z' ? '−2.5 z' : '0'}</text><text x="${f(x1)}" y="${f(cbY + 18)}" text-anchor="end" font-size="9.5" fill="${muted}">${S.heatNorm === 'z' ? '+2.5 z' : 'peak'}</text>`);
+        `<text x="${f(cbX - 4)}" y="${f(cbY + 7)}" text-anchor="end" font-size="9.5" fill="${muted}">${diff ? '−' + C.fmtNum(diff.limit, 2) : S.heatNorm === 'z' ? '−2.5 z' : '0'}</text><text x="${f(x1)}" y="${f(cbY + 18)}" text-anchor="end" font-size="9.5" fill="${muted}">${diff ? '+' + C.fmtNum(diff.limit, 2) : S.heatNorm === 'z' ? '+2.5 z' : 'peak'}</text>`);
       const areas = [...new Set(fit.active_unit_ids.map(id => (D.unitMap.get(id) || {}).area))];
       let ax = x0;
       for (const a of areas) { out.push(`<rect x="${f(ax)}" y="${f(cbY)}" width="8" height="8" rx="2" fill="${areaColor(a)}"/><text x="${f(ax + 11)}" y="${f(cbY + 7.5)}" font-size="10" fill="${muted}">${esc(a || '?')}</text>`); ax += 22 + String(a || '?').length * 6; }
@@ -2272,10 +2305,10 @@
       });
       out.push(`<path d="${pos}" fill="${paint('#e03131')}" opacity="0.8"/><path d="${neg}" fill="${paint('#1c7ed6')}" opacity="0.8"/>`,
         `<line x1="${f(mid)}" x2="${f(mid)}" y1="${f(load.y)}" y2="${f(load.y + load.h)}" stroke="${axisC}"/>`);
-      layout.heat = {box: heat, x0, x1, X, rowH, order, gi: hg.gi, group: hg.g};
+      layout.heat = {box: heat, x0, x1, X, rowH, order, gi: hg.gi, bi, group: hg.g};
       layout.load = {box: load, rowH, order, k};
-      if (!opts.export) out.push(`<rect class="hit" data-kind="heat" x="${f(x0)}" y="${f(heat.y)}" width="${f(pw)}" height="${f(heat.h)}" fill="transparent"/>`,
-        `<rect class="hit" data-kind="load" x="${f(load.x)}" y="${f(load.y)}" width="${f(load.w)}" height="${f(load.h)}" fill="transparent"/>`);
+      if (!opts.export) out.push(`<rect class="hit" data-kind="heat" style="cursor:pointer" aria-label="Double-click neuron row to open raster" x="${f(x0)}" y="${f(heat.y)}" width="${f(pw)}" height="${f(heat.h)}" fill="transparent"/>`,
+        `<rect class="hit" data-kind="load" style="cursor:pointer" aria-label="Double-click loading bar to open raster" x="${f(load.x)}" y="${f(load.y)}" width="${f(load.w)}" height="${f(load.h)}" fill="transparent"/>`);
     }
 
     // ---- variance explained and diagnostics
@@ -2285,7 +2318,7 @@
       // Past about ten components, label every nth bar and drop the per-bar percentages.
       const every = Math.max(1, Math.ceil(30 / step)), valueLabels = step >= 22;
       const nameAt = k => (k % every === 0 ? `<text x="${f(x0 + (k + 0.5) * step)}" y="${f(yb + 13)}" text-anchor="middle" font-size="10" fill="${muted}">${compName(k)}</text>` : '');
-      out.push(`<text x="${f(vbox.x)}" y="${f(vbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">${S.method === 'pca' ? 'variance explained' : 'variance explained by each component alone'}</text>`);
+      out.push(`<text x="${f(vbox.x)}" y="${f(vbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">${S.method === 'pca' ? 'training variance explained' : 'training R² by each component alone'}</text>`);
       r2.forEach((v, k) => {
         const cx = x0 + (k + 0.5) * step, y = yb - v / maxv * h;
         out.push(`<rect x="${f(cx - bw / 2)}" y="${f(y)}" width="${f(bw)}" height="${f(yb - y)}" rx="2" fill="${paint('#3b5bdb')}" opacity="${(0.9 - 0.45 * k / Math.max(9, K - 1)).toFixed(3)}"/>`,
@@ -2299,7 +2332,7 @@
         const cx0 = cbox.x + ml, cx1 = cbox.x + cbox.w, cyb = cbox.y + cbox.h - 20, ch = cbox.h - 44, cstep = (cx1 - cx0) / K;
         const cevery = Math.max(1, Math.ceil(30 / cstep));
         const CX = k => cx0 + (k + 0.5) * cstep, CY = v => cyb - clamp(v, 0, 1) * ch;
-        out.push(`<text x="${f(cbox.x)}" y="${f(cbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">cumulative variance explained</text>`);
+        out.push(`<text x="${f(cbox.x)}" y="${f(cbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">cumulative training variance explained</text>`);
         for (const v of [0, 0.5, 1]) out.push(`<line x1="${f(cx0)}" x2="${f(cx1)}" y1="${f(CY(v))}" y2="${f(CY(v))}" stroke="${v ? gridC : axisC}"/>`,
           `<text x="${f(cx0 - 4)}" y="${f(CY(v) + 3.5)}" text-anchor="end" font-size="9.5" fill="${muted}">${v * 100}%</text>`);
         out.push(`<path d="${cum.map((v, k) => `${k ? 'L' : 'M'}${f(CX(k))} ${f(CY(v))}`).join('')}" fill="none" stroke="${paint('#3b5bdb')}" stroke-width="1.8" stroke-linejoin="round"/>`);
@@ -2311,10 +2344,11 @@
       }
       const dropped = fit.dropped_constant_units.length;
       const lines = [
-        `${fit.fit_rows} fit rows = ${fit.groups.length} group${fit.groups.length === 1 ? '' : 's'} × ${n} bins · ${fit.active_unit_ids.length} neurons${dropped ? ` (${dropped} constant, left out)` : ''}`,
+        `${fit.fit_rows} fit rows = ${fit.training ? fit.training.group_keys.length : fit.groups.length} training groups × ${n} bins · ${fit.active_unit_ids.length} neurons${dropped ? ` (${dropped} constant, left out)` : ''}`,
         `all ${K} components together explain ${C.fmtNum(100 * fit.reconstruction_r2, 1)}% · rank ${fit.rank}${fit.converged ? '' : ' · did not converge'}`,
         `means: ${fit.weighting}`,
-        'descriptive in-sample fit; no held-out prediction or significance test',
+        fit.training ? `fit ${fit.training.events} events / ${fit.training.trials} trials → display ${fit.training.display_events} / ${fit.training.display_trials}; shared trials ${fit.training.shared_trials}` : fit.scope,
+        fit.training && fit.training.held_out_trials ? 'held-out trial IDs · exploratory; neighboring trials may be dependent' : 'selected-group fit / projections · no significance test',
       ];
       if (fit.warnings && fit.warnings.length) lines.push(`warning: ${String(fit.warnings[0]).slice(0, 110)}`);
       lines.forEach((t, i) => out.push(`<text x="${f(dbox.x)}" y="${f(dbox.y + 12 + i * 16)}" font-size="11" fill="${i === 4 ? paint('#e8590c') : i < 2 ? ink : muted}">${esc(t)}</text>`));
@@ -2371,6 +2405,12 @@
     const vis = M.visible.filter(g => fit.groupIndex.has(g.key));
     const hg = heatGroupIndex(M, fit);
     $('heatGroup').innerHTML = vis.map(g => `<option value="${esc(g.key)}"${hg && hg.g.key === g.key ? ' selected' : ''}>${esc(g.label)}</option>`).join('');
+    const compare = vis.length >= 2 && vis.length <= 4 ? vis.filter(g => !hg || g.key !== hg.g.key) : [];
+    if (!compare.some(g => g.key === S.heatCompare)) S.heatCompare = null;
+    $('heatCompare').innerHTML = '<option value="">None</option>' + compare.map(g => `<option value="${esc(g.key)}"${g.key === S.heatCompare ? ' selected' : ''}>${esc(g.label)}</option>`).join('');
+    $('heatCompare').disabled = !compare.length;
+    $('fitGroupsBtn').textContent = S.fitGroups === null ? 'Fit groups: all' : `Fit groups: ${S.fitGroups.length} selected`;
+    $('fitSplit').value = S.fitSplit;
   }
 
   function popEmpty(title, lines, buttons) {
@@ -2384,7 +2424,7 @@
     $('bars').innerHTML = '';
     document.querySelector('.figure-wrap').classList.add('stacked');
     renderRosterSection();
-    const M = buildPopModel();
+    let M = buildPopModel();
     if (!M) { if (fig.querySelector('svg')) fig.classList.add('stale'); else showLoading('Loading…', ''); return; }
     const presetButtons = rosterPresetList().slice(0, 5).map((p, i) => `<button type="button" class="${i ? 'small' : 'primary'}" data-act="rp:${esc(p.id)}">${esc(p.label)}${p.ids ? ` · ${p.ids.length}` : ''}</button>`).join('') +
       '<button type="button" class="small" data-act="choose">Choose neurons…</button>';
@@ -2432,6 +2472,16 @@
     }
     fig.classList.remove('stale');
     $('empty').hidden = true;
+    if (fit.training) {
+      const rowSets = new Map(fit.groups.map(g => [g.key, new Set(g.row_ids)]));
+      const samples = new Map(fit.groups.map(g => [g.key, g.sample]));
+      const groups = M.grouping.groups.map(g => ({...g, label: `${g.label} [${samples.get(g.key)}]`, rows: g.rows.filter(i => rowSets.get(g.key)?.has(M.T.rowId[i]))}));
+      M = {...M, grouping: {...M.grouping, groups}, visible: groups.filter(g => !g.hidden), rows: groups.flatMap(g => g.rows)};
+      D.popModel = M;
+      const shownTrials = new Set(M.visible.flatMap(g => g.rows.map(i => M.T.trial[i])));
+      $('support').innerHTML = `<b>${M.visible.reduce((a, g) => a + g.rows.length, 0)}</b> displayed events · <b>${shownTrials.size}</b> displayed trials · <b>${fit.active_unit_ids.length}</b> active neurons<br>Training: ${fit.training.events} events / ${fit.training.trials} trials; ${fit.training.shared_trials} shared trial IDs · ${fit.training.held_out_trials ? 'held-out display' : 'fit and projected groups'}`;
+      renderLegend(M);
+    }
     D.popFit = fit; D.popKey = key; D.popReq = req;
     D.probeShown = null;
     if (S.cloud) {
@@ -2448,7 +2498,7 @@
     mountPopFigure(fig, svg, layout);
     D.figMeta = {title: $('title').textContent, subtitle: $('subtitle').textContent, width};
     drawCursor();
-    $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · condition means per group, ${S.method === 'tdr' ? `one axis per factor: regression of single-event rates on the factors (world coded ${S.worldCoding === 'steps' ? 'as PP→PM and PM→MM steps' : 'PP −1, PM 0, MM +1'}; other categories effect-coded), read at each factor's peak time, denoised in the leading PC subspace and orthogonalised by QR` : `one joint ${S.method.toUpperCase()} basis (sklearn, as the classic workspace) · component signs set so each component's largest loading is positive`} · electro_gui ${VERSION}`;
+    $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · ${esc(fit.scope)} · double-click a neuron row or loading bar to open its raster · condition means per group, ${S.method === 'tdr' ? `one axis per factor: regression of single-event rates on the factors (world coded ${S.worldCoding === 'steps' ? 'as PP→PM and PM→MM steps' : 'PP −1, PM 0, MM +1'}; other categories effect-coded), read at each factor's peak time, denoised in the leading PC subspace and orthogonalised by QR` : `one joint ${S.method.toUpperCase()} basis (sklearn, as the classic workspace) · component signs set so each component's largest loading is positive`} · electro_gui ${VERSION}`;
   }
   function rerenderPopFigure() {
     const M = D.popModel, fit = D.popFit;
@@ -2509,8 +2559,10 @@
       const kv = [['area · quality', `${unit.area || '?'} · ${String(unit.quality || '').toUpperCase()}`]];
       if (kind === 'heat') {
         const t = L.pre + (p.x - L.heat.x0) / (L.heat.x1 - L.heat.x0) * (L.post - L.pre);
-        const j = clamp(Math.floor((t - L.pre) / fit.bin), 0, L.n - 1), v = fit.groups[L.heat.gi].means[j][u];
-        kv.push(['time', `${C.fmtNum(fit.times[j], 3)} s`], ['rate', `${C.fmtNum(v, 1)} spikes/s`], ['z (all groups)', C.fmtNum((v - fit.stats.mu[u]) / fit.stats.sd[u], 2)]);
+        const j = clamp(Math.floor((t - L.pre) / fit.bin), 0, L.n - 1), a = fit.groups[L.heat.gi].means[j][u];
+        const v = L.heat.bi === null ? a : a - fit.groups[L.heat.bi].means[j][u];
+        kv.push(['quantity', L.heat.bi === null ? 'group rate' : 'A minus B rate']);
+        kv.push(['time', `${C.fmtNum(fit.times[j], 3)} s`], ['rate', `${C.fmtNum(v, 1)} spikes/s`], [L.heat.bi === null ? 'z (training scale)' : 'ΔHz / training SD', C.fmtNum((v - (L.heat.bi === null ? fit.stats.mu[u] : 0)) / fit.stats.sd[u], 2)]);
       }
       for (let k = 0; k < fit.components; k++) kv.push([`${compName(k, names)} loading`, C.fmtNum(fit.loadings[u][k], 3)]);
       hl.innerHTML = `<rect x="${f1(L.heat ? L.heat.x0 : 0)}" y="${f1(box.box.y + r * rowH)}" width="${f1(L.width - (L.heat ? L.heat.x0 : 0))}" height="${f1(Math.max(rowH, 1.5))}" fill="${figVar('--accent')}" opacity="0.18"/>`;
@@ -2519,6 +2571,20 @@
   }
   let rotate = null, split = null, splitDown = 0;
   function bindPopFigure(fig) {
+    fig.addEventListener('dblclick', evt => {
+      if (S.mode !== 'population' || !D.popLayout || !D.popFit || fig.classList.contains('stale')) return;
+      const hit = evt.target.closest && evt.target.closest('.hit');
+      if (!hit || !['heat', 'load'].includes(hit.dataset.kind)) return;
+      const box = D.popLayout[hit.dataset.kind], p = popPoint(evt);
+      const r = clamp(Math.floor((p.y - box.box.y) / box.rowH), 0, box.order.length - 1);
+      const id = D.popFit.active_unit_ids[box.order[r]];
+      if (!D.unitMap.has(id)) { toast('This unit is no longer available in the session.', true); return; }
+      S.unit = id;
+      const listed = unitList().some(u => u.id === id);
+      setMode('raster');
+      if (!listed) toast('Opened selected unit; it is outside the current picker filters or stepping roster.');
+      evt.preventDefault();
+    });
     fig.addEventListener('pointerdown', evt => {
       if (S.mode !== 'population' || !D.popLayout) return;
       const hit = evt.target.closest && evt.target.closest('.hit');
@@ -2568,13 +2634,16 @@
   }
 
   function popProvenance(M, fit) {
+    const hg = heatGroupIndex(M, fit), bi = hg ? compareIndex(fit, hg.gi) : null;
+    const difference = bi === null ? null : {A: hg.g.key, B: fit.groups[bi].key, sign: 'A minus B', scaling: S.heatNorm, limit: heatDifference(fit, hg.gi, bi).limit};
     return {tool: `electro_gui ${VERSION} explorer · population`, generated: new Date().toISOString(), session_id: D.summary.session_id,
       source: D.summary.source, alignment: S.align, policy: S.policy, unit_ids: S.roster.slice(),
       active_unit_ids: fit.active_unit_ids, dropped_constant_units: fit.dropped_constant_units, method: fit.method, scaling: fit.scaling,
       components: fit.components, component_r2: fit.component_r2, cumulative_r2: fit.cumulative_r2, explained_variance_ratio: fit.explained_variance_ratio,
+      training: fit.training, normalization: fit.normalization, difference,
       reconstruction_r2: fit.reconstruction_r2, rank: fit.rank, fit_rows: fit.fit_rows, converged: fit.converged, warnings: fit.warnings,
       weighting: fit.weighting, window: fit.window, bin: fit.bin, sigma: fit.sigma, common_trials: fit.common_trials,
-      groups: fit.groups.map(g => ({key: g.key, label: g.label, events: g.events, trials: g.trials})), scope: fit.scope, tdr: fit.tdr || null, state: S};
+      groups: fit.groups.map(g => ({key: g.key, label: g.label, sample: g.sample, events: g.events, trials: g.trials, row_ids: g.row_ids})), scope: fit.scope, tdr: fit.tdr || null, state: S};
   }
   function popExportSVG() {
     const width = Math.max(900, D.figMeta.width);
@@ -3377,6 +3446,12 @@
       if (t.dataset.ra) { const a = t.dataset.ra; RF.a = RF.a.includes(a) ? RF.a.filter(x => x !== a) : [...RF.a, a]; t.classList.toggle('on'); fillRosterItems(); return; }
       if (t.hasAttribute('data-rall')) { S.roster = [...new Set([...S.roster, ...rosterShown().map(u => u.id)])].sort((a, b) => a - b); fillRosterItems(); rosterChanged(300); return; }
       if (t.hasAttribute('data-rnone')) { const drop = new Set(rosterShown().map(u => u.id)); S.roster = S.roster.filter(id => !drop.has(id)); fillRosterItems(); rosterChanged(300); return; }
+      if (t.hasAttribute('data-fitall')) { S.fitGroups = null; openFitGroups(); changed(); return; }
+      if (t.hasAttribute('data-fitgroup')) {
+        const keys = S.fitGroups === null ? buildPopModel().grouping.groups.map(g => g.key) : S.fitGroups;
+        S.fitGroups = keys.includes(t.dataset.fitgroup) ? keys.filter(k => k !== t.dataset.fitgroup) : [...keys, t.dataset.fitgroup];
+        openFitGroups(); changed(); return;
+      }
       if (t.dataset.unit) { S.unit = Number(t.dataset.unit); closePop(); changed({data: true}); return; }
       if (t.dataset.align) {
         const old = S.align; S.align = t.dataset.align; closePop();
@@ -3393,6 +3468,9 @@
       if (t.hasAttribute('data-copylink')) { saveState(); setTimeout(() => navigator.clipboard.writeText(location.href).then(() => toast('Link copied — it restores this exact view.'), () => toast(location.href)), 300); return; }
       if (t.dataset.exp) { closePop(); (S.mode === 'population' ? popExport : doExport)(t.dataset.exp).catch(err => toast(err.message, true)); return; }
       if (t.dataset.mdel) { S.markers = S.markers.filter(m => m.id !== t.dataset.mdel); if (S.sort === `marker:${t.dataset.mdel}`) S.sort = 'session'; closePop(); renderStructure(); changed(); return; }
+    });
+    pop.addEventListener('change', e => {
+      if (e.target.id === 'rosterStep') { S.unitStep = e.target.checked ? 'roster' : 'all'; saveState(); openUnitPicker(); }
     });
     pop.addEventListener('input', e => {
       if (e.target.id === 'unitSearch') fillUnitItems(e.target.value);
@@ -3478,7 +3556,10 @@
       S.ncomp = Math.min(v, MAX_NCOMP); $('ncompN').value = S.ncomp; renderStructure(); changed();
     });
     for (const [id, i] of [['axX', 0], ['axY', 1], ['axZ', 2]]) $(id).addEventListener('change', e => { S.axes[i] = Number(e.target.value); saveState(); rerenderPopFigure(); });
-    $('heatGroup').addEventListener('change', e => { S.heatGroup = e.target.value; saveState(); rerenderPopFigure(); });
+    $('fitGroupsBtn').addEventListener('click', openFitGroups);
+    $('fitSplit').addEventListener('change', e => { S.fitSplit = e.target.value; changed(); });
+    $('heatGroup').addEventListener('change', e => { S.heatGroup = e.target.value; syncPopToolbar(D.popFit, D.popModel); saveState(); rerenderPopFigure(); });
+    $('heatCompare').addEventListener('change', e => { S.heatCompare = e.target.value || null; saveState(); rerenderPopFigure(); });
     $('cursor').addEventListener('input', e => { stopPlay(); D.cursor = Number(e.target.value); drawCursor(); });
     $('playBtn').addEventListener('click', togglePlay);
     $('cloudOn').addEventListener('change', e => { S.cloud = e.target.checked; changed(); });

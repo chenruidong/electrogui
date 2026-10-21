@@ -78,7 +78,7 @@
           <button class="icon-btn dir" id="sortDir" type="button" data-only="raster" title="Reverse order" aria-label="Reverse sort order">↑</button>
         </div>
         <label class="switch" data-only="raster"><input type="checkbox" id="grouped" checked><span></span>Keep groups together in the raster</label>
-        <p class="note" data-only="population">Every group enters one joint fit. Hiding a group in the legend only hides it from the plots; use filters to leave it out of the fit.</p>
+        <p class="note" data-only="population">By default every group enters one joint fit. Use Fit groups to train on a subset. Hiding a group in the legend only changes the display.</p>
       </section>
 
       <section class="section" data-section="markers">
@@ -104,6 +104,9 @@
           <div class="seg-field"><span>Method</span><div class="seg" data-key="method"><button data-v="pca">PCA</button><button data-v="ica">ICA</button><button data-v="fa">FA</button><button data-v="tdr" title="Targeted dimensionality reduction: one axis per task factor">TDR</button></div></div>
           <div class="knob" data-method="tdr"><div class="knob-head"><span>TDR factors</span></div><button class="pick" id="tdrBtn" type="button" aria-haspopup="dialog" title="Choose the TDR factors and how world is coded"><strong id="tdrLabel"></strong><span class="pick-label">▾</span></button>
             <div class="knob-head" style="margin-top:8px"><span>TDR window <small>(blank = display window)</small></span><span class="nums"><input type="number" id="tdrLoN" step="0.1" aria-label="TDR window start (s)"><i>to</i><input type="number" id="tdrHiN" step="0.1" aria-label="TDR window end (s)"><i>s</i></span></div></div>
+          <div class="knob"><button class="pick" id="fitGroupsBtn" type="button">Fit groups: all</button></div>
+          <label class="field">Training trials <select id="fitSplit"><option value="all">All selected trials</option><option value="odd">Odd trial IDs → display even</option><option value="even">Even trial IDs → display odd</option></select></label>
+          <p class="help">Split projections are exploratory; neighboring trials may be dependent. Hidden groups still take part unless excluded under Fit groups.</p>
           <div class="seg-field"><span>Scaling</span><div class="seg" data-key="scaling"><button data-v="zscore">z-score</button><button data-v="center">center</button></div></div>
           <div class="knob" data-not-method="tdr"><div class="knob-head"><span>Components <small>(type up to 50)</small></span><span class="nums"><input type="number" id="ncompN" min="2" max="50" step="1" aria-label="Number of components"></span></div><input type="range" id="ncomp" min="2" max="10" step="1" aria-label="Number of components, 2 to 10"></div>
           <div class="seg-field"><span>Trajectory</span><div class="seg" data-key="dims"><button data-v="2">2D</button><button data-v="3">3D</button></div></div>
@@ -136,7 +139,8 @@
         <div class="pop-toolbar" id="popToolbar" data-only="population">
           <div class="tb-axes"><label>X <select id="axX" aria-label="Trajectory x component"></select></label><label>Y <select id="axY" aria-label="Trajectory y component"></select></label><label id="axZWrap">Z <select id="axZ" aria-label="Trajectory z component"></select></label></div>
           <div class="tb-cursor"><button class="icon-btn play" id="playBtn" type="button" aria-label="Play through time">▶</button><input type="range" id="cursor" min="0" max="0" value="0" aria-label="Time cursor"><output id="cursorOut">t —</output></div>
-          <label class="tb-heat">Heatmap <select id="heatGroup" aria-label="Group shown in the heatmap"></select></label>
+          <label class="tb-heat">A · heatmap <select id="heatGroup" aria-label="Group shown in the heatmap"></select></label>
+          <label class="tb-heat">Subtract B <select id="heatCompare" aria-label="Group to subtract from heatmap A"></select></label>
         </div>
         <div class="figure-wrap"><div class="figure" id="figure"></div><div class="bars" id="bars"></div></div>
         <div class="empty" id="empty" hidden></div>
