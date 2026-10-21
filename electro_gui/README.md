@@ -327,6 +327,11 @@ TDR. Every group is still displayed, marked `[fit]` or `[projected group]`.
 Hiding a legend entry only changes the display. A projected group can share
 trials with training groups; the support line reports that overlap. Filters
 and roster selection remain user choices and are not cross-validated.
+Restricted fits support categorical/discrete grouping. Continuous numeric groups
+use adaptive quantile boundaries from all selected rows, so they are rejected
+for a training subset or trial split until training-only boundaries are supported.
+The default joint descriptive fit still permits them. API callers supply explicit
+row memberships and must learn any grouping thresholds using training data only.
 
 **Training trials** optionally fits odd trial IDs and displays even IDs, or
 vice versa. These are the actual session trial IDs, not event-row positions.
@@ -373,6 +378,11 @@ Quality/area filters continue to apply. A directly clicked unit outside those
 filters opens with a notice, without changing the filters. Closing the picker
 returns keyboard focus to its button. Search text narrows the open picker;
 the stepping scope remains the quality/area-filtered roster or session list.
+Grouping-bin and hidden-group changes invalidate saved stepping order too.
+While fit/model settings are updating, old results cannot be exported, used for
+row navigation or redrawn under the new state; wait for the current fit.
+Population caches retain complete request identities, including training and
+membership settings, rather than relying on a short hash.
 
 ### What the numbers mean
 

@@ -327,7 +327,7 @@
     if (S.session !== sid) S.pin = null;   // trial IDs belong to one session
     S.session = sid;
     D.summary = null; D.tables.clear(); D.rasters.clear(); D.events.clear(); D.model = null;
-    D.popspans.clear(); D.stab = null; D.fits.clear(); D.fitErrors.clear(); D.heatCache.clear(); D.popFit = null; D.popLayout = null; D.navOrder = null; stopPlay();
+    D.popspans.clear(); D.stab = null; D.fits.clear(); D.fitErrors.clear(); D.heatCache.clear(); D.popFit = null; D.popLayout = null; D.popModelKey = null; D.navOrder = null; stopPlay();
     D.probes.clear(); D.probeErrors.clear(); D.probeShown = null;
     D.behavior = null; D.behaviorError = null; D.btC = null; D.btLayout = null; D.trains.clear(); D.trainErrors.clear();
     $('sessionSelect').value = sid;
@@ -1077,10 +1077,16 @@
   function closePop() { const anchor = popAnchor; $('popover').hidden = true; $('scrim').hidden = true; popAnchor = null; if (anchor && anchor.isConnected) anchor.focus({preventScroll: true}); }
   const popHead = title => `<div class="pop-head"><h3>${esc(title)}</h3><button class="close" type="button" data-close aria-label="Close">×</button></div>`;
 
-  function navOrderKey() {
-    return JSON.stringify([S.session, S.roster, S.align, S.policy, S.win, S.filters, S.color, S.style,
-      S.bin, S.sigma, S.weight, S.method, S.scaling, S.ncomp, S.tdrFactors, S.tdrWin, S.worldCoding, S.fitGroups, S.fitSplit, S.nsort, S.heatGroup]);
+  // Inputs captured by buildPopModel, plus every fit input. Sort/axes/heatmap
+  // choices are drawn directly, so they can redraw a current model without refitting.
+  function popModelKey() {
+    return JSON.stringify([S.session, S.roster, S.align, S.policy, S.win, S.cw, S.filters, S.color, S.style, S.qbins, S.hidden, S.markers, S.gstyle,
+      S.bin, S.sigma, S.weight, S.method, S.scaling, S.ncomp, S.tdrFactors, S.tdrWin, S.worldCoding, S.fitGroups, S.fitSplit]);
   }
+  function popFitIsCurrent() {
+    return !!(S.mode === 'population' && D.popFit && D.popModel && D.popModelKey === popModelKey() && !$('figure').classList.contains('stale'));
+  }
+  function navOrderKey() { return JSON.stringify([popModelKey(), S.nsort, S.heatGroup]); }
   function unitList() {
     const order = D.navOrder && D.navOrder.key === navOrderKey() ? D.navOrder.ids : null;
     return C.populationUnitList(D.units, S.roster, order, S.unitQ, S.unitArea, S.unitStep === 'roster');
@@ -1379,7 +1385,7 @@
     const fig = $('figure');
     if (!$('empty').hidden || !fig.querySelector('svg') || !D.figMeta) return 'there is no figure to save';
     if (fig.classList.contains('stale')) return 'the figure is still updating';
-    if (S.mode === 'population') return D.popFit && D.popModel ? '' : 'the fit has not finished';
+    if (S.mode === 'population') return popFitIsCurrent() ? '' : 'the fit has not finished';
     return D.model && D.model.rows.length ? '' : 'there is no figure to save';
   }
   /**
@@ -1928,7 +1934,13 @@
       pre, post, cw: S.cw, common: P.common_trials, pop: true};
   }
 
+  // Keep complete identities: a 32-bit hash can alias distinct training subsets.
+  function populationFitKey(request) { return JSON.stringify(request); }
   function fitRequest(M) {
+    if (S.fitSplit !== 'all' || S.fitGroups !== null) {
+      const adaptive = [S.color, S.style].map(k => k && M.T.byKey.get(k)).find(c => c && c.kind === 'num' && !c.discrete);
+      if (adaptive) throw Error('Restricted training does not support quantile-binned numeric groups: their boundaries use all selected trials. Choose categorical/discrete groups or fit all groups and trials.');
+    }
     return {session_id: S.session, unit_ids: S.roster.slice(), alignment: S.align, policy: S.policy,
       pre: S.win[0], post: S.win[1], bin: S.bin, sigma: S.sigma, weight: S.weight, method: S.method,
       scaling: S.scaling, components: nComp(), fit_group_keys: S.fitGroups, fit_split: S.fitSplit,
@@ -2260,7 +2272,7 @@
     const hg = heatGroupIndex(M, fit);
     if (hg) {
       const order = neuronOrder(fit, hg.gi);
-      if (!opts.export) D.navOrder = {key: navOrderKey(), ids: order.map(u => fit.active_unit_ids[u])};
+      if (!opts.export && popFitIsCurrent()) D.navOrder = {key: navOrderKey(), ids: order.map(u => fit.active_unit_ids[u])};
       const bi = compareIndex(fit, hg.gi), diff = bi === null ? null : heatDifference(fit, hg.gi, bi);
       const heatLabel = diff ? `A − B: ${hg.g.label} − ${fit.groups[bi].label}` : hg.g.label;
       const scaleLabel = diff ? (S.heatNorm === 'z' ? 'ΔHz / training SD' : 'ΔHz / training peak') : (S.heatNorm === 'z' ? 'z-scored with training means/SD' : 'rate / training neuron peak');
@@ -2404,6 +2416,7 @@
     if (D.cursor !== null) $('cursor').value = D.cursor;
     const vis = M.visible.filter(g => fit.groupIndex.has(g.key));
     const hg = heatGroupIndex(M, fit);
+    $('heatGroup').disabled = !vis.length;
     $('heatGroup').innerHTML = vis.map(g => `<option value="${esc(g.key)}"${hg && hg.g.key === g.key ? ' selected' : ''}>${esc(g.label)}</option>`).join('');
     const compare = vis.length >= 2 && vis.length <= 4 ? vis.filter(g => !hg || g.key !== hg.g.key) : [];
     if (!compare.some(g => g.key === S.heatCompare)) S.heatCompare = null;
@@ -2415,7 +2428,8 @@
 
   function popEmpty(title, lines, buttons) {
     $('figure').innerHTML = ''; $('figure').classList.remove('stale');
-    D.popLayout = null;
+    D.popLayout = null; D.popFit = null; D.popModelKey = null; D.navOrder = null;
+    for (const id of ['heatGroup', 'heatCompare']) { $(id).innerHTML = ''; $(id).disabled = true; }
     $('empty').innerHTML = `<h3>${esc(title)}</h3>${lines.map(l => `<p>${l}</p>`).join('')}<div class="chips" style="justify-content:center;margin-top:12px">${buttons}</div>`;
     $('empty').hidden = false;
   }
@@ -2460,7 +2474,10 @@
     }
     if (S.method === 'tdr' && S.tdrFactors.length < 2) { popEmpty('Choose TDR factors', ['Targeted dimensionality reduction needs at least two factors (one axis each); pick them in Model & display.'], ''); return; }
     if (nComp() > S.roster.length) { popEmpty('Too many components', [`${nComp()} components need at least ${nComp()} neurons; this roster has ${S.roster.length}.`], ''); return; }
-    const req = fitRequest(M), key = C.hash(JSON.stringify(req));
+    let req;
+    try { req = fitRequest(M); }
+    catch (e) { popEmpty('Training selection is not supported', [esc(e.message)], ''); return; }
+    const key = populationFitKey(req);
     const fit = D.fits.get(key);
     if (!fit) {
       const err = D.fitErrors.get(key);
@@ -2482,7 +2499,7 @@
       $('support').innerHTML = `<b>${M.visible.reduce((a, g) => a + g.rows.length, 0)}</b> displayed events · <b>${shownTrials.size}</b> displayed trials · <b>${fit.active_unit_ids.length}</b> active neurons<br>Training: ${fit.training.events} events / ${fit.training.trials} trials; ${fit.training.shared_trials} shared trial IDs · ${fit.training.held_out_trials ? 'held-out display' : 'fit and projected groups'}`;
       renderLegend(M);
     }
-    D.popFit = fit; D.popKey = key; D.popReq = req;
+    D.popFit = fit; D.popKey = key; D.popReq = req; D.popModelKey = popModelKey();
     D.probeShown = null;
     if (S.cloud) {
       const probeTimes = cloudTimes(fit);
@@ -2502,7 +2519,7 @@
   }
   function rerenderPopFigure() {
     const M = D.popModel, fit = D.popFit;
-    if (!M || !fit || S.mode !== 'population') return;
+    if (!popFitIsCurrent()) return;
     const width = D.figMeta ? D.figMeta.width : 800;
     const {svg, layout} = popFigureSVG(M, fit, width);
     mountPopFigure($('figure'), svg, layout); drawCursor();
@@ -2572,7 +2589,7 @@
   let rotate = null, split = null, splitDown = 0;
   function bindPopFigure(fig) {
     fig.addEventListener('dblclick', evt => {
-      if (S.mode !== 'population' || !D.popLayout || !D.popFit || fig.classList.contains('stale')) return;
+      if (!popFitIsCurrent() || !D.popLayout) return;
       const hit = evt.target.closest && evt.target.closest('.hit');
       if (!hit || !['heat', 'load'].includes(hit.dataset.kind)) return;
       const box = D.popLayout[hit.dataset.kind], p = popPoint(evt);
@@ -2646,12 +2663,13 @@
       groups: fit.groups.map(g => ({key: g.key, label: g.label, sample: g.sample, events: g.events, trials: g.trials, row_ids: g.row_ids})), scope: fit.scope, tdr: fit.tdr || null, state: S};
   }
   function popExportSVG() {
+    if (!popFitIsCurrent()) throw Error('The population figure is updating; wait for the current fit before exporting.');
     const width = Math.max(900, D.figMeta.width);
     return popFigureSVG(D.popModel, D.popFit, width, {export: true, title: D.figMeta.title, subtitle: `${D.summary.session_id} · ${D.figMeta.subtitle}`}).svg;
   }
   async function popExport(kind) {
     const M = D.popModel, fit = D.popFit;
-    if (!M || !fit || S.mode !== 'population' || !D.popLayout) { toast('Nothing to export yet.', true); return; }
+    if (!popFitIsCurrent() || !D.popLayout) throw Error('The population figure is updating; wait for the current fit before exporting.');
     const stem = `${D.summary.session_id}_population_${S.roster.length}neurons_${S.align}_${S.method}`;
     const names = [...Array(fit.components).keys()].map(k => compName(k, fit.method));
     if (kind === 'svg') download(`${stem}.svg`, new Blob([popExportSVG()], {type: 'image/svg+xml'}));
@@ -3558,7 +3576,7 @@
     for (const [id, i] of [['axX', 0], ['axY', 1], ['axZ', 2]]) $(id).addEventListener('change', e => { S.axes[i] = Number(e.target.value); saveState(); rerenderPopFigure(); });
     $('fitGroupsBtn').addEventListener('click', openFitGroups);
     $('fitSplit').addEventListener('change', e => { S.fitSplit = e.target.value; changed(); });
-    $('heatGroup').addEventListener('change', e => { S.heatGroup = e.target.value; syncPopToolbar(D.popFit, D.popModel); saveState(); rerenderPopFigure(); });
+    $('heatGroup').addEventListener('change', e => { S.heatGroup = e.target.value; if (popFitIsCurrent()) syncPopToolbar(D.popFit, D.popModel); saveState(); rerenderPopFigure(); });
     $('heatCompare').addEventListener('change', e => { S.heatCompare = e.target.value || null; saveState(); rerenderPopFigure(); });
     $('cursor').addEventListener('input', e => { stopPlay(); D.cursor = Number(e.target.value); drawCursor(); });
     $('playBtn').addEventListener('click', togglePlay);

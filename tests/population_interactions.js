@@ -35,7 +35,7 @@ const context = {window: {EGCore: C}, document: {getElementById: el, querySelect
   requestAnimationFrame: () => 0, ResizeObserver: class {observe() {}}, console};
 let source = fs.readFileSync(path.join(root, 'explorer.js'), 'utf8');
 source = source.replace('  start();', `
-  window.qa = {S, D, unitList, stepUnit, bindPopFigure, bindControls, navOrderKey, fillUnitItems, sanitize, fitRequest, closePop, setPopAnchor: a => {popAnchor = a;}};
+  window.qa = {S, D, unitList, stepUnit, bindPopFigure, bindControls, navOrderKey, fillUnitItems, sanitize, fitRequest, populationFitKey, popModelKey, popFitIsCurrent, rerenderPopFigure, popEmpty, popExportSVG, popExport, closePop, setPopAnchor: a => {popAnchor = a;}};
   changed = () => {}; renderStructure = () => {}; closeSheet = () => {}; applyMode = () => {};
   bindFigure = () => {}; bindBehavior = () => {}; saveState = () => {};`);
 vm.runInNewContext(source, context);
@@ -49,10 +49,14 @@ S.unit = 2; stepUnit(-1); assert.equal(S.unit, 1);
 context.window.qa.fillUnitItems('');
 assert.ok(el('unitItems').innerHTML.indexOf('data-unit="3"') < el('unitItems').innerHTML.indexOf('data-unit="1"'));
 S.win = [-1, 2]; assert.equal(JSON.stringify(unitList().map(u => u.id)), '[1,3]'); // stale order falls back
+for (const [field, value] of [['qbins', 4], ['hidden', ['other']], ['filters', [{k:'world',v:['PP']}]]]) {
+  const old = S[field]; D.navOrder = {key: navOrderKey(), ids: [3, 1]}; S[field] = value;
+  assert.equal(JSON.stringify(unitList().map(u => u.id)), '[1,3]', field + ' must invalidate old population order'); S[field] = old;
+}
 S.roster = []; stepUnit(1); assert.equal(S.unit, 1); // empty list is safe
 S.roster = [1, 2, 3]; S.mode = 'population';
 const fig = el('figure');
-D.popFit = {active_unit_ids: [1, 2, 3]};
+D.popFit = {active_unit_ids: [1, 2, 3]}; D.popModel = {}; D.popModelKey = context.window.qa.popModelKey();
 D.popLayout = {width: 100, height: 100, heat: {box: {y: 0}, rowH: 20, order: [2, 0, 1]}, load: {box: {y: 0}, rowH: 20, order: [2, 0, 1]}};
 context.window.qa.bindPopFigure(fig);
 const before = JSON.stringify([S.align, S.win, S.filters, S.color, S.style, S.panel, S.policy, S.cw, S.sort]);
@@ -77,4 +81,47 @@ assert.equal(S.unit, 3);
 // Persisted state rejects invalid policies and retains explicit selections.
 const restored = context.window.qa.sanitize({...S, fitSplit: 'random', fitGroups: ['x', 'x'], unitStep: 'unknown'});
 assert.equal(restored.fitSplit, 'all'); assert.equal(restored.unitStep, 'all'); assert.equal(JSON.stringify(restored.fitGroups), '["x"]');
-console.log('Population numerical display and interaction checks passed');
+async function finalReviewChecks() {
+  const Q = context.window.qa;
+  // Changing held-out values can move training rows across globally fitted
+  // quantiles. Such restricted numeric grouping must be blocked, not fitted.
+  const quantileTraining = values => {
+    const col = {key:'metric',kind:'num',discrete:false,data:values};
+    return C.groupRows({byKey:new Map([['metric',col]])}, [...values.keys()], {color:'metric',qbins:2})
+      .groups.map(g => g.rows.filter(i => i%2===0));
+  };
+  assert.notEqual(JSON.stringify(quantileTraining([0,1,2,3,4,5,6,7])),
+                  JSON.stringify(quantileTraining([0,101,2,103,4,105,6,107])));
+  const table = {rowId: [10,11], byKey: new Map([['metric', {kind:'num',discrete:false}]])};
+  const M = {T:table, grouping:{groups:[{key:'bin0',label:'low',rows:[0]}, {key:'bin1',label:'high',rows:[1]}]}};
+  Object.assign(S, {color:'metric',style:null,fitGroups:null,fitSplit:'odd'});
+  assert.throws(() => Q.fitRequest(M), /quantile-binned/);
+  S.fitSplit='all'; S.fitGroups=['bin0']; assert.throws(() => Q.fitRequest(M), /quantile-binned/);
+  S.fitGroups=null; assert.doesNotThrow(() => Q.fitRequest(M)); // default joint descriptive fit unchanged
+  table.byKey.set('metric', {kind:'num',discrete:true}); S.fitSplit='odd'; assert.doesNotThrow(() => Q.fitRequest(M));
+  table.byKey.set('metric', {kind:'cat'}); assert.doesNotThrow(() => Q.fitRequest(M));
+  // These distinct real request shapes collided under the old 32-bit identity.
+  const collision = i => ({groups:[{key:'a',label:'condition '+i,row_ids:[1,2,3,4]}],fit_split:i%2?'odd':'even'});
+  const even = collision(75300), odd = collision(113021);
+  assert.equal(C.hash(JSON.stringify(even)), C.hash(JSON.stringify(odd)));
+  assert.notEqual(Q.populationFitKey(even), Q.populationFitKey(odd));
+  assert.equal(new Map([[Q.populationFitKey(even),'even'],[Q.populationFitKey(odd),'odd']]).size, 2);
+  // A control changed before the next scheduled render must block old data,
+  // even before the figure's stale class has been applied.
+  S.mode='population'; S.fitSplit='odd'; D.popModelKey=Q.popModelKey(); D.popModel={};
+  assert.equal(Q.popFitIsCurrent(), true);
+  const oldOrder = D.navOrder; fig.innerHTML = 'old population'; S.fitSplit='even';
+  assert.equal(Q.popFitIsCurrent(), false);
+  Q.rerenderPopFigure(); assert.equal(fig.innerHTML, 'old population'); assert.equal(D.navOrder, oldOrder);
+  const oldUnit=S.unit; fig.handlers.dblclick[0](click('heat')); assert.equal(S.unit, oldUnit); assert.equal(S.mode,'population');
+  assert.throws(() => Q.popExportSVG(), /updating/);
+  await assert.rejects(Q.popExport('json'), /updating/);
+  D.popModelKey=Q.popModelKey(); fig.classList.add('stale');
+  assert.equal(Q.popFitIsCurrent(),false); await assert.rejects(Q.popExport('coords'),/updating/);
+  fig.classList.remove('stale');
+  Q.popEmpty('Unsupported training selection', [], '');
+  assert.equal(D.popFit, null); assert.equal(el('heatGroup').disabled, true); assert.equal(el('heatCompare').disabled, true);
+  assert.doesNotThrow(() => el('heatGroup').handlers.change[0]({target:{value:'other'}}));
+  console.log('Population numerical display and interaction checks passed');
+}
+finalReviewChecks().catch(e => { console.error(e); process.exitCode=1; });

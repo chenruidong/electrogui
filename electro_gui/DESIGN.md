@@ -147,3 +147,11 @@ and display `row_ids`/`sample` per group. The client filters its display model
 to those rows for counts, medians, clouds, findings and exports. The default
 all-group fit retains the shared world-axis numerical contract. Classic
 routes, inference, export/annotation jobs and executors remain unchanged.
+
+The client rejects restricted fits with adaptive continuous numeric grouping:
+its all-row quantile thresholds are not a training-only selection operator.
+Result/probe caches use complete serialized request identities. A population
+model signature binds redraws, exports/findings and row navigation to the
+current model/fit inputs, including quantile bins and hidden groups; only a
+fresh result publishes a stepping order. Error/empty views invalidate that fit
+and clear/disable heatmap selectors.

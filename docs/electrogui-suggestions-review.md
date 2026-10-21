@@ -60,6 +60,9 @@ Results and exact launch instructions are recorded below after implementation.
   try a TDR split lacking factor variation and expect an explicit error.
 - With 2–4 visible groups choose A and a subtracting B; verify sign and symmetric
   scale, reverse A/B, and return to an ordinary heatmap.
+- Try restricted training with a continuous numeric grouping field: expect a
+  clear unsupported-selection explanation. During a refit, exports and old
+  population row clicks must wait for the new fit.
 - Exercise classic inference, annotations, exports and queued loading unchanged.
 
 ## Implemented outcome
@@ -139,3 +142,36 @@ explorer endpoint/store lock and bounded cache behavior; no responsiveness or
 production-scale performance claim is made from this small synthetic fixture.
 A future classic migration must separately establish endpoint and export parity,
 loading behavior and the full exchangeability/exact/Monte Carlo contract.
+
+
+## Independent final review
+
+An independent read-only worker reviewed the pushed diff and report, rather
+than relying on the passing suite. It confirmed the backend normalization,
+constant-unit selection, trial/window checks, TDR design/denoising/peak fitting,
+affine projections/probes and A-minus-B arithmetic. It identified and helped
+verify fixes for these additional paths:
+
+- Restricted fits now reject **continuous quantile-binned numeric groups**.
+  The existing quantile boundaries use all selected rows, allowing held-out
+  covariates to change training membership before fitting. Categorical/discrete
+  groups remain supported, and the default joint descriptive fit still permits
+  continuous numeric groups. Training-only adaptive grouping is deferred. The
+  API accepts explicit row memberships; callers must construct any learned
+  grouping thresholds from training data only.
+- Cached roster order now includes quantile grouping and hidden-group state.
+  A shared model-signature check also prevents an old fitted result from being
+  redrawn or used for navigation, findings or exports under new filters,
+  training groups or split settings, including the interval before the next
+  scheduled render. Empty/error views invalidate the fit and clear/disable
+  A/B selectors; changing their retained state cannot dereference a missing fit.
+- Population result and probe caches use the complete request identity instead
+  of a 32-bit hash. A regression reproduces two distinct odd/even requests that
+  collided under the old hash and verifies they remain separate.
+
+Node regressions reproduce the held-out quantile membership shift, stale
+redraw/export/click paths, missing grouping inputs and hash collision. The
+independent worker re-reviewed the focused patch and found no remaining
+actionable correctness issues. Browser smoke checks confirmed fresh rendering
+and loading-bar navigation still work and failed fits disable A/B safely.
+No empirical or production-scale validation is claimed.
