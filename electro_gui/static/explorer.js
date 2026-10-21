@@ -327,7 +327,7 @@
     if (S.session !== sid) S.pin = null;   // trial IDs belong to one session
     S.session = sid;
     D.summary = null; D.tables.clear(); D.rasters.clear(); D.events.clear(); D.model = null;
-    D.popspans.clear(); D.stab = null; D.fits.clear(); D.fitErrors.clear(); D.heatCache.clear(); D.popFit = null; D.popLayout = null; stopPlay();
+    D.popspans.clear(); D.stab = null; D.fits.clear(); D.fitErrors.clear(); D.heatCache.clear(); D.popFit = null; D.popLayout = null; D.navOrder = null; stopPlay();
     D.probes.clear(); D.probeErrors.clear(); D.probeShown = null;
     D.behavior = null; D.behaviorError = null; D.btC = null; D.btLayout = null; D.trains.clear(); D.trainErrors.clear();
     $('sessionSelect').value = sid;
