@@ -134,3 +134,16 @@ keep the current session and unit, and Population starts with an empty roster.
 Area/quality filters, replace/add selection, selected-only inspection, grouping
 disclosures, collapsible settings and a sticky Compute/support bar bound long
 forms at desktop and narrow widths.
+
+## Explorer training subsets
+
+`POST /api/explorer/popfit` and `/popprobe` include `fit_group_keys`,
+`fit_split` and `fit_trial_ids` in the fit cache identity. `_fit_inputs`
+resolves training and display memberships separately, checking empty groups
+and overlap of padded spike windows for trial splits. All fitting helpers
+receive only training means/events; display means and probe points use the
+training affine operator. The response carries `training`, `normalization`
+and display `row_ids`/`sample` per group. The client filters its display model
+to those rows for counts, medians, clouds, findings and exports. The default
+all-group fit retains the shared world-axis numerical contract. Classic
+routes, inference, export/annotation jobs and executors remain unchanged.

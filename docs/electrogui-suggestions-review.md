@@ -18,8 +18,8 @@ service, Tailscale setting, authentication setting or runtime data is changed.
    roster-ID fallback when the fit is missing/stale and skips missing units.
 2. **Defer classic retirement and the inference port.** `server.py` imports
    exports, annotations and preview; its job worker imports analysis/population.
-   `explorer.py`, `tdr.py`, findings and configuration handling still depend on
-   conditions. `/classic/` and `/api/jobs` have current callers and tests.
+   `explorer.py` and `tdr.py` still import `conditions.missing`. `/classic/`
+   and `/api/jobs` have current callers and tests.
    `analysis._infer` averages events within trial, shares sign flips across a
    block for paired tests, and permutes disjoint block means for block tests.
    It has exact thresholds (16 sign-flip blocks / 50,000 block allocations),
@@ -61,3 +61,81 @@ Results and exact launch instructions are recorded below after implementation.
 - With 2–4 visible groups choose A and a subtracting B; verify sign and symmetric
   scale, reverse A/B, and return to an ordinary heatmap.
 - Exercise classic inference, annotations, exports and queued loading unchanged.
+
+## Implemented outcome
+
+- Double-click heatmap rows or loading bars to open their raster; shared raster
+  settings survive. The unit picker has an explicit population-roster stepping
+  checkbox. Picker, buttons and keyboard share one filtered list; missing or
+  stale fits fall back safely. Closing a popover restores keyboard focus.
+- Training group selection, exploratory odd/even trial-ID splits, and explicit
+  trial-ID subsets via the API. All four methods use training-only normalization,
+  constant-unit selection and fitted operators. TDR uses training-only factor
+  design, denoising and peak selection. Overlapping padded spike windows and
+  empty or unidentifiable subsets are rejected. Complementary display rows feed
+  counts, clouds, markers, findings and exports. Training variance is labeled.
+- Any A-minus-B pair among 2–4 visible groups, normalized by common training
+  scales with symmetric numeric color limits and exported pair provenance.
+- Classic and inference migration remains deferred; no modules or routes were
+  removed. No pipeline stage or shared scientific dependency was changed.
+
+## Verification
+
+`python -m unittest discover -s tests -t . -v` passed **142 tests** using the
+`imitation-phys` Python environment. This includes the existing classic
+inference, annotation/export retention, server/loading and world-axis contract
+regressions, five new training numerical tests and a Node interaction suite.
+New numerical checks cover all PCA/ICA/FA/TDR methods, both centering/scaling
+choices, reference fits without projected data, altered held-out responses,
+constant units visible only in projections, exact probe centroids, whole-trial
+membership, cache identities, rejected TDR designs and padded-window overlap.
+Node checks cover signed differences, pair reversal, shared scale validation,
+empty/missing/filtered roster units, stale order fallback, heatmap/loading
+navigation, state preservation, picker order, buttons and keyboard handlers.
+
+Safari was exercised against synthetic data on **127.0.0.1:18876** with all
+runtime folders isolated in `/tmp`. Verified joint fit, odd/even projection
+labels/counts (6 training events / 3 trials; 7 displayed / 4 trials; zero shared
+trial IDs), signed difference with limits −6.17/+6.17, matching heatmap/loading
+row navigation to unit 4, roster picker order and keyboard stepping after
+closing the picker. A selected-group fit also showed explicit `[fit]` /
+`[projected group]` labels and six shared trial IDs. No recordings or
+credentials were uploaded. The temporary server was stopped after testing.
+
+## Isolated user test launch
+
+Use the existing `imitation-phys` environment; no install or production restart
+is needed. These commands are for the review worktree and synthetic data only:
+
+```bash
+cd /Users/rc/Documents/Codex/2026-10-20/task/electrogui-review
+export MPLCONFIGDIR=/tmp/electrogui-review-mpl
+PY=/Users/rc/miniforge3/envs/imitation-phys/bin/python
+"$PY" -c 'from imitation_phys.synthetic_session import write_synthetic_session_file; print(write_synthetic_session_file("/tmp/electrogui-review-demo"))'
+"$PY" -m electro_gui --data-root /tmp/electrogui-review-demo \
+  --cache-dir /tmp/electrogui-review-cache \
+  --findings-dir /tmp/electrogui-review-findings \
+  --config-dir /tmp/electrogui-review-no-config \
+  --host 127.0.0.1 --port 18876 --no-browser
+```
+
+Open `http://127.0.0.1:18876/`; Ctrl-C stops it. If the port is occupied, use
+`--port 0` and read the printed localhost URL. The default synthetic fixture
+has some factor/split combinations with insufficient variation: an explicit
+TDR error there is expected. The numerical suite uses a richer synthetic
+fixture for positive TDR projection checks. For existing authorized recordings,
+pass an exact assembled session with `--session-file` and retain the isolated
+cache/findings/config flags. No empirical dataset was used in this review.
+
+## Limits and dependencies
+
+Uses the existing analysis_imitation `imitation_phys` dependency (tested at
+`90498a71585ab30c23a7b1a9ea1ac6a3b54a7a9e`), NumPy and sklearn. No new package
+is required. Training-group extrapolation can share trials; odd/even data can
+remain dependent. Roster/filter choices and interactive browsing are not nested
+cross-validation. Difference heatmaps and projections carry no inference or
+significance claim. Server fit computations retain the existing synchronous
+explorer endpoint/store lock and bounded cache behavior; no responsiveness or
+production-scale performance claim is made from this small synthetic fixture.
+A future classic migration must separately establish endpoint and export parity,
+loading behavior and the full exchangeability/exact/Monte Carlo contract.

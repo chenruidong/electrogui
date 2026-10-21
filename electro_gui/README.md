@@ -267,7 +267,7 @@ Neurons tab on phones) and a model block at the top of *Model & display*.
 - **Groups and fit.**  The groups are exactly the raster view's (filters ×
   colour × line style; panels do not apply).  The server computes every
   neuron's group-mean rates on the explorer's grid (per-event or per-trial
-  weighting as chosen) and fits one PCA, ICA or factor-analysis basis to all
+  weighting as chosen) and, by default, fits one PCA, ICA or factor-analysis basis to all
   groups' condition-time rows jointly — the classic workspace's sklearn fit
   (`imitation_phys.explorer_core.fit_basis`), with the same constant-neuron and rank checks.
   Every event is re-checked on the server against the common-trial eligibility
@@ -282,7 +282,7 @@ Neurons tab on phones) and a model block at the top of *Model & display*.
   drag to rotate; ○ start, ● t = 0, the count window thickened, ◆ marker
   medians), the component time courses in the PSTH's style (count window,
   t = 0, reference lines and marker medians), a neuron × time heatmap for one
-  group — z-scored per neuron across all groups, or rate / neuron peak — with
+  group — z-scored per neuron with the training means/SD, or rate / training neuron peak — with
   an area strip, sorted by a component's loading, peak time, mean rate, peak
   channel, area or unit ID, the chosen component's loadings as bars aligned to
   the heatmap rows, variance explained per component (single-component R²
@@ -316,9 +316,63 @@ Neurons tab on phones) and a model block at the top of *Model & display*.
   courses), loadings CSV (unit, peak channel, area, quality) and a settings &
   fit JSON (roster, groups, method, variance, source SHA256).
 
-The fit is descriptive and in-sample: no held-out prediction, no
-cross-session alignment, no significance test, and no claim that a
-component is a latent cognitive variable.
+The default fit is descriptive and in-sample. Training subsets add exploratory
+projections; they provide no significance test, cross-session alignment or claim
+that a component is a latent cognitive variable.
+
+### Training subsets, projections and differences
+
+**Fit groups** in *Model & display* selects which groups train PCA, ICA, FA or
+TDR. Every group is still displayed, marked `[fit]` or `[projected group]`.
+Hiding a legend entry only changes the display. A projected group can share
+trials with training groups; the support line reports that overlap. Filters
+and roster selection remain user choices and are not cross-validated.
+
+**Training trials** optionally fits odd trial IDs and displays even IDs, or
+vice versa. These are the actual session trial IDs, not event-row positions.
+All events from a trial stay together. The displayed means, cloud, legend,
+markers, support counts and exports use only complementary trials. Training
+and display spike windows, including smoothing padding, must not overlap;
+otherwise narrow the window or choose another subset. Empty training/display
+groups, inadequate rank and unidentifiable TDR factors produce an explicit
+error. Odd/even splits can retain dependence through autocorrelation and
+block structure; browsing fit settings using held-out plots is exploratory,
+not an independent assessment of generalization. R² and variance percentages
+always describe **training** condition means.
+
+Center, scale, constant-unit selection, estimator, component signs/order and
+TDR design coding, denoising and peak-time selection use training data only.
+Projection uses the exact affine transform
+`((rates - training_center) / training_scale) @ operator + offset`.
+The operator/offset, active/dropped units, training and display membership and
+counts are included in the fit JSON. Changing the training selection changes
+the fit/probe cache key. The API additionally accepts explicit `fit_trial_ids`
+(nonempty distinct eligible integers, incompatible with `fit_split`), displaying
+their complement; `fit_group_keys` selects nonempty distinct group keys and
+`fit_split` accepts `all`, `odd` or `even`. Omitting these preserves the joint fit.
+
+For **2–4 visible groups**, the heatmap toolbar's **A** and **Subtract B**
+selectors display any ordered A minus B pair. Subtraction uses raw group means
+from the same response, with identical unit/time axes, before dividing by the
+shared training SD or peak. The diverging blue/neutral/red scale is symmetric
+about zero, with its numeric limits shown: red is A greater than B. Reversing
+the pair reverses the sign. It is a descriptive difference, with no p-value.
+Choose **None** to restore the ordinary heatmap. Figure exports and provenance
+record the selected pair, scale and range.
+
+Double-click a heatmap neuron row or its aligned loading bar to open that
+unit's raster. Alignment, filters, grouping, count/display windows and other
+shared raster controls remain intact; the population fit split stays a
+population setting (the raster shows its original selected trials). In the unit
+picker, **Step through population roster** makes its list, previous/next
+buttons and raster left/right keys follow the last displayed population sort
+(loadings, peak time, etc.). Missing units are skipped; units absent from the
+fit follow in roster ID order. After a relevant setting changes, or after a
+reload without a displayed fit, stepping falls back to roster ID order.
+Quality/area filters continue to apply. A directly clicked unit outside those
+filters opens with a notice, without changing the filters. Closing the picker
+returns keyboard focus to its button. Search text narrows the open picker;
+the stepping scope remains the quality/area-filtered roster or session list.
 
 ### What the numbers mean
 
