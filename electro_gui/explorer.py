@@ -307,7 +307,7 @@ def stability_masks(loaded: Any) -> dict:
             "bit_order": "trial i (index into trials) is bit (i & 7) of byte (i >> 3)"}
 
 
-_FIT_FIELDS = ("unit_ids", "alignment", "policy", "method", "scaling", "weight", "components", "pre", "post", "bin", "sigma", "groups", "factors", "tdr_window", "world_coding")
+_FIT_FIELDS = ("unit_ids", "alignment", "policy", "method", "scaling", "weight", "components", "pre", "post", "bin", "sigma", "groups", "factors", "tdr_window", "world_coding", "fit_group_keys", "fit_split", "fit_trial_ids")
 TDR_DEFAULT_FACTORS = ("world", "action", "joystick_direction")
 
 
@@ -382,16 +382,60 @@ def _fit_inputs(loaded: Any, request: Mapping[str, Any]) -> dict:
     flat = [row for picked in members for row in picked]
     if len(flat) * (n + 2 * radius) > 20_000_000:
         raise ValueError("Event x time matrix is too large; narrow the selection or widen the bins.")
+    keys = [g.get("key", str(i)) for i, g in enumerate(groups)]
+    if any(not isinstance(k, str) for k in keys) or len(set(keys)) != len(keys):
+        raise ValueError("Group keys must be distinct strings.")
+    fit_keys = request.get("fit_group_keys")
+    if fit_keys is None:
+        fit_keys = keys
+    if (not isinstance(fit_keys, list) or not fit_keys or any(not isinstance(k, str) or k not in keys for k in fit_keys)
+            or len(set(fit_keys)) != len(fit_keys)):
+        raise ValueError("fit_group_keys must select existing distinct group keys.")
+    split = request.get("fit_split", "all")
+    if split not in ("all", "odd", "even"):
+        raise ValueError("fit_split must be all, odd or even (trial IDs).")
+    trial_ids = request.get("fit_trial_ids")
+    selected_trials = {int(r["trial"]) for r in flat}
+    if trial_ids is not None:
+        if (split != "all" or not isinstance(trial_ids, list) or not trial_ids
+                or any(isinstance(t, bool) or not isinstance(t, int) or t not in selected_trials for t in trial_ids)
+                or len(set(trial_ids)) != len(trial_ids)):
+            raise ValueError("fit_trial_ids must select distinct eligible trial IDs and cannot be combined with fit_split.")
+        train_trials = set(trial_ids)
+    else:
+        train_trials = {t for t in selected_trials if split == "all" or t % 2 == (1 if split == "odd" else 0)}
+    split_trials = split != "all" or trial_ids is not None
+    train_members = [[r for r in picked if int(r["trial"]) in train_trials]
+                     for k, picked in zip(keys, members) if k in fit_keys]
+    if any(not picked for picked in train_members):
+        raise ValueError("A selected training group has no training events; widen the selection or change the split.")
+    if split_trials:
+        members = [[r for r in picked if int(r["trial"]) not in train_trials] for picked in members]
+        if any(not picked for picked in members):
+            raise ValueError("A display group has no held-out events; widen the selection or change the split.")
+        flat = [r for picked in members for r in picked]
+        # Whole trial IDs alone do not prevent the same spikes entering both sets:
+        # long event windows can cross trial boundaries. Include the smoothing pad.
+        train_times = np.sort([float(r["t"]) for picked in train_members for r in picked])
+        support_width = (n + 2 * radius) * bin_s
+        for row in flat:
+            t = float(row["t"])
+            j = int(np.searchsorted(train_times, t))
+            if any(abs(t - train_times[k]) < support_width - 1e-9 for k in (j - 1, j) if 0 <= k < len(train_times)):
+                raise ValueError("Training and held-out spike windows overlap (including smoothing); narrow the window or change the trial subset.")
     key = json.dumps({k: request.get(k) for k in _FIT_FIELDS}, sort_keys=True, default=str)
     return {"ids": ids, "alignment": alignment, "policy": policy, "method": method, "scaling": scaling, "weight": weight,
             "components": components, "factors": factors, "world_coding": world_coding, "tdr_window": tdr_window, "pre": pre, "post": post, "bin": bin_s, "sigma": sigma, "groups": groups,
-            "members": members, "flat": flat, "eligible": eligible, "provenance": provenance,
+            "members": members, "flat": flat, "train_members": train_members, "fit_keys": fit_keys, "split_trials": split_trials,
+            "eligible": eligible, "provenance": provenance,
             "n": n, "radius": radius, "kernel": kernel, "times": times, "key": key}
 
 
 def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
     """Condition means and one jointly fitted basis for explorer-defined groups.
 
+    All normalization, active-unit selection and fitting use only the requested
+    training groups/trials. Split mode displays complementary trials.
     The browser defines the groups (filters x colour x line style) and sends their
     row IDs; every row is re-checked here against the common-trial eligibility
     rule for this roster and window, so the fit never sees an ineligible event.
@@ -404,25 +448,31 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
     pre, post, bin_s, sigma = inp["pre"], inp["post"], inp["bin"], inp["sigma"]
     n, radius, kernel, times = inp["n"], inp["radius"], inp["kernel"], inp["times"]
     groups, eligible, provenance, alignment, policy = inp["groups"], inp["eligible"], inp["provenance"], inp["alignment"], inp["policy"]
-    anchors = np.array([float(r["t"]) for r in flat])
-    weights = np.zeros((len(members), len(flat)))
-    offset = 0
-    for g, picked in enumerate(members):
-        if weight == "event":
-            weights[g, offset:offset + len(picked)] = 1.0 / len(picked)
-        else:
+    train_members = inp["train_members"]
+    train_flat = [r for picked in train_members for r in picked]
+    anchors = np.array([float(r["t"]) for r in train_flat])
+    def calculate_means(picks):
+        rows = [r for picked in picks for r in picked]
+        a = np.array([float(r["t"]) for r in rows])
+        weights = np.zeros((len(picks), len(rows)))
+        offset = 0
+        for g, picked in enumerate(picks):
             per_trial = Counter(r["trial"] for r in picked)
             for j, r in enumerate(picked):
-                weights[g, offset + j] = 1.0 / (len(per_trial) * per_trial[r["trial"]])
-        offset += len(picked)
-    means = np.empty((len(members), n, len(ids)))
-    for u, uid in enumerate(ids):
-        means[:, :, u] = group_means(np.sort(np.asarray(loaded.spikes(uid), dtype=float)), anchors, weights, pre, bin_s, n, radius, kernel)
+                weights[g, offset + j] = (1.0 / len(picked) if weight == "event" else
+                                         1.0 / (len(per_trial) * per_trial[r["trial"]]))
+            offset += len(picked)
+        out = np.empty((len(picks), n, len(ids)))
+        for u, uid in enumerate(ids):
+            out[:, :, u] = group_means(np.sort(np.asarray(loaded.spikes(uid), dtype=float)), a, weights,
+                                       pre, bin_s, n, radius, kernel)
+        return out
+    means = calculate_means(train_members)
     tdr = None
     if method == "tdr":
         from .tdr import design, fit_axes
         registry = {f["key"]: f for f in getattr(loaded, "fields", [])}
-        X, used, described = design(flat, inp["factors"], registry, inp["world_coding"])
+        X, used, described = design(train_flat, inp["factors"], registry, inp["world_coding"])
         if used.sum() * n * len(ids) > 60_000_000:
             raise ValueError("TDR event x time x neuron array is too large; narrow the selection, the TDR window or the roster.")
         lo, hi = inp["tdr_window"]
@@ -481,16 +531,36 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
                         "operator": operator, "offset": offset_b}
     while len(fits) > 8:
         fits.popitem(last=False)
-    traj = coords.reshape(len(members), n, components)
+    # Apply the exact training affine transform to display means. Never refit,
+    # re-center, re-scale or choose active units using projected observations.
+    display_means = means if train_members == members else calculate_means(members)
+    keep_mask = fit["varying"]
+    display_x = (display_means[:, :, keep_mask] - fit["center"][keep_mask]) / fit["scale"]
+    traj = display_x @ operator + offset_b
+    train_trials = {int(r["trial"]) for r in train_flat}
+    display_trials = {int(r["trial"]) for r in flat}
+    training = {"group_keys": list(inp["fit_keys"]), "events": len(train_flat), "trials": len(train_trials),
+                "trial_ids": sorted(train_trials), "row_ids": [int(r["row_id"]) for r in train_flat],
+                "display_events": len(flat), "display_trials": len(display_trials),
+                "display_trial_ids": sorted(display_trials), "shared_trials": len(train_trials & display_trials),
+                "split": request.get("fit_split", "all"), "held_out_trials": inp["split_trials"],
+                "groups": [{"key": k, "events": len(p), "trials": len({r["trial"] for r in p})}
+                           for k, p in zip([g.get("key", str(i)) for i, g in enumerate(groups) if g.get("key", str(i)) in inp["fit_keys"]], train_members)]}
+    train_raw = means.reshape(-1, len(ids))[:, keep_mask]
+    normalization = {"center": fit["center"][keep_mask].tolist(), "scale": fit["scale"].tolist(),
+                     "operator": np.asarray(operator).tolist(), "offset": np.asarray(offset_b).tolist(),
+                     "heat_sd": train_raw.std(axis=0).tolist(), "heat_peak": train_raw.max(axis=0).tolist()}
+
     active = fit["active_ids"]
     keep = [ids.index(u) for u in active]
     out_groups = []
     for g, picked in enumerate(members):
         spec = groups[g]
         out_groups.append({"key": spec.get("key", str(g)), "label": spec.get("label", str(g)), "events": len(picked),
-                           "trials": len({r["trial"] for r in picked}),
+                           "trials": len({r["trial"] for r in picked}), "row_ids": [int(r["row_id"]) for r in picked],
                            "coords": np.round(traj[g], 6).tolist(),
-                           "means": np.round(means[g][:, keep], 4).tolist()})
+                           "means": np.round(display_means[g][:, keep], 4).tolist(),
+                           "sample": "held-out trials" if inp["split_trials"] else ("fit" if spec.get("key", str(g)) in inp["fit_keys"] else "projected group")})
     evr = None if tdr else fit["operators"].get("explained_variance_ratio")
     return {"kind": "population_fit", "session_id": loaded.session_id, "alignment": alignment, "policy": policy,
             "unit_ids": ids, "active_unit_ids": active, "dropped_constant_units": fit["dropped_ids"],
@@ -498,11 +568,13 @@ def population_fit(loaded: Any, request: Mapping[str, Any]) -> dict:
             "loadings": np.round(loadings, 6).tolist(), "component_r2": [round(v, 6) for v in single],
             "cumulative_r2": [round(v, 6) for v in cumulative],
             "explained_variance_ratio": evr, "reconstruction_r2": fit["reconstruction_r2"], "rank": fit["rank"],
-            "fit_rows": int(x.shape[0]), "converged": fit["converged"], "warnings": fit["warnings"],
+            "fit_rows": int(x.shape[0]), "training": training, "normalization": normalization, "converged": fit["converged"], "warnings": fit["warnings"],
             "method": method, "scaling": scaling, "weight": weight, "window": [pre, post],
             **({"tdr": tdr, "axis_names": [f["label"] for f in tdr["factors"]]} if tdr else {}), "bin": bin_s, "sigma": sigma,
             "common_trials": len(eligible), "guard_s": GUARD_S,
-            "scope": "Descriptive in-sample fit to all groups' condition means jointly; no held-out prediction or significance test.",
+            "scope": ("Exploratory projection of complementary held-out trial IDs; odd/even trials may be autocorrelated. "
+                      if inp["split_trials"] else "Descriptive fit to selected groups; projected groups may share training trials. ")
+                     + "Normalization, active units and basis use training data only. R² describes training means; no significance test.",
             "weighting": ("equal trials within group, events averaged within trial" if weight == "trial" else "equal events within group")
                          + "; equal condition-time rows in the fit",
             "provenance": {"source": loaded.metadata()["source"], "eligibility": {k: v for k, v in (provenance or {}).items() if k != "source"}}}
