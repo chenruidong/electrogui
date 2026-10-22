@@ -51,3 +51,12 @@ def presentation_dir() -> Path | None:
     """The presentation decks' folder in analysis_imitation's Dropbox output; None without Dropbox."""
     root = dropbox_root()
     return root / "projects" / "analysis_imitation" / "data" / "output" / "presentation" if root else None
+
+
+def unit_notes_dir() -> Path | None:
+    """Result Viewer's read-only notebooks; honor its data-folder override."""
+    configured = os.environ.get("RESULT_VIEWER_DATA")
+    if configured:
+        return Path(configured).expanduser() / "notes"
+    root = dropbox_root()
+    return root / "projects" / "result-viewer" / "data" / "notes" if root else None

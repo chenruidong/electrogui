@@ -12,7 +12,7 @@ from electro_gui import cli, paths
 
 def _env(**values):
     """os.environ without the three variables the resolver reads, plus ``values``."""
-    env = {k: v for k, v in os.environ.items() if k not in ("DROPBOX_ROOT", paths.OUTPUT_ENV, "HOME")}
+    env = {k: v for k, v in os.environ.items() if k not in ("DROPBOX_ROOT", paths.OUTPUT_ENV, "RESULT_VIEWER_DATA", "HOME")}
     return mock.patch.dict(os.environ, {**env, **values}, clear=True)
 
 
@@ -44,6 +44,15 @@ class PathsTests(unittest.TestCase):
             self.assertIsNone(paths.dropbox_root())
             self.assertIsNone(paths.output_root())
             self.assertIsNone(paths.presentation_dir())
+            self.assertIsNone(paths.unit_notes_dir())
+
+    def test_result_viewer_notebooks_follow_its_override_or_dropbox(self):
+        with _env(HOME=str(self.root), DROPBOX_ROOT="/d"):
+            self.assertEqual(paths.unit_notes_dir(), Path("/d/projects/result-viewer/data/notes"))
+        with _env(HOME=str(self.root), DROPBOX_ROOT="/d", RESULT_VIEWER_DATA="~/viewer-data"):
+            self.assertEqual(paths.unit_notes_dir(), self.root / "viewer-data" / "notes")
+        args = cli.add_arguments(argparse.ArgumentParser()).parse_args(["--unit-notes-dir", "/other/notes"])
+        self.assertEqual(args.unit_notes_dir, "/other/notes")
 
     def test_cli_defaults_are_the_dropbox_folders(self):
         args = cli.add_arguments(argparse.ArgumentParser()).parse_args([])

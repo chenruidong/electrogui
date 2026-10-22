@@ -12,7 +12,7 @@ import time
 import webbrowser
 
 from . import __version__
-from .paths import OUTPUT_ENV, output_root, presentation_dir
+from .paths import OUTPUT_ENV, output_root, presentation_dir, unit_notes_dir
 
 DEFAULT_ROOTS = ("/Volumes/T7/engaging-results", "/Volumes/Transfer/engaging_results")
 # Set by _restart for the process that replaces this one: {"port": ..., "token": ...}.
@@ -49,6 +49,8 @@ def add_arguments(parser):
     parser.add_argument("--apps-dashboard-url", metavar="URL", action="append",
                         help="Apps dashboard asked where result-viewer runs; repeat for several, '' turns the lookup off "
                              "(default: http://127.0.0.1:8790, then http://127.0.0.1:8797).")
+    parser.add_argument("--unit-notes-dir", help="Read-only Result Viewer notebooks folder "
+                        "(default: $RESULT_VIEWER_DATA/notes or <Dropbox>/projects/result-viewer/data/notes).")
     parser.add_argument("--no-browser", action="store_true", help="Print the URL without opening a browser.")
     return parser
 
@@ -83,7 +85,9 @@ def run(args):
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=cache_dir)
     finder = ResultViewerFinder(args.result_viewer_url,
                                 args.apps_dashboard_url if args.apps_dashboard_url is not None else DASHBOARD_URLS)
-    application = Application(store, findings_dir=findings_dir, config_dirs=config_dirs, result_viewer=finder)
+    notes = Path(args.unit_notes_dir).expanduser() if args.unit_notes_dir is not None else unit_notes_dir()
+    application = Application(store, findings_dir=findings_dir, config_dirs=config_dirs,
+                              result_viewer=finder, unit_notes_dir=notes)
     host = "0.0.0.0" if args.lan else args.host
     token = args.token  # optional on loopback: tailscale serve lets this node's owner in without one (server.Tailnet)
     if restart and token is None:

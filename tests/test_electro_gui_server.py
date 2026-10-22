@@ -58,6 +58,24 @@ class ServerTests(unittest.TestCase):
             time.sleep(.025)
         self.fail("Synthetic job did not complete")
 
+    def test_result_viewer_notes_are_session_bound_read_only_and_authenticated(self):
+        notes = Path(self.temp.name) / "viewer-notes"
+        notes.mkdir()
+        self.app.unit_notes_dir = notes
+        path = notes / f"{self.sid}.json"
+        path.write_text(json.dumps({"schema": "result-viewer.notebook/1", "session_id": self.sid,
+                                   "units": {"1": {"unit_id": 1, "note": "reward dip", "flag": True}}}))
+        before = path.read_bytes()
+        route = f"/api/explorer/unit-notes?session={self.sid}"
+        status, raw = self.get(route)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(json.loads(raw)["units"]["1"]["note"], "reward dip")
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.get(route, headers={"Host": "attacker.test"})[0], 403)
+        self.assertEqual(self.get("/api/explorer/unit-notes?session=missing")[0], 404)
+        self.assertEqual(self.get(route, "POST", {"note": "overwrite"})[0], 404)
+        self.assertEqual(path.read_bytes(), before)
+
     def test_dynamic_load_computation_and_bound_export(self):
         status, data = self.get("/api/catalog")
         self.assertEqual(status, 200)
