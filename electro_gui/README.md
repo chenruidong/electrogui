@@ -419,6 +419,21 @@ drawn); PSTHs, bars, counts and exports always use every row.
   one redraws it and says whether any of them has changed.  See **Findings**.
 - **Links.**  The address bar always holds the complete view (`#s=…`); *Copy
   link* shares it.  The last view is also restored from browser storage.
+- **Result viewer** (top right, Rasters only; ⋯ → *Open in Result Viewer* on a
+  phone) opens the unit in view in result-viewer (`~/code/result-viewer`), as
+  `<viewer>/#s=<session>&u=<unit>` in a tab named `result_viewer` that later
+  clicks reuse.  The server asks this Mac's apps dashboard (`127.0.0.1:8790`,
+  then `:8797`, where electro_gui has 8790) for result-viewers: the one on the
+  Mac serving electro_gui is used when it answers and lists the session (each
+  Mac reads its own results drive), else the other Mac's, and the button's
+  tooltip and a note say which and why.  A page opened at localhost gets this
+  Mac's loopback address, any other page a `tailscale serve` address (the only
+  kind the other Mac's has).  The lookup is made when a session opens, so the
+  click opens the tab at once.  With no dashboard, `http://127.0.0.1:8766`
+  (result-viewer's default) is tried.  `--result-viewer-url URL` names one
+  outright; `--apps-dashboard-url URL` (repeatable, `''` = none) changes where
+  it looks.  result-viewer shows its own first unit when it has no raster for
+  this one.
 - **Export**: figure SVG (vector, with title, legend and the settings plus
   source SHA256 in `<metadata>`), PNG (2×), PSTH CSV (mean/SEM/n per group and
   bin), rows CSV (one line per shown event: group, window count and rate,
@@ -546,6 +561,9 @@ the session and unit.
 
 `GET /api/health` (version, boot id, start time, PID and the Python files
 changed since), `POST /api/restart` (body `{}`; see *On a tablet or phone*),
+`GET /api/result_viewer?session=` (`{url, host, here, tried}`, the result-viewer
+to open that session in, or `url: null` and an `error`; see *Views, links and
+export*),
 `GET /api/explorer/session?session=` (units with peak channels, alignment
 counts, event names), `/api/explorer/table?session=&alignment=` (columnar joined
 fields; `*_t` times become seconds from the row's event),

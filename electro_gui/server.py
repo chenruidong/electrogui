@@ -30,14 +30,16 @@ from .annotations import annotate_result
 from .configs import discover_configs
 from .findings import FindingStore
 from .preview import preview
+from .result_viewer import ResultViewerFinder
 from . import explorer
 
 
 class Application:
-    def __init__(self, store: SessionStore, findings_dir: str | Path | None = None, config_dirs=()):
+    def __init__(self, store: SessionStore, findings_dir: str | Path | None = None, config_dirs=(), result_viewer=None):
         self.store = store
         self.findings = FindingStore(findings_dir) if findings_dir is not None else None
         self.config_dirs = [Path(d).expanduser().absolute() for d in config_dirs or ()]
+        self.result_viewer = result_viewer if result_viewer is not None else ResultViewerFinder()
         self.jobs = OrderedDict()
         self.preview_jobs = OrderedDict()
         self.lock = threading.RLock()
@@ -277,6 +279,12 @@ class Application:
     def configs(self):
         """JSON config files under ``--config-dir`` (see ``configs.py``); re-scanned on every call."""
         return discover_configs(self.config_dirs)
+
+    def find_result_viewer(self, session, local_page, own_port=None):
+        """Where the page opens ``session`` in result-viewer (``result_viewer.py``)."""
+        if not isinstance(session, str) or not session:
+            raise ValueError("Missing query parameter 'session'.")
+        return self.result_viewer.find(session, local_page=local_page, own_port=own_port)
 
     def snapshot(self, job_id):
         with self.lock:
@@ -543,6 +551,10 @@ def make_server(application, host="127.0.0.1", port=8765, token=None, tailnet=No
                         raise KeyError("Unknown findings endpoint")
                 elif url.path == "/api/configs":
                     self._send(application.configs())
+                elif url.path == "/api/result_viewer":
+                    # A page at localhost can open this Mac's loopback result-viewer; any other needs a tailnet address.
+                    self._send(application.find_result_viewer(parse_qs(url.query).get("session", [None])[0],
+                                                              self._page_is_at_localhost(), self.server.server_port))
                 elif url.path.startswith("/api/jobs/"):
                     parts = url.path.strip("/").split("/")
                     if len(parts) not in (3, 4):

@@ -43,6 +43,12 @@ def add_arguments(parser):
                         help="Directory of JSON config files for the Views menu (a deck's electro_gui_configs/, or a folder "
                              "holding decks); repeat for several. Relative to the current directory; a missing one is empty "
                              "(default: <Dropbox>/projects/analysis_imitation/data/output/presentation).")
+    parser.add_argument("--result-viewer-url", metavar="URL",
+                        help="result-viewer that Open in Result Viewer uses (default: found through the apps dashboard, "
+                             "this Mac's first, then another Mac's).")
+    parser.add_argument("--apps-dashboard-url", metavar="URL", action="append",
+                        help="Apps dashboard asked where result-viewer runs; repeat for several, '' turns the lookup off "
+                             "(default: http://127.0.0.1:8790, then http://127.0.0.1:8797).")
     parser.add_argument("--no-browser", action="store_true", help="Print the URL without opening a browser.")
     return parser
 
@@ -71,10 +77,13 @@ def run(args):
     cache_dir, findings_dir, config_dirs = _folders(args)
     os.environ.setdefault("MPLCONFIGDIR", str(cache_dir / "matplotlib"))
     from imitation_phys.session_store import SessionStore
+    from .result_viewer import DASHBOARD_URLS, ResultViewerFinder
     from .server import Application, Tailnet, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=cache_dir)
-    application = Application(store, findings_dir=findings_dir, config_dirs=config_dirs)
+    finder = ResultViewerFinder(args.result_viewer_url,
+                                args.apps_dashboard_url if args.apps_dashboard_url is not None else DASHBOARD_URLS)
+    application = Application(store, findings_dir=findings_dir, config_dirs=config_dirs, result_viewer=finder)
     host = "0.0.0.0" if args.lan else args.host
     token = args.token  # optional on loopback: tailscale serve lets this node's owner in without one (server.Tailnet)
     if restart and token is None:

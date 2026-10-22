@@ -153,6 +153,7 @@
     probes: new Map(), probeErrors: new Map(), probePending: null, probeShown: null, popReq: null,
     behavior: null, behaviorError: null, btC: null, btLayout: null, btDrag: null,
     trains: new Map(), trainErrors: new Map(),   // unit id -> spike times (s) for the timeline's spike lane
+    rv: null,   // where Open in Result Viewer goes for this session (refreshRV)
   };
 
   function sanitize(raw) {
@@ -326,6 +327,7 @@
     const token = ++D.sessionToken;
     if (S.session !== sid) S.pin = null;   // trial IDs belong to one session
     S.session = sid;
+    refreshRV();
     D.summary = null; D.tables.clear(); D.rasters.clear(); D.events.clear(); D.model = null;
     D.popspans.clear(); D.stab = null; D.fits.clear(); D.fitErrors.clear(); D.heatCache.clear(); D.popFit = null; D.popLayout = null; D.popModelKey = null; D.navOrder = null; stopPlay();
     D.probes.clear(); D.probeErrors.clear(); D.probeShown = null;
@@ -737,6 +739,7 @@
     $('rosterLabel').textContent = S.roster.length ? `${S.roster.length} neurons` : 'no neurons';
     const a = D.summary && D.summary.alignments.find(x => x.key === S.align);
     $('alignLabel').textContent = eventLabel(S.align) + (a ? ` · ${a.n}` : '');
+    renderRV();
   }
 
   function render() {
@@ -1704,10 +1707,64 @@
       say('Restarting the server', `Waiting for electro_gui to come back with the code on disk (${s} s)…`);
     }
   }
+  // ------------------------------------------------------- result viewer
+  // GET /api/result_viewer names the result-viewer that has this session: the one on the Mac serving this
+  // page, else the other Mac's (result_viewer.py).  It is asked when a session opens, so a click opens the
+  // tab at once; a tab opened after waiting on the network is a blocked popup in Safari.
+  function refreshRV() {
+    const sid = S.session;
+    if (!sid) return Promise.resolve(null);
+    return once(`rv|${sid}`, async () => {
+      let rv;
+      try {
+        const r = await fetch(`/api/result_viewer?${query({session: sid})}`, {cache: 'no-store'});
+        const body = await r.json().catch(() => ({}));
+        rv = r.ok ? body : {url: null, error: `electro_gui could not look for a result viewer: ${body.error || `HTTP ${r.status}`}`};
+      } catch (e) { rv = {url: null, error: `electro_gui could not look for a result viewer: ${e.message}`}; }
+      rv = {...rv, session: sid, at: Date.now()};
+      if (sid === S.session) { D.rv = rv; renderRV(); }
+      return rv;
+    });
+  }
+  const currentRV = () => (D.rv && D.rv.session === S.session ? D.rv : null);
+  /** Why the result viewer chosen is not the one on the Mac serving this page. */
+  function rvElsewhere(rv) {
+    const mine = (rv.tried || []).find(t => t.here);
+    if (!mine) return 'this Mac runs none';
+    return `${mine.host}'s ${mine.state === 'lacks' ? 'does not have this session' : 'is not answering'}`;
+  }
+  /** Where a click sends the unit in view: the button's title, or (short) the ⋯ menu item's hint. */
+  function rvTitle(rv, short = false) {
+    if (!rv) return short ? 'the unit in view' : 'Open this unit in Result Viewer';
+    if (!rv.url) return rv.error;
+    return (short ? `unit ${S.unit} on ${rv.host}` : `Open unit ${S.unit} in Result Viewer on ${rv.host}`) +
+      (rv.here ? '' : ` (${rvElsewhere(rv)})`);
+  }
+  function renderRV() {
+    const rv = currentRV();
+    $('rvBtn').classList.toggle('off', !!rv && !rv.url);
+    $('rvBtn').title = rvTitle(rv);
+  }
+  async function openRV() {
+    if (!S.session || S.unit === null) return;
+    let rv = currentRV();
+    if (!rv || !rv.url) rv = await refreshRV();
+    else if (Date.now() - rv.at > 60000) refreshRV();   // for the next click
+    if (!rv || !rv.url) { toast(rv ? rv.error : 'No result viewer found.', true); return; }
+    const url = new URL(rv.url);
+    url.hash = new URLSearchParams({s: S.session, u: String(S.unit)}).toString();
+    // One named tab: result-viewer applies a new #s=&u= in place when the tab already shows it.
+    if (!window.open(url.toString(), 'result_viewer')) { toast('The browser blocked the new tab; click Result viewer again.', true); return; }
+    if (!rv.here) toast(`Opened in Result Viewer on ${rv.host}: ${rvElsewhere(rv)}.`);
+  }
+
   function openMenu() {
     const theme = localStorage.getItem('eg-theme') || 'auto';
     const other = S.mode === 'population' ? ['raster', 'Rasters', 'one unit: raster over PSTH'] : ['population', 'Population', 'many neurons: heatmap, components, trajectories'];
-    const html = popHead('electro_gui') + `<div class="pop-body"><button type="button" class="item" data-menu="mode:${other[0]}"><span class="main"><b>Switch to ${other[1]}</b><small>${other[2]}</small></span></button><button type="button" class="item" data-menu="views"><span class="main"><b>Views & templates</b><small>apply a template or config file, reopen a finding, copy a link</small></span></button>` +
+    const rv = currentRV();
+    const html = popHead('electro_gui') + `<div class="pop-body"><button type="button" class="item" data-menu="mode:${other[0]}"><span class="main"><b>Switch to ${other[1]}</b><small>${other[2]}</small></span></button>` +
+      (S.mode === 'raster' ? `<button type="button" class="item" data-menu="resultviewer"><span class="main"><b>Open in Result Viewer</b><small>${esc(rvTitle(rv, true))}</small></span></button>` : '') +
+      `<button type="button" class="item" data-menu="views"><span class="main"><b>Views & templates</b><small>apply a template or config file, reopen a finding, copy a link</small></span></button>` +
       `<button type="button" class="item" data-menu="savefinding"><span class="main"><b>Save finding…</b><small>this figure, with notes and the numbers it shows</small></span></button>` +
       `<a class="item" href="/findings/"><span class="main"><b>Findings</b><small>every saved finding, with its picture, notes and status</small></span></a>` +
       `<button type="button" class="item" data-menu="export"><span class="main"><b>Export</b><small>SVG, PNG, CSV, settings</small></span></button>` +
@@ -3417,6 +3474,9 @@
     });
     $('cfgFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) openConfigFile(f); });
     $('exportBtn').addEventListener('click', openExport);
+    $('rvBtn').addEventListener('click', openRV);
+    // Back from another tab: a result viewer may have started or stopped meanwhile.
+    addEventListener('focus', () => { if (S.session && (!currentRV() || Date.now() - D.rv.at > 30000)) refreshRV(); });
     $('menuBtn').addEventListener('click', openMenu);
     $('scrim').addEventListener('click', closePop);
     addEventListener('keydown', e => {
@@ -3450,6 +3510,7 @@
         closePop();
         if (t.dataset.menu.startsWith('mode:')) setMode(t.dataset.menu.slice(5));
         else if (t.dataset.menu === 'restart') restartServer();
+        else if (t.dataset.menu === 'resultviewer') openRV();
         else if (t.dataset.menu === 'savefinding') openSaveFinding();
         else (t.dataset.menu === 'views' ? openViews : openExport)();
         return;

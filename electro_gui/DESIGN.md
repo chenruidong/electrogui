@@ -81,6 +81,12 @@ model operators, raw input condition means and exact membership.
 - `GET /api/jobs/<id>/export?format=json|csv|svg|membership|stats`: completed result download.
   CSV is long-form unit PSTH or population coordinates; JSON is the complete
   result including exact membership, statistics, source identity and recipe.
+- `GET /api/result_viewer?session=`: `{session,url,host,here,tried:[{host,url,here,
+  state:'has'|'lacks'|'unknown'|'down'}],error?}` from `result_viewer.ResultViewerFinder`:
+  result-viewers listed by the apps dashboard, this Mac's before its peers', the
+  first that answers and does not lack the session.  `url` is loopback for a page
+  at localhost, else a `tailscale serve` address.  Only links are exchanged;
+  the page opens the viewer itself (its CSP keeps `connect-src 'self'`).
 
 Previews use the same selection engine, without fitting or counting spikes.
 Their records are stored separately so frequent previews cannot evict completed
