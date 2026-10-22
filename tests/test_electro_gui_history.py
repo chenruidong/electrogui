@@ -225,6 +225,27 @@ class ElectroGuiHistoryTests(unittest.TestCase):
         field = {f["key"]: f for f in _registry(trials, rows)}["reward_tokens"]
         self.assertEqual(field["range"], [0, 3])
 
+    def test_strategy_change_is_offered_looking_back_and_looking_forward(self):
+        # sub-Ravel_ses-2026_10_21 trial 169 (PP before a PM trial) showed
+        # "strategy changed: no" because that field looks back.  The explorer
+        # also offers the forward-looking field, timed as a future trial.
+        strategies = ("PP", "PP", "PM")
+        trials = pd.concat([_trials(start_time=10.0 * i, stop_time=10.0 * i + 9) for i in range(3)])
+        trials.index = pd.Index([0, 1, 2], name="trial_index")
+        events = _events([
+            {"event": event, "trial_index": i, "t_ephys_s": 10.0 * i + t, "object_uid": f"prey-{i}", "kind": "+",
+             "info": {"is_bar": False, "ordinal": 1, "image_id": f"img_{s}"}}
+            for i, s in enumerate(strategies) for event, t in (("object_visible_onset", 1.0), ("prey_capture", 2.0))])
+        ordered, rows = _enrich(trials, events, classify=lambda row, include_bars=False: row["prey_visual_ids"][0][4:])
+        loaded = SimpleNamespace(session_id="s", trials=ordered, rows=rows, fields=_registry(trials, rows),
+                                 alignments=["object_outcome"])
+        columns = {c["key"]: c for c in explorer.alignment_table(loaded, "object_outcome")["columns"]}
+        decoded = {key: [None if c < 0 else columns[key]["levels"][c] for c in columns[key]["codes"]]
+                   for key in ("trial_changed_strategy", "next_trial_changes_strategy")}
+        self.assertEqual(decoded["trial_changed_strategy"], [None, False, True])
+        self.assertEqual(decoded["next_trial_changes_strategy"], [False, True, None])
+        self.assertEqual(columns["next_trial_changes_strategy"]["timing"], "future_trial_posthoc")
+
 
 if __name__ == "__main__":
     unittest.main()

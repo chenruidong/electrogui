@@ -178,7 +178,11 @@ with Filter / Group / Markers / Display tabs.
   event), Object details, Trial details — and a value editor: category chips
   with counts (missing is its own chip), or a numeric range over a histogram.
   A filter on a field the current alignment lacks is kept, shown dashed, and
-  ignored.
+  ignored.  In History, *strategy changed* compares a trial's strategy with
+  the trial before it and *strategy changes next trial* with the trial after
+  it, so a PP trial between a PP trial and a PM trial is *no* on the first
+  and *yes* on the second.  Both are missing when either trial of the pair
+  is incomplete or unclassified; `NA` counts as a strategy.
 - **Group & sort.**  *Colour*, *Line style* and *Panels* each take any field;
   their product defines the groups.  Numbers with at most 12 integer values
   group by value, other numbers by quantile bins (2–5).  World, strategy, role,
