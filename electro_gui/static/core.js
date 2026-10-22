@@ -35,7 +35,8 @@
     before_first_error: 'before first error', trial_error_free: 'error-free trial',
     trial_has_predator_touch: 'trial has predator touch', trial_has_prey_miss: 'trial has prey miss',
     trial_changed_strategy: 'strategy changed', previous_trial_intention: 'previous-trial strategy',
-    next_trial_intention: 'next-trial strategy', goal_release_t: 'goal release (s from event)',
+    next_trial_intention: 'next-trial strategy', next_trial_changes_strategy: 'strategy changes next trial',
+    goal_release_t: 'goal release (s from event)',
     next_outcome_t: 'next outcome (s from event)', trial_end_t: 'trial end (s from event)',
     object_outcome_t: 'object outcome (s from event)',
   };
