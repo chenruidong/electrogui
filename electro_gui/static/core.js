@@ -433,6 +433,21 @@
     const {mean, sem} = meanSem(units, 1);
     return {mean: mean[0], sem: sem[0], n: units.length, values: units.map(u => u[0])};
   }
+  /**
+   * Gaussian-weighted mean of each value and its neighbours, sigma in positions (rows); the
+   * kernel stops at 3 sigma and is renormalised where the ends cut it short.  sigma 0 copies.
+   */
+  function smoothRows(values, sigma) {
+    const n = values.length, out = new Float64Array(n);
+    const reach = Math.ceil(3 * sigma), w = new Float64Array(reach + 1);
+    for (let d = 0; d <= reach; d++) w[d] = sigma > 0 ? Math.exp(-0.5 * (d / sigma) ** 2) : 1;
+    for (let j = 0; j < n; j++) {
+      let num = 0, den = 0;
+      for (let q = Math.max(0, j - reach); q <= Math.min(n - 1, j + reach); q++) { const k = w[Math.abs(q - j)]; num += k * values[q]; den += k; }
+      out[j] = num / den;
+    }
+    return out;
+  }
 
   // --------------------------------------------------------------- sorting
   /** Sort keys: 'session' | 'count' | 'marker:<id>' | 'field:<key>'. Missing values last; ties by time. */
@@ -848,7 +863,7 @@
   return {GUARD_S, MISSING, SEP, FIELD_LABELS, LEVEL_ORDER, fieldLabel, formatLevel, fmtNum, humanize, levelKey,
     stimulusColor, prepareBehavior, decodeSpikeTrain, spikeColumns, timeAtPos, posAtTime, behaviorView, viewTrials, yokedTrials, upperBound,
     prepareTable, rawValue, fieldLevels, filterMask, eligibility, quantileEdges, groupRows, indexEvents,
-    markerTimes, median, countIn, lowerBound, psthGrid, rowCurve, psth, psthFromCurves, thin, windowRates, sortRows, encodeState, decodeState,
+    markerTimes, median, countIn, lowerBound, psthGrid, rowCurve, psth, psthFromCurves, thin, windowRates, smoothRows, sortRows, encodeState, decodeState,
     populationUnitList, populationDifference, decodeMask, andMask, andCount, popcount, fullMask, bestSubset, heatColor, project3d, hash,
     stableJSON, stateChanges, compareEvidence, findingMatches};
 });

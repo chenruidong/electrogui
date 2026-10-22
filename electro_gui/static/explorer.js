@@ -114,12 +114,12 @@
     win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem',
     filters: [], color: 'role', style: 'action', panel: null, qbins: 3, hidden: [],
     sort: 'session', dir: 1, grouped: true, markers: [], refs: [], medians: true,
-    tick: 'line', rasterH: 260, rasterFit: true, psthH: 205, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], unitNoted: false, gstyle: {},
+    tick: 'line', rasterH: 260, rasterFit: true, psthH: 205, ylock: null, bars: true, rowRate: true, unitQ: ['sua', 'mua'], unitArea: [], unitNoted: false, gstyle: {},
     unitStep: 'all', fitGroups: null, fitSplit: 'all', heatCompare: null, mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, tdrFactors: ['world', 'action', 'joystick_direction'], tdrWin: null, worldCoding: 'linear', dims: '2', heatNorm: 'z',
     nsort: 'loading:0', axes: [0, 1, 2], heatGroup: null, cloud: false, cloudAlpha: 0.3, cloudZero: true, cloudFit: 'traj',
     bt: true, btN: 16, pin: null, yoke: false, popSplit: 0.5,
   };
-  const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, rasterFit: true, psthH: 205, ylock: null, bars: true, popSplit: 0.5};
+  const DISPLAY_DEFAULTS = {win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem', tick: 'line', rasterH: 260, rasterFit: true, psthH: 205, ylock: null, bars: true, rowRate: true, popSplit: 0.5};
   let S = clone(DEFAULTS);
 
   const TEMPLATES = [
@@ -190,6 +190,7 @@
     s.cloud = s.cloud === true; s.cloudZero = s.cloudZero !== false;
     s.cloudAlpha = Number.isFinite(s.cloudAlpha) ? clamp(s.cloudAlpha, 0.05, 1) : DEFAULTS.cloudAlpha;
     s.bt = s.bt !== false;
+    s.rowRate = s.rowRate !== false;
     s.yoke = s.yoke === true;
     s.unitNoted = s.unitNoted === true;
     s.btN = Number.isInteger(s.btN) ? clamp(s.btN, 3, 5000) : DEFAULTS.btN;
@@ -525,6 +526,7 @@
         const owner = new Map(); gs.forEach(g => g.rows.forEach(i => owner.set(i, g)));
         blocks = [{g: null, rows: all, owner}];
       }
+      blocks.forEach(b => { b.full = b.rows; });
       const total = blocks.reduce((a, b) => a + b.rows.length, 0);
       const cap = Math.max(300, Math.round(rasterH * 4));
       if (total > cap) {
@@ -572,7 +574,7 @@
           }
         });
         const h = b.rows.length * rowH;
-        L.blocks.push({g: b.g, owner: b.owner, rows: b.rows, top: blockTop, rowH, height: h});
+        L.blocks.push({g: b.g, owner: b.owner, rows: b.rows, full: b.full, top: blockTop, rowH, height: h});
         if (b.g) {
           out.push(`<rect x="${f(x0 - 7)}" y="${f(blockTop)}" width="3" height="${f(Math.max(h, 1))}" rx="1.5" fill="${b.g.color}"/>`);
           if (showN && h >= 10) out.push(`<text x="${f(x1 + 5)}" y="${f(blockTop + h / 2 + 3.5)}" font-size="10" fill="${b.g.color}">${b.all || b.rows.length}</text>`);
@@ -718,6 +720,57 @@
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">${out.join('')}</svg>`;
   }
 
+  // Rate by row, beside the raster of panel L: each row's count-window rate, smoothed with a
+  // Gaussian over the same group's rows in raster order and drawn at the row's height, so it
+  // reads across to the raster.  Uses every row, not only the drawn ones.
+  function rowRateSeries(M, L) {
+    const span = M.cw[1] - M.cw[0], series = [];
+    for (const b of L.blocks) {
+      const byGroup = new Map();
+      b.full.forEach((i, k) => {
+        const g = b.g || b.owner.get(i);
+        if (!byGroup.has(g)) byGroup.set(g, {g, b, rows: [], y: []});
+        const s = byGroup.get(g);
+        s.rows.push(i); s.y.push(b.top + (k + 0.5) / b.full.length * b.height);
+      });
+      for (const s of byGroup.values()) {
+        s.sigma = Math.round(clamp(s.rows.length / 60, 4, 15));
+        s.v = C.smoothRows(s.rows.map(i => M.ctx.count(i) / span), s.sigma);
+        series.push(s);
+      }
+    }
+    let max = 0;
+    for (const s of series) for (const v of s.v) max = Math.max(max, v);
+    return {L, series, max: niceMax(Math.max(1, max * 1.1))};
+  }
+  /** The strip as SVG elements in the figure's y coordinates; x from 0 to width. */
+  function rowRateSVG(R, width, opts = {}) {
+    const muted = figVar('--fig-muted'), gridC = figVar('--fig-grid'), axisC = figVar('--fig-axis');
+    const {L} = R, f = f1, x0 = 6, x1 = width - 22;
+    R.x0 = x0; R.x1 = x1;
+    const X = v => x0 + clamp(v / R.max, 0, 1) * (x1 - x0);
+    const out = [];
+    const ticks = niceTicks(0, R.max, Math.max(2, Math.round((x1 - x0) / 45)));
+    for (const v of ticks) if (v > 0) out.push(`<line x1="${f(X(v))}" x2="${f(X(v))}" y1="${f(L.rTop)}" y2="${f(L.rBot)}" stroke="${gridC}"/>`);
+    for (const s of R.series) {
+      if (s.v.length === 1) { out.push(`<circle cx="${f(X(s.v[0]))}" cy="${f(s.y[0])}" r="2" fill="${s.g.color}"/>`); continue; }
+      let d = '';
+      s.v.forEach((v, j) => { d += `${j ? 'L' : 'M'}${f(X(v))} ${f(s.y[j])}`; });
+      out.push(`<path d="${d}" fill="none" stroke="${s.g.color}" stroke-width="1.5" stroke-linejoin="round"${s.g.dash ? ` stroke-dasharray="${s.g.dash}"` : ''}/>`);
+    }
+    out.push(`<line x1="${x0}" x2="${x0}" y1="${f(L.rTop)}" y2="${f(L.rBot)}" stroke="${axisC}"/>`,
+      `<line x1="${x0}" x2="${x1}" y1="${f(L.rBot)}" y2="${f(L.rBot)}" stroke="${axisC}"/>`);
+    for (const v of ticks) {
+      out.push(`<line x1="${f(X(v))}" x2="${f(X(v))}" y1="${f(L.rBot)}" y2="${f(L.rBot + 3)}" stroke="${axisC}"/>`,
+        `<text x="${f(X(v))}" y="${f(L.rBot + 13)}" text-anchor="middle" font-size="10" fill="${muted}">${C.fmtNum(v)}</text>`);
+    }
+    out.push(`<text x="${width - 1}" y="${f(L.rBot + 13)}" text-anchor="end" font-size="10" fill="${muted}">Hz</text>`);
+    if (!opts.export) out.push(`<rect class="hit" data-kind="rowrate" x="0" y="${f(L.rTop)}" width="${width}" height="${f(L.rBot - L.rTop)}" fill="transparent"/>`,
+      '<g id="rowRateHover" pointer-events="none"></g>');
+    return out.join('');
+  }
+  const ROW_RATE_GAP = 20;   // strip axis labels between the strip and the bars below it
+
   // -------------------------------------------------------------- render
   // requestAnimationFrame coalesces slider drags; the timer covers hidden tabs, where frames never fire.
   let pending = false;
@@ -817,7 +870,9 @@
     }
     const wrap = document.querySelector('.figure-wrap');
     const stageW = $('stage').clientWidth - 36;
-    const side = S.bars && stageW >= 760 && M.grouping.panels.length <= 1;
+    // The rate-by-row strip needs the raster beside it, so it shows only in the side column,
+    // which the tablet and phone layout (max-width 959px in explorer.css) always stacks.
+    const side = (S.bars || S.rowRate) && stageW >= 760 && M.grouping.panels.length <= 1 && !matchMedia('(max-width: 959px)').matches;
     wrap.classList.toggle('stacked', !side);
     const barsW = side ? 210 : 0;
     const width = Math.max(260, Math.floor((wrap.clientWidth || stageW) - barsW - (side ? 8 : 0)));
@@ -825,14 +880,23 @@
     fig.innerHTML = svg;
     D.layout = layout;
     D.figMeta = {title, subtitle, width};
-    if (S.bars) {
-      // Beside the figure the chart runs from just above the PSTH to the figure's bottom
-      // edge, so it never makes the page taller than the figure (which the fit relies on).
-      const barsTop = Math.max(0, layout.panels[0].pTop - 30);
-      const h = side ? Math.max(160, layout.height - barsTop) : 260;
-      $('bars').innerHTML = barsSVG(M, side ? barsW : Math.min(Math.max(260, width), 140 + 70 * M.visible.length), h);
-      $('bars').style.marginTop = side ? `${barsTop}px` : '';
-    } else $('bars').innerHTML = '';
+    D.rowRate = null;
+    if (side) {
+      // The strip is level with the raster; the bars run from below it (or, without it, from
+      // just above the PSTH) to the figure's bottom edge, so the column is never taller than
+      // the figure (which the fit relies on).
+      const L = layout.panels[0];
+      let inner = '', colH = layout.height;
+      if (S.rowRate) { D.rowRate = rowRateSeries(M, L); inner += rowRateSVG(D.rowRate, barsW); }
+      if (S.bars) {
+        const barsTop = S.rowRate ? L.rBot + ROW_RATE_GAP : Math.max(0, L.pTop - 30);
+        const h = Math.max(160, layout.height - barsTop);
+        inner += barsSVG(M, barsW, h).replace(/^<svg /, `<svg x="0" y="${f1(barsTop)}" `);
+        colH = Math.max(colH, barsTop + h);
+      }
+      $('bars').innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${barsW}" height="${Math.ceil(colH)}" viewBox="0 0 ${barsW} ${Math.ceil(colH)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">${inner}</svg>`;
+    } else if (S.bars) $('bars').innerHTML = barsSVG(M, Math.min(Math.max(260, width), 140 + 70 * M.visible.length), 260);
+    else $('bars').innerHTML = '';
     $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · rows are events; half-open count window; ${S.policy === 'verified_stable' ? 'stability from the exact NWB (v0.1 rule, 0.4 s guard)' : 'no stability filter'} · electro_gui ${VERSION}`;
   }
 
@@ -979,6 +1043,7 @@
     $('ylock').checked = S.ylock !== null; $('ymax').disabled = S.ylock === null;
     if (document.activeElement !== $('ymax')) $('ymax').value = S.ylock !== null ? S.ylock : (D.model ? tidy(D.model.ymax, 1) : '');
     $('showBars').checked = S.bars;
+    $('showRowRate').checked = S.rowRate;
     document.querySelectorAll('.seg[data-key]').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', S[seg.dataset.key] === b.dataset.v)));
   }
 
@@ -1674,7 +1739,7 @@
   }
 
   function applyTemplate(t) {
-    const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, unitNoted: S.unitNoted, tick: S.tick, rasterH: S.rasterH, rasterFit: S.rasterFit, psthH: S.psthH, bars: S.bars, err: S.err,
+    const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, unitNoted: S.unitNoted, tick: S.tick, rasterH: S.rasterH, rasterFit: S.rasterFit, psthH: S.psthH, bars: S.bars, rowRate: S.rowRate, err: S.err,
       unitStep: S.unitStep, fitGroups: S.fitGroups, fitSplit: S.fitSplit, mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, tdrFactors: S.tdrFactors, tdrWin: S.tdrWin, worldCoding: S.worldCoding, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes, popSplit: S.popSplit};
     S = sanitize({...clone(DEFAULTS), ...keep, ...clone(t.state)});
     afterBigChange();
@@ -2829,12 +2894,19 @@
     const M = D.model;
     const width = Math.max(720, D.figMeta.width);
     const {svg, layout} = figureSVG(M, width, {export: true, title: D.figMeta.title, subtitle: `${D.summary.session_id} · ${D.figMeta.subtitle}`});
-    if (!S.bars) return svg;
-    const bw = 230, bh = Math.min(360, Math.max(240, layout.height * 0.5));
-    const bars = barsSVG(M, bw, bh).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '');
-    const W = width + bw + 16, H = Math.max(layout.height, bh);
+    const L = layout.panels[0], strip = S.rowRate && layout.panels.length === 1;
+    if (!S.bars && !strip) return svg;
+    const bw = 230;
+    let side = strip ? rowRateSVG(rowRateSeries(M, L), bw, {export: true}) : '', H = layout.height;
+    if (S.bars) {
+      const top = strip ? L.rBot + ROW_RATE_GAP : Math.max(0, L.pTop - 40);
+      const bh = strip ? Math.max(240, layout.height - top) : Math.min(360, Math.max(240, layout.height * 0.5));
+      side += `<g transform="translate(0,${f1(top)})">${barsSVG(M, bw, bh).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '')}</g>`;
+      H = Math.max(H, top + bh);
+    }
+    const W = width + bw + 16;
     return svg.replace(/^<svg[^>]*>/, `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${Math.ceil(H)}" viewBox="0 0 ${W} ${Math.ceil(H)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif"><rect x="-20" y="-20" width="${W + 40}" height="${Math.ceil(H) + 40}" fill="${figVar('--fig-bg')}"/>`)
-      .replace(/<\/svg>$/, `<g transform="translate(${width + 16},${Math.max(0, layout.panels[0].pTop - 40)})">${bars}</g></svg>`);
+      .replace(/<\/svg>$/, `<g transform="translate(${width + 16},0)">${side}</g></svg>`);
   }
   async function doExport(kind) {
     if (!D.model || !D.model.rows.length) { toast('Nothing to export yet.', true); return; }
@@ -2885,7 +2957,7 @@
   }
   const hideTip = () => {
     $('tooltip').hidden = true;
-    for (const id of ['hoverLayer', 'btHover', 'tcHover']) { const h = document.getElementById(id); if (h) h.innerHTML = ''; }
+    for (const id of ['hoverLayer', 'btHover', 'tcHover', 'rowRateHover']) { const h = document.getElementById(id); if (h) h.innerHTML = ''; }
   };
   function svgPoint(evt) {
     const svg = $('figure').querySelector('svg');
@@ -2913,11 +2985,14 @@
   function hoverRaster(L, p, evt) {
     const r = rowAt(L, p);
     if (!r) { hideTip(); return; }
-    const {b, k, i} = r, g = b.g || b.owner.get(i);
+    highlightRow(L, r);
+    tooltip(rowTip(D.model.T, r.i), evt.clientX, evt.clientY);
+  }
+  function highlightRow(L, {b, k, i}) {
+    const g = b.g || b.owner.get(i);
     const hl = document.getElementById('hoverLayer');
     const yc = b.top + (k + 0.5) * b.rowH;
     if (hl) hl.innerHTML = `<rect x="${f1(L.x0)}" y="${f1(yc - Math.max(b.rowH, 2) / 2)}" width="${f1(L.plotW)}" height="${f1(Math.max(b.rowH, 2))}" fill="${g.color}" opacity="0.18"/>`;
-    tooltip(rowTip(D.model.T, i), evt.clientX, evt.clientY);
   }
 
   let brush = null, tipTimer = 0;
@@ -3011,6 +3086,46 @@
       if (r) setPin(pinFromRow(D.model.T, r.i));
     });
     bindPopFigure(fig);
+    bindRowRate();
+  }
+
+  // Hovering the rate-by-row strip at a height shows every group's smoothed rate there (as
+  // the PSTH hover does at a time) and lights up the raster row at that height, whose trial
+  // a click pins.
+  function rowRateRow(evt) {
+    const R = D.rowRate, svg = $('bars').querySelector('svg');
+    const hit = evt.target.closest && evt.target.closest('.hit');
+    if (!R || !D.model || !svg || !hit || hit.dataset.kind !== 'rowrate') return null;
+    const box = svg.getBoundingClientRect(), y = (evt.clientY - box.top) * svg.viewBox.baseVal.height / box.height;
+    const r = rowAt(R.L, {x: 0, y});
+    return r ? {r, y} : null;
+  }
+  function hoverRowRate(evt) {
+    const R = D.rowRate, h = rowRateRow(evt);
+    if (!h) { hideTip(); return; }
+    const {r, y} = h, yc = r.b.top + (r.k + 0.5) * r.b.rowH;
+    const X = v => R.x0 + clamp(v / R.max, 0, 1) * (R.x1 - R.x0);
+    const here = [];
+    for (const s of R.series) {
+      if (s.b !== r.b || y < s.y[0] - 3 || y > s.y[s.y.length - 1] + 3) continue;
+      const j = clamp(C.lowerBound(s.y, y), 0, s.y.length - 1), jj = j > 0 && y - s.y[j - 1] < s.y[j] - y ? j - 1 : j;
+      here.push({s, v: s.v[jj], y: s.y[jj]});
+    }
+    highlightRow(R.L, r);
+    const trial = D.model.T.trial[r.i];
+    tooltip(`<b>rate by row</b> <span style="opacity:.7">spikes/s · trial ${esc(trial)}</span>` +
+      here.map(({s, v}) => `<div class="tr" style="--c:${s.g.color}"><i></i><span>${esc(s.g.label)} <small>· σ ${s.sigma} rows</small></span><em>${C.fmtNum(v, 2)}</em></div>`).join('') +
+      `<div class="hint">count-window rate [${C.fmtNum(D.model.cw[0])}, ${C.fmtNum(D.model.cw[1])}) s, Gaussian over each group's rows · click to pin trial ${esc(trial)}</div>`, evt.clientX, evt.clientY);
+    const layer = document.getElementById('rowRateHover');
+    if (layer) layer.innerHTML = `<line x1="${R.x0}" x2="${R.x1}" y1="${f1(yc)}" y2="${f1(yc)}" stroke="${figVar('--fig-muted')}" stroke-width="1" opacity="0.6"/>` +
+      here.map(({s, v, y: yv}) => `<circle cx="${f1(X(v))}" cy="${f1(yv)}" r="3.5" fill="${s.g.color}" stroke="${figVar('--fig-bg')}" stroke-width="1.5"/>`).join('');
+  }
+  function bindRowRate() {
+    const side = $('bars');
+    side.addEventListener('pointermove', evt => { if (evt.pointerType === 'mouse') hoverRowRate(evt); });
+    side.addEventListener('pointerdown', evt => { if (evt.pointerType !== 'mouse') hoverRowRate(evt); });
+    side.addEventListener('pointerleave', evt => { if (evt.pointerType === 'mouse') hideTip(); });
+    side.addEventListener('click', evt => { const h = rowRateRow(evt); if (h) setPin(pinFromRow(D.model.T, h.r.i)); });
   }
 
   // ---------------------------------------------------- behavior timeline
@@ -3777,6 +3892,7 @@
     $('ylock').addEventListener('change', e => { S.ylock = e.target.checked ? (D.model ? tidy(D.model.ymax, 1) : 20) : null; changed(); });
     $('ymax').addEventListener('change', e => { const v = Number(e.target.value); if (v > 0) { S.ylock = v; changed(); } });
     $('showBars').addEventListener('change', e => { S.bars = e.target.checked; changed(); });
+    $('showRowRate').addEventListener('change', e => { S.rowRate = e.target.checked; changed(); });
     document.querySelectorAll('.seg[data-key]').forEach(seg => seg.addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
       const key = seg.dataset.key;

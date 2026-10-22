@@ -296,6 +296,32 @@ process.stdout.write(JSON.stringify({rows: rows.map(i => T.rowId[i]), times: Arr
         by_id = {r["row_id"]: r["rate"] for r in v01["rows"]}
         np.testing.assert_allclose(js["values"], [by_id[r] for r in js["rows"]], atol=1e-9)
 
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_core_js_smooth_rows_is_a_renormalised_gaussian(self):
+        # The rate-by-row strip beside the raster: v0.1's per-row window rates, each averaged
+        # with its neighbours under Gaussian weights that stop at 3 sigma and renormalise at the ends.
+        rates = [r["rate"] for r in compute_unit(self.loaded, {
+            "unit_id": 3, "alignment": "object_outcome", "pre": -1.0, "post": 1.0, "bin": 0.05, "sigma": 0.05,
+            "count_window": [-0.5, 0.0], "stability": "all_complete", "recipe": {"enabled": False, "cohorts": []}})["rows"]]
+        script = """
+const C = require(process.argv[1]);
+const values = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify([0, 4, 15].map(s => Array.from(C.smoothRows(values, s)))
+  .concat([Array.from(C.smoothRows([], 4)), Array.from(C.smoothRows([4], 4))])));
+"""
+        done = subprocess.run(["node", "-e", script, str(CORE_JS)], input=json.dumps(rates),
+                              capture_output=True, text=True, timeout=60, check=True)
+        js = json.loads(done.stdout)
+        x = np.asarray(rates)
+        for sigma, got in zip((0, 4, 15), js):
+            reach = int(np.ceil(3 * sigma))
+            want = []
+            for j in range(len(x)):
+                q = np.arange(max(0, j - reach), min(len(x), j + reach + 1))
+                w = np.exp(-0.5 * ((q - j) / sigma) ** 2) if sigma else np.ones(len(q))
+                want.append(np.sum(w * x[q]) / np.sum(w))
+            np.testing.assert_allclose(got, want, atol=1e-9)
+        self.assertEqual(js[3:], [[], [4]])
 
 class PopulationWorkspaceTests(unittest.TestCase):
     """The explorer's population fit reuses v0.1's basis and v0.1's eligibility rule."""

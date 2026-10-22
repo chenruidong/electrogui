@@ -130,7 +130,8 @@ server started before this button existed has to be restarted once by hand.
 ## Explorer (the default page)
 
 The page is a figure card — title (`unit · ch · area · quality`), a legend of
-groups, the raster over the PSTH, and window-rate bars — beside a control panel
+groups, the raster over the PSTH, a rate-by-row strip beside the raster, and
+window-rate bars — beside a control panel
 with four sections.  On narrow screens the controls move into a bottom sheet
 with Filter / Group / Markers / Display tabs.
 
@@ -202,10 +203,24 @@ with Filter / Group / Markers / Display tabs.
   error band (SEM, 95% CI = 1.96 SEM, none), averaging over events or trials,
   eligibility (*stable for unit* = v0.1's verified stable, or *all complete*),
   raster ticks as lines or dots, raster height, a locked y-maximum for
-  comparing units, and the window-rate bars.
+  comparing units, the window-rate bars and the rate-by-row strip.
+
+**Rate by row.**  Beside the raster, level with its rows, each group's
+count-window rate is drawn against the raster's own row order (session order by
+default, so it reads as rate over trials).  x is spikes/s; a row's value is the
+Gaussian-weighted mean of the count-window rates of that row and the same
+group's neighbouring rows in raster order (σ = n/60 rows, rounded, between 4
+and 15, for a group of n events; cut at 3σ and renormalised at the ends).
+Single rows are too noisy to read: one 0.5 s window holds a spike or two, or a
+burst of 15.  With *Keep groups together* off the groups' rows interleave and
+each line runs through its own group's rows.  It uses every row, including
+those the drawing thins out, and appears only where the side column fits (one
+panel, a wide window) and in exports of one panel.
 
 Hovering (or tapping) the PSTH shows every group's rate at that bin; hovering a
-raster row shows its trial, time, fields, window count and marker times.
+raster row shows its trial, time, fields, window count and marker times;
+hovering the rate-by-row strip shows each group's smoothed rate at that height
+and lights up the raster row there (click to pin its trial).
 
 ### Behavior timeline and pinned trials
 
