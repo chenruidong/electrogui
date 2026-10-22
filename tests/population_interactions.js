@@ -35,7 +35,7 @@ const context = {window: {EGCore: C}, document: {getElementById: el, querySelect
   requestAnimationFrame: () => 0, ResizeObserver: class {observe() {}}, console};
 let source = fs.readFileSync(path.join(root, 'explorer.js'), 'utf8');
 source = source.replace('  start();', `
-  window.qa = {S, D, unitList, stepUnit, bindPopFigure, bindControls, navOrderKey, fillUnitItems, sanitize, fitRequest, populationFitKey, popModelKey, popFitIsCurrent, rerenderPopFigure, popEmpty, popExportSVG, popExport, closePop, setPopAnchor: a => {popAnchor = a;}};
+  window.qa = {S, D, unitList, stepUnit, bindPopFigure, bindControls, navOrderKey, fillUnitItems, refreshUnitNotes, sanitize, fitRequest, populationFitKey, popModelKey, popFitIsCurrent, rerenderPopFigure, popEmpty, popExportSVG, popExport, closePop, setPopAnchor: a => {popAnchor = a;}};
   changed = () => {}; renderStructure = () => {}; closeSheet = () => {}; applyMode = () => {};
   bindFigure = () => {}; bindBehavior = () => {}; saveState = () => {};`);
 vm.runInNewContext(source, context);
@@ -48,6 +48,26 @@ stepUnit(1); assert.equal(S.unit, 3); stepUnit(1); assert.equal(S.unit, 1); step
 S.unit = 2; stepUnit(-1); assert.equal(S.unit, 1);
 context.window.qa.fillUnitItems('');
 assert.ok(el('unitItems').innerHTML.indexOf('data-unit="3"') < el('unitItems').innerHTML.indexOf('data-unit="1"'));
+// Notes are visible, escaped, searchable, and intersect the existing quality/roster filters.
+D.unitNotes = {units: {
+  '1': {note: '<img src=x onerror=alert(1)> reward dip', tags: ['eye'], flag: false, identity_warnings: []},
+  '2': {note: '', tags: [], flag: true, identity_warnings: []},
+  '3': {note: 'world effect', tags: ['intention'], flag: true, identity_warnings: ['peak channel changed']}
+}, available: true, notices: []};
+context.window.qa.fillUnitItems('reward');
+assert.ok(el('unitItems').innerHTML.includes('data-unit="1"'));
+assert.ok(!el('unitItems').innerHTML.includes('data-unit="3"'));
+assert.ok(el('unitItems').innerHTML.includes('&lt;img'));
+assert.ok(!el('unitItems').innerHTML.includes('<img'));
+context.window.qa.fillUnitItems('intention');
+assert.ok(el('unitItems').innerHTML.includes('possible re-sort'));
+assert.ok(el('unitItems').innerHTML.includes('★ flagged'));
+S.unitNoted = true; delete D.unitNotes.units['1'];
+assert.equal(JSON.stringify(unitList().map(u => u.id)), '[3]');
+S.unit = 1; stepUnit(1); assert.equal(S.unit, 3);
+assert.equal(context.window.qa.sanitize({unitNoted: 'true'}).unitNoted, false);
+assert.equal(context.window.qa.sanitize({unitNoted: true}).unitNoted, true);
+S.unitNoted = false; S.unit = 1; D.unitNotes = null;
 S.win = [-1, 2]; assert.equal(JSON.stringify(unitList().map(u => u.id)), '[1,3]'); // stale order falls back
 for (const [field, value] of [['qbins', 4], ['hidden', ['other']], ['filters', [{k:'world',v:['PP']}]]]) {
   const old = S[field]; D.navOrder = {key: navOrderKey(), ids: [3, 1]}; S[field] = value;
@@ -83,6 +103,25 @@ const restored = context.window.qa.sanitize({...S, fitSplit: 'random', fitGroups
 assert.equal(restored.fitSplit, 'all'); assert.equal(restored.unitStep, 'all'); assert.equal(JSON.stringify(restored.fitGroups), '["x"]');
 async function finalReviewChecks() {
   const Q = context.window.qa;
+  // Refresh observes edits/removals, keeps cached notes on failure, and ignores
+  // both an older response and a response from a previous session.
+  const reply = body => ({ok: true, json: async () => body});
+  const notebook = note => ({available: true, notices: [], units: note ? {'1': {note, tags: [], flag: false, identity_warnings: []}} : {}});
+  context.fetch = async () => reply(notebook('fresh'));
+  await Q.refreshUnitNotes(); assert.equal(D.unitNotes.units['1'].note, 'fresh');
+  context.fetch = async () => { throw new Error('offline'); };
+  await Q.refreshUnitNotes(); assert.equal(D.unitNotes.units['1'].note, 'fresh'); assert.equal(D.unitNotesError, 'offline');
+  context.fetch = async () => reply({available:false, units:{}, notices:['folder unavailable']});
+  await Q.refreshUnitNotes(); assert.equal(D.unitNotes.units['1'].note, 'fresh');
+  const pending = []; context.fetch = () => new Promise(resolve => pending.push(resolve));
+  const older = Q.refreshUnitNotes(), newer = Q.refreshUnitNotes();
+  pending[1](reply(notebook('newest'))); await newer;
+  pending[0](reply(notebook('outdated'))); await older;
+  assert.equal(D.unitNotes.units['1'].note, 'newest');
+  const otherSession = Q.refreshUnitNotes(); ++D.sessionToken; D.unitNotes = null;
+  pending[2](reply(notebook('previous session'))); await otherSession; assert.equal(D.unitNotes, null);
+  context.fetch = async () => reply(notebook(''));
+  await Q.refreshUnitNotes(); assert.equal(Object.keys(D.unitNotes.units).length, 0); assert.equal(D.unitNotesError, null);
   // Changing held-out values can move training rows across globally fitted
   // quantiles. Such restricted numeric grouping must be blocked, not fitted.
   const quantileTraining = values => {

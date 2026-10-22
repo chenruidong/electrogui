@@ -57,12 +57,15 @@ checkout shares them (`electro_gui/paths.py`):
 | `--cache-dir` | `<Dropbox>/projects/electro_gui/output/cache` |
 | `--findings-dir` | `<Dropbox>/projects/electro_gui/output/findings` |
 | `--config-dir` | `<Dropbox>/projects/analysis_imitation/data/output/presentation` |
+| `--unit-notes-dir` (read only) | `<Dropbox>/projects/result-viewer/data/notes` |
 
 `<Dropbox>` is `DROPBOX_ROOT`, else the business (then personal) path in
 `~/.dropbox/info.json` -- the rule the thread-handoff kit uses -- so it is right
 whatever the Mac mounts Dropbox under.  `ELECTRO_GUI_OUTPUT=/some/folder` moves
 the cache and findings together.  Without Dropbox or that variable the launcher
 stops and asks for `--cache-dir` and `--findings-dir`.
+`RESULT_VIEWER_DATA` also overrides the unit-notebook default, using its `notes/`
+subfolder, as in Result Viewer. `--unit-notes-dir` overrides that location directly.
 The optional canonical trial-strategy classifier is resolved by imitation_phys:
 the analysis_imitation checkout's sibling `mworks/imitation`, or the
 `IMITATION_REPO` environment variable.
@@ -132,8 +135,18 @@ with four sections.  On narrow screens the controls move into a bottom sheet
 with Filter / Group / Markers / Display tabs.
 
 - **Unit and alignment.**  `‹ ›` (or ← / →) step through units; the unit picker
-  searches by unit ID, peak channel or area and filters by quality (SUA and MUA
-  by default) and area.  Units are always labelled with both unit ID and peak
+  searches by unit ID, peak channel, area, Result Viewer note or tag and filters
+  by quality (SUA and MUA by default), area and **✎ Noted**. Noted means a saved
+  note, tag or flag in Result Viewer's notebook for this session. Each noted row
+  shows its tags, flag and a note preview (the full note is in its tooltip).
+  The Noted filter also applies to arrow-key stepping, together with the quality,
+  area and optional population-roster filters. Notes refresh when the picker
+  opens. A read failure is shown and keeps previously loaded notes for the same
+  session; missing/unavailable notebooks never block the explorer. Notes are
+  matched by session and NWB unit ID; saved channel, area or quality differences
+  are marked as a possible re-sort, and absent IDs are reported without remapping.
+  This integration only reads Result Viewer's JSON; edit notes in Result Viewer.
+  Units are always labelled with both unit ID and peak
   channel, since the channel survives a re-sort.  The alignment picker lists
   every recorded event with its candidate count, common ones first;
   `object outcome (any)` is the four-outcome union.  `object_spawn` is

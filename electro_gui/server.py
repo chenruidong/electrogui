@@ -30,14 +30,16 @@ from .annotations import annotate_result
 from .configs import discover_configs
 from .findings import FindingStore
 from .preview import preview
+from .unit_notes import read_unit_notes
 from . import explorer
 
 
 class Application:
-    def __init__(self, store: SessionStore, findings_dir: str | Path | None = None, config_dirs=()):
+    def __init__(self, store: SessionStore, findings_dir: str | Path | None = None, config_dirs=(), unit_notes_dir=None):
         self.store = store
         self.findings = FindingStore(findings_dir) if findings_dir is not None else None
         self.config_dirs = [Path(d).expanduser().absolute() for d in config_dirs or ()]
+        self.unit_notes_dir = unit_notes_dir
         self.jobs = OrderedDict()
         self.preview_jobs = OrderedDict()
         self.lock = threading.RLock()
@@ -189,6 +191,8 @@ class Application:
             loaded = self.store.get(one("session"))
             if what == "session":
                 return explorer.session_summary(loaded)
+            if what == "unit-notes":
+                return read_unit_notes(self.unit_notes_dir, loaded.session_id, loaded.units)
             if what == "table":
                 return explorer.alignment_table(loaded, one("alignment"))
             if what == "raster":

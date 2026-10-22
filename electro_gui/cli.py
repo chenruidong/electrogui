@@ -12,7 +12,7 @@ import time
 import webbrowser
 
 from . import __version__
-from .paths import OUTPUT_ENV, output_root, presentation_dir
+from .paths import OUTPUT_ENV, output_root, presentation_dir, unit_notes_dir
 
 DEFAULT_ROOTS = ("/Volumes/T7/engaging-results", "/Volumes/Transfer/engaging_results")
 # Set by _restart for the process that replaces this one: {"port": ..., "token": ...}.
@@ -43,6 +43,8 @@ def add_arguments(parser):
                         help="Directory of JSON config files for the Views menu (a deck's electro_gui_configs/, or a folder "
                              "holding decks); repeat for several. Relative to the current directory; a missing one is empty "
                              "(default: <Dropbox>/projects/analysis_imitation/data/output/presentation).")
+    parser.add_argument("--unit-notes-dir", help="Read-only Result Viewer notebooks folder "
+                        "(default: $RESULT_VIEWER_DATA/notes or <Dropbox>/projects/result-viewer/data/notes).")
     parser.add_argument("--no-browser", action="store_true", help="Print the URL without opening a browser.")
     return parser
 
@@ -74,7 +76,8 @@ def run(args):
     from .server import Application, Tailnet, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=cache_dir)
-    application = Application(store, findings_dir=findings_dir, config_dirs=config_dirs)
+    notes = Path(args.unit_notes_dir).expanduser() if args.unit_notes_dir is not None else unit_notes_dir()
+    application = Application(store, findings_dir=findings_dir, config_dirs=config_dirs, unit_notes_dir=notes)
     host = "0.0.0.0" if args.lan else args.host
     token = args.token  # optional on loopback: tailscale serve lets this node's owner in without one (server.Tailnet)
     if restart and token is None:

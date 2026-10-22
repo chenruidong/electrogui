@@ -114,7 +114,7 @@
     win: [-1.5, 1], cw: [-0.5, 0], bin: 0.02, sigma: 0.04, weight: 'event', err: 'sem',
     filters: [], color: 'role', style: 'action', panel: null, qbins: 3, hidden: [],
     sort: 'session', dir: 1, grouped: true, markers: [], refs: [], medians: true,
-    tick: 'line', rasterH: 260, rasterFit: true, psthH: 205, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], gstyle: {},
+    tick: 'line', rasterH: 260, rasterFit: true, psthH: 205, ylock: null, bars: true, unitQ: ['sua', 'mua'], unitArea: [], unitNoted: false, gstyle: {},
     unitStep: 'all', fitGroups: null, fitSplit: 'all', heatCompare: null, mode: 'raster', roster: [], method: 'pca', scaling: 'zscore', ncomp: 3, tdrFactors: ['world', 'action', 'joystick_direction'], tdrWin: null, worldCoding: 'linear', dims: '2', heatNorm: 'z',
     nsort: 'loading:0', axes: [0, 1, 2], heatGroup: null, cloud: false, cloudAlpha: 0.3, cloudZero: true, cloudFit: 'traj',
     bt: true, btN: 16, pin: null, yoke: false, popSplit: 0.5,
@@ -153,6 +153,7 @@
     probes: new Map(), probeErrors: new Map(), probePending: null, probeShown: null, popReq: null,
     behavior: null, behaviorError: null, btC: null, btLayout: null, btDrag: null,
     trains: new Map(), trainErrors: new Map(),   // unit id -> spike times (s) for the timeline's spike lane
+    unitNotes: null, unitNotesError: null, unitNotesRequest: 0,
   };
 
   function sanitize(raw) {
@@ -189,6 +190,7 @@
     s.cloudAlpha = Number.isFinite(s.cloudAlpha) ? clamp(s.cloudAlpha, 0.05, 1) : DEFAULTS.cloudAlpha;
     s.bt = s.bt !== false;
     s.yoke = s.yoke === true;
+    s.unitNoted = s.unitNoted === true;
     s.btN = Number.isInteger(s.btN) ? clamp(s.btN, 3, 5000) : DEFAULTS.btN;
     const p = s.pin;
     s.pin = p && typeof p === 'object' && Number.isInteger(p.trial)
@@ -327,6 +329,7 @@
     if (S.session !== sid) S.pin = null;   // trial IDs belong to one session
     S.session = sid;
     D.summary = null; D.tables.clear(); D.rasters.clear(); D.events.clear(); D.model = null;
+    D.unitNotes = null; D.unitNotesError = null; ++D.unitNotesRequest;
     D.popspans.clear(); D.stab = null; D.fits.clear(); D.fitErrors.clear(); D.heatCache.clear(); D.popFit = null; D.popLayout = null; D.popModelKey = null; D.navOrder = null; stopPlay();
     D.probes.clear(); D.probeErrors.clear(); D.probeShown = null;
     D.behavior = null; D.behaviorError = null; D.btC = null; D.btLayout = null; D.trains.clear(); D.trainErrors.clear();
@@ -349,6 +352,7 @@
       D.units = summary.units.map(u => ({...u, rate: u.n_spikes / Math.max(1, summary.duration_s)}));
       D.unitMap = new Map(D.units.map(u => [u.id, u]));
       fitStateToSession(summary);
+      refreshUnitNotes();
       D.fatal = null;
       for (const n of summary.notices || []) toast(n);
       saveState();
@@ -1089,7 +1093,34 @@
   function navOrderKey() { return JSON.stringify([popModelKey(), S.nsort, S.heatGroup]); }
   function unitList() {
     const order = D.navOrder && D.navOrder.key === navOrderKey() ? D.navOrder.ids : null;
-    return C.populationUnitList(D.units, S.roster, order, S.unitQ, S.unitArea, S.unitStep === 'roster');
+    const list = C.populationUnitList(D.units, S.roster, order, S.unitQ, S.unitArea, S.unitStep === 'roster');
+    return S.unitNoted ? list.filter(u => D.unitNotes?.units[String(u.id)]) : list;
+  }
+  async function refreshUnitNotes() {
+    const sid = S.session, token = D.sessionToken, request = ++D.unitNotesRequest;
+    if (!sid) return;
+    try {
+      const notes = await getJSON(`/api/explorer/unit-notes?${query({session: sid})}`);
+      if (token !== D.sessionToken || request !== D.unitNotesRequest) return;
+      if (!notes.available) throw new Error(notes.notices.join(' ') || 'Result Viewer notes are unavailable.');
+      D.unitNotes = notes;
+      D.unitNotesError = null;
+    } catch (e) {
+      if (token !== D.sessionToken || request !== D.unitNotesRequest) return;
+      D.unitNotesError = e.message; // keep the last successful notes for this session
+    }
+    if (!$('popover').hidden && $('unitSearch')) {
+      fillUnitItems($('unitSearch').value);
+      renderUnitNotesStatus();
+    }
+  }
+  function renderUnitNotesStatus() {
+    const status = $('unitNotesStatus');
+    if (!status) return;
+    const count = Object.keys(D.unitNotes?.units || {}).length;
+    status.textContent = [D.unitNotesError ? `${D.unitNotesError}${D.unitNotes ? ' Showing previously loaded notes.' : ''}`
+      : D.unitNotes ? `${count} noted unit${count === 1 ? '' : 's'} in this session · Result Viewer` : 'Loading Result Viewer notes…',
+      ...(D.unitNotes?.notices || [])].join(' ');
   }
   function openUnitPicker() {
     const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))];
@@ -1097,17 +1128,31 @@
     const html = popHead('Choose a unit') +
       `<div class="pop-note"><label><input id="rosterStep" type="checkbox" ${S.unitStep === 'roster' ? 'checked' : ''}> Step through population roster</label><br>Uses the last displayed population order; falls back to roster ID order after settings change. Units absent from the fit follow in roster ID order. Filters below still apply.</div>` +
       (!unitList().some(u => u.id === S.unit) ? '<div class="pop-note">The current unit is outside this stepping list. Arrows start at its first/last unit.</div>' : '') +
-      `<div class="pop-search"><input type="search" id="unitSearch" placeholder="unit id, channel, area…" autocomplete="off">` +
+      `<div class="pop-search"><input type="search" id="unitSearch" placeholder="unit id, channel, area, note, tag…" autocomplete="off">` +
       `<div class="chips">${qs.map(q => `<button type="button" class="chip${S.unitQ.includes(q) ? ' on' : ''}" data-uq="${esc(q)}">${esc(q.toUpperCase())}</button>`).join('')}` +
-      `${areas.map(a => `<button type="button" class="chip${S.unitArea.includes(a) ? ' on' : ''}" data-ua="${esc(a)}">${esc(a)}</button>`).join('')}</div></div>` +
+      `${areas.map(a => `<button type="button" class="chip${S.unitArea.includes(a) ? ' on' : ''}" data-ua="${esc(a)}">${esc(a)}</button>`).join('')}` +
+      `<button type="button" class="chip${S.unitNoted ? ' on' : ''}" data-unoted aria-pressed="${S.unitNoted}">✎ Noted</button></div></div>` +
+      `<div class="pop-note" id="unitNotesStatus" aria-live="polite"></div>` +
       `<div class="pop-body" id="unitItems"></div><div class="pop-note">← / → step through the listed units. Channel IDs survive a re-sort; unit IDs do not.</div>`;
     openPop($('unitBtn'), html);
     fillUnitItems('');
+    renderUnitNotesStatus();
+    refreshUnitNotes(); // re-read edits synced from Result Viewer each time the picker opens
   }
   function fillUnitItems(text) {
     const t = text.trim().toLowerCase();
-    const list = unitList().filter(u => !t || `${u.id} ch${u.peak_channel} ch ${u.peak_channel} ${u.area} ${u.quality}`.toLowerCase().includes(t));
-    $('unitItems').innerHTML = list.slice(0, 600).map(u => `<button type="button" class="item${u.id === S.unit ? ' on' : ''}" data-unit="${u.id}"><span class="main"><b>unit ${u.id}${u.peak_channel !== null && u.peak_channel !== undefined ? ` · ch ${u.peak_channel}` : ''}</b><small>${esc(u.area || 'area ?')} · ${C.fmtNum(u.rate, 1)} spikes/s</small></span><span class="q ${esc(String(u.quality).toLowerCase())}">${esc(u.quality)}</span></button>`).join('') ||
+    const list = unitList().filter(u => {
+      const n = D.unitNotes?.units[String(u.id)];
+      return !t || `${u.id} ch${u.peak_channel} ch ${u.peak_channel} ${u.area} ${u.quality} ${n ? `noted ${n.flag ? 'flagged' : ''} ${n.note} ${n.tags.join(' ')}` : ''}`.toLowerCase().includes(t);
+    });
+    $('unitItems').innerHTML = list.slice(0, 600).map(u => {
+      const n = D.unitNotes?.units[String(u.id)];
+      const details = n ? [n.flag ? '★ flagged' : '✎ noted', ...n.tags].join(' · ') : '';
+      return `<button type="button" class="item${u.id === S.unit ? ' on' : ''}" data-unit="${u.id}"><span class="main"><b>unit ${u.id}${u.peak_channel !== null && u.peak_channel !== undefined ? ` · ch ${u.peak_channel}` : ''}</b><small>${esc(u.area || 'area ?')} · ${C.fmtNum(u.rate, 1)} spikes/s</small>` +
+        (n ? `<small class="unit-note" title="${esc([details, n.note].join('\n'))}">${esc(details)}${n.note.trim() ? ` · ${esc(n.note)}` : ''}</small>` +
+          (n.identity_warnings.length ? `<small class="unit-note-warning" title="${esc(n.identity_warnings.join('\n'))}">⚠ Saved unit metadata differs; possible re-sort</small>` : '') : '') +
+        `</span><span class="q ${esc(String(u.quality).toLowerCase())}">${esc(u.quality)}</span></button>`;
+    }).join('') ||
       '<div class="pop-note">No units match.</div>';
     const on = $('unitItems').querySelector('.on');
     if (on) on.scrollIntoView({block: 'center'});
@@ -1626,7 +1671,7 @@
   }
 
   function applyTemplate(t) {
-    const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, tick: S.tick, rasterH: S.rasterH, rasterFit: S.rasterFit, psthH: S.psthH, bars: S.bars, err: S.err,
+    const keep = {session: S.session, unit: S.unit, policy: S.policy, unitQ: S.unitQ, unitArea: S.unitArea, unitNoted: S.unitNoted, tick: S.tick, rasterH: S.rasterH, rasterFit: S.rasterFit, psthH: S.psthH, bars: S.bars, err: S.err,
       unitStep: S.unitStep, fitGroups: S.fitGroups, fitSplit: S.fitSplit, mode: S.mode, roster: S.roster, method: S.method, scaling: S.scaling, ncomp: S.ncomp, tdrFactors: S.tdrFactors, tdrWin: S.tdrWin, worldCoding: S.worldCoding, dims: S.dims, heatNorm: S.heatNorm, nsort: S.nsort, axes: S.axes, popSplit: S.popSplit};
     S = sanitize({...clone(DEFAULTS), ...keep, ...clone(t.state)});
     afterBigChange();
@@ -3478,6 +3523,7 @@
       }
       if (t.dataset.uq) { const q = t.dataset.uq; S.unitQ = S.unitQ.includes(q) ? S.unitQ.filter(x => x !== q) : [...S.unitQ, q]; t.classList.toggle('on'); fillUnitItems($('unitSearch').value); saveState(); return; }
       if (t.dataset.ua) { const a = t.dataset.ua; S.unitArea = S.unitArea.includes(a) ? S.unitArea.filter(x => x !== a) : [...S.unitArea, a]; t.classList.toggle('on'); fillUnitItems($('unitSearch').value); saveState(); return; }
+      if (t.hasAttribute('data-unoted')) { S.unitNoted = !S.unitNoted; t.classList.toggle('on', S.unitNoted); t.setAttribute('aria-pressed', String(S.unitNoted)); fillUnitItems($('unitSearch').value); saveState(); return; }
       if (t.dataset.tpl) { closePop(); applyTemplate(TEMPLATES[Number(t.dataset.tpl)]); return; }
       if (t.dataset.finding) { const f = D.findings[Number(t.dataset.finding)]; if (f) openFinding(f); return; }
       if (t.dataset.cfg) { closePop(); const c = D.configs[Number(t.dataset.cfg)]; if (c) applyConfig(c.title, c.state); return; }
