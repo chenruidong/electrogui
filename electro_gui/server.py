@@ -1,4 +1,12 @@
-"""Loopback server and bounded asynchronous computation queue."""
+"""Loopback server and bounded asynchronous computation queue.
+
+Access log: ``cli.run`` attaches ``accesslog.py``, a copy of apps-dashboard's module (keep it verbatim; the
+dashboard flags an old copy), once the server has bound its port and only on a registered one
+(``ACCESS_LOG_APPS``: 8778 is the LaunchAgent's "electrogui", 8765 result-viewer's on-demand "electro_gui";
+``--port 0``, any other port and the tests log nothing).  One line per request under
+``~/Library/Logs/tailnet-access/<app id>/`` with the route class from ``ROUTES`` (never the path or query),
+the Tailscale login and device address; only on a Mac whose apps-dashboard has made that directory.
+"""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -25,6 +33,7 @@ from imitation_phys import explorer_core
 from imitation_phys.session_store import SessionStore
 
 from . import __version__
+from .accesslog import AccessLog, attach
 from .exports import export_csv, export_json, export_membership, export_statistics, export_svg
 from .annotations import annotate_result
 from .configs import discover_configs
@@ -412,6 +421,26 @@ def code_changed_since(started=None):
                 pass
     return changed
 _COMPRESSIBLE = ("application/json", "text/", "application/javascript", "image/svg+xml")
+# The access log's app id for each registered port (the dashboard's registry ids); any other port logs nothing.
+ACCESS_LOG_APPS = {8778: "electrogui", 8765: "electro_gui"}
+# Route classes of the access log (exact paths, or prefixes ending in *; first match wins), never the path itself.
+# /api/jobs/<id> is what the page polls while a job runs (every 0.7 s); its /export is told apart in _AccessLog.
+ROUTES = [("/", "page"), ("/index.html", "page"), ("/classic/", "page.classic"), ("/classic/index.html", "page.classic"),
+          ("/findings/", "page.findings"), ("/findings/index.html", "page.findings"), ("/core.js", "static"),
+          ("/explorer.js", "static"), ("/explorer.css", "static"), ("/site.webmanifest", "static"),
+          ("/classic/*", "static"), ("/findings/*", "static"), ("/icons/*", "icon"), ("/api/health", "health"),
+          ("/api/catalog", "api.catalog"), ("/api/configs", "api.configs"), ("/api/explorer/popfit", "api.explorer.popfit"),
+          ("/api/explorer/popprobe", "api.explorer.popprobe"), ("/api/explorer/*", "api.explorer"),
+          ("/api/findings*", "api.findings"), ("/api/result_viewer", "api.result_viewer"), ("/api/jobs", "api.jobs"),
+          ("/api/jobs/*", "api.jobs.poll"), ("/api/restart", "api.restart"), ("/api/*", "api")]
+
+
+class _AccessLog(AccessLog):
+    """``ROUTES``, and the one class a prefix cannot name: a job's export download, apart from its polling."""
+
+    def route_class(self, path):
+        name = super().route_class(path)
+        return "api.jobs.export" if name == "api.jobs.poll" and urlsplit(path).path.endswith("/export") else name
 
 
 def make_server(application, host="127.0.0.1", port=8765, token=None, tailnet=None, tailnet_origin=None):
@@ -667,3 +696,11 @@ def make_server(application, host="127.0.0.1", port=8765, token=None, tailnet=No
     server = ThreadingHTTPServer((host, port), Handler)
     server.restart_requested = False
     return server
+
+
+def attach_access_log(server):
+    """Log every request ``server`` answers when the port it bound is a registered one; returns the app id or None."""
+    app_id = ACCESS_LOG_APPS.get(server.server_address[1])
+    if app_id:
+        attach(server.RequestHandlerClass, _AccessLog(app_id, routes=ROUTES))
+    return app_id

@@ -80,7 +80,7 @@ def run(args):
     os.environ.setdefault("MPLCONFIGDIR", str(cache_dir / "matplotlib"))
     from imitation_phys.session_store import SessionStore
     from .result_viewer import DASHBOARD_URLS, ResultViewerFinder
-    from .server import Application, Tailnet, make_server
+    from .server import Application, Tailnet, attach_access_log, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=cache_dir)
     finder = ResultViewerFinder(args.result_viewer_url,
@@ -107,6 +107,7 @@ def run(args):
             application.close()
             raise SystemExit(f"Cannot start electro_gui: {exc}. Use --port 0 to choose a free port.") from None
     port = server.server_address[1]
+    attach_access_log(server)  # the tailnet access log, on a registered port only (server.ACCESS_LOG_APPS)
     query = f"?token={token}" if token and not args.tailnet_origin else ""
     specific = host not in ("0.0.0.0", "::", "", "127.0.0.1", "localhost", "::1")
     url = f"http://{host if specific else '127.0.0.1'}:{port}/{query}"
