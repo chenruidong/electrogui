@@ -2,10 +2,12 @@
 
 Access log: ``cli.run`` attaches ``accesslog.py``, a copy of apps-dashboard's module (keep it verbatim; the
 dashboard flags an old copy), once the server has bound its port and only on a registered one
-(``ACCESS_LOG_APPS``: 8778 is the LaunchAgent's "electrogui", 8765 result-viewer's on-demand "electro_gui";
-``--port 0``, any other port and the tests log nothing).  One line per request under
-``~/Library/Logs/tailnet-access/<app id>/`` with the route class from ``ROUTES`` (never the path or query),
-the Tailscale login and device address; only on a Mac whose apps-dashboard has made that directory.
+(``ACCESS_LOG_APPS``: 8778 is the iMac's LaunchAgent "electrogui", 8790 the Mac mini's (com.rc.electro-gui, same
+registry id), 8765 result-viewer's on-demand "electro_gui"; ``--port 0``, any other port and the tests log nothing).
+One line per request under ``~/Library/Logs/tailnet-access/<app id>/`` with the route class from ``ROUTES`` (never
+the path or query), the Tailscale login and device address; only on a Mac whose apps-dashboard has made that directory.
+Every port in the table logs on every Mac, so a dev copy on another Mac's port (8778 on the Mac mini) would log as
+the app: start it with ``TAILNET_ACCESS_LOG=off`` (the 8778 preview in ``.claude/launch.json`` does).
 """
 from __future__ import annotations
 
@@ -422,7 +424,9 @@ def code_changed_since(started=None):
     return changed
 _COMPRESSIBLE = ("application/json", "text/", "application/javascript", "image/svg+xml")
 # The access log's app id for each registered port (the dashboard's registry ids); any other port logs nothing.
-ACCESS_LOG_APPS = {8778: "electrogui", 8765: "electro_gui"}
+# 8778 is the iMac's LaunchAgent, 8790 the Mac mini's (com.rc.electro-gui; registry id electrogui; on the iMac 8790 is
+# the dashboard's own port), 8765 result-viewer's on-demand electro_gui.
+ACCESS_LOG_APPS = {8778: "electrogui", 8790: "electrogui", 8765: "electro_gui"}
 # Route classes of the access log (exact paths, or prefixes ending in *; first match wins), never the path itself.
 # /api/jobs/<id> is what the page polls while a job runs (every 0.7 s); its /export is told apart in _AccessLog.
 ROUTES = [("/", "page"), ("/index.html", "page"), ("/classic/", "page.classic"), ("/classic/index.html", "page.classic"),

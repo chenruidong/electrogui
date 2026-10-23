@@ -57,13 +57,13 @@ class AccessLogTests(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def test_only_the_registered_ports_log_under_their_registry_ids(self):
-        self.assertEqual(ACCESS_LOG_APPS, {8778: "electrogui", 8765: "electro_gui"})
+        self.assertEqual(ACCESS_LOG_APPS, {8778: "electrogui", 8790: "electrogui", 8765: "electro_gui"})
         for port, app_id in ACCESS_LOG_APPS.items():
             server = _BoundServer(port)
             self.assertEqual(attach_access_log(server), app_id)
             log = server.RequestHandlerClass._access_log
             self.assertEqual((log.app_id, log.root), (app_id, self.root))
-        for port in (8790, 8798, 43210):
+        for port in (8797, 8798, 43210):  # the Mac mini's dashboard, grid-planner, an unregistered port
             server = _BoundServer(port)
             self.assertIsNone(attach_access_log(server))
             self.assertFalse(hasattr(server.RequestHandlerClass, "_access_log"))
@@ -74,7 +74,7 @@ class AccessLogTests(unittest.TestCase):
 
     def test_cli_attaches_by_the_port_it_bound_not_the_one_asked_for(self):
         os.environ.pop(cli.RESTART_ENV, None)
-        for bound, logged in ((8778, "electrogui"), (8765, "electro_gui"), (43210, None)):
+        for bound, logged in ((8778, "electrogui"), (8790, "electrogui"), (8765, "electro_gui"), (43210, None)):
             server = _BoundServer(bound)
             args = cli.add_arguments(argparse.ArgumentParser()).parse_args(
                 ["--data-root", str(self.root), "--cache-dir", str(self.root), "--findings-dir", str(self.root / "f"),
