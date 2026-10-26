@@ -718,7 +718,7 @@
       slot += 1;
       const top = Y(g.rate.mean), e = (M.errMul || 1) * (g.rate.sem || 0);
       const light = g.dash ? 0.45 : 0.88;
-      out.push(`<rect x="${f(cx - bw / 2)}" y="${f(top)}" width="${f(bw)}" height="${f(mt + h - top)}" rx="2" fill="${g.color}" opacity="${light}"${g.dash ? ` stroke="${g.color}" stroke-dasharray="${g.dash}" stroke-width="1.4"` : ''}>${screen ? `<title>${esc(labelOf(g))}: ${C.fmtNum(g.rate.mean, 1)} spikes/s, n = ${g.rate.n}</title>` : ''}</rect>`);
+      out.push(`<rect x="${f(cx - bw / 2)}" y="${f(top)}" width="${f(bw)}" height="${f(mt + h - top)}" rx="2" fill="${g.color}" opacity="${light}"${g.dash ? ` stroke="${g.color}" stroke-dasharray="${g.dash}" stroke-width="1.4"` : ''}${screen ? `><title>${esc(labelOf(g))}: ${C.fmtNum(g.rate.mean, 1)} spikes/s, n = ${g.rate.n}</title></rect>` : '/>'}`);
       if (g.rate.n > 1) out.push(`<path d="M${f(cx)} ${f(Y(g.rate.mean + e))}V${f(Y(Math.max(0, g.rate.mean - e)))}M${f(cx - 4)} ${f(Y(g.rate.mean + e))}h8M${f(cx - 4)} ${f(Y(Math.max(0, g.rate.mean - e)))}h8" stroke="${ink}" stroke-width="1.2" fill="none"/>`);
       out.push(`<text x="${f(cx)}" y="${f(mt + h - 4)}" text-anchor="middle" font-size="9.5" fill="${light > 0.6 ? '#fff' : ink}">${g.rate.n}</text>`);
       const lines = labelOf(g).split(' · ');
@@ -2467,7 +2467,7 @@
       }
       const unitWord = D.probeShown && D.probeShown.unit === 'event' ? 'events' : 'trials';
       out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 17)}" font-size="10.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">○ start${zeroIdx >= 0 ? ' · ● t = 0' : ''}${refTimes.map(r => ` · ${SHAPE_GLYPH[shapeFor(r, refTimes)]} ${C.fmtNum(r)} s`).join('')}${markers.length ? ' · ◆ marker median' : ''}</text>`);
-      if (cloud.length && (opts.export || layout.cloudOutside)) out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 31)}" font-size="10.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${opts.export ? `small shapes: single ${unitWord}, centred on the large ones` : ''}${layout.cloudOutside ? `${opts.export ? ' · ' : ''}${layout.cloudOutside} ${unitWord} beyond the frame` : ''}</text>`);
+      if (cloud.length && (opts.export || layout.cloudOutside)) out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 31)}" font-size="10.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${opts.export ? `small shapes: single ${unitWord}, centred on the large ones${layout.cloudOutside ? ` · ${layout.cloudOutside} beyond the frame` : ''}` : `${layout.cloudOutside} ${unitWord} beyond the frame`}</text>`);
       else if (S.cloud && D.probePending) out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 31)}" font-size="10.5" fill="${muted}">loading single ${S.weight === 'trial' ? 'trials' : 'events'}…</text>`);
       layout.traj = {box: traj, screen, project, three, cloud: cloudScreen};
       if (!opts.export) out.push(`<rect class="hit" data-kind="traj" x="${f(traj.x)}" y="${f(traj.y)}" width="${f(traj.w)}" height="${f(traj.h)}" fill="transparent"${three ? ' style="touch-action:none;cursor:grab"' : ''}/>`);
