@@ -18,30 +18,31 @@
 <body>
 <div class="app" id="app">
   <header class="top">
-    <a class="brand" href="/" title="electro_gui">
+    <a class="brand" href="/" title="electro_gui" aria-label="electro_gui">
       <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M5 19h5l3-10 4 16 3-9h7"/></svg>
-      <span>electro</span>
     </a>
     <nav class="modes" id="modes" aria-label="Workspace">
-      <button type="button" data-mode="raster" title="One unit: raster over PSTH">Rasters</button>
-      <button type="button" data-mode="population" title="Many units: heatmap, components and trajectories">Population</button>
+      <button type="button" data-mode="raster" data-action="mode.raster">Rasters</button>
+      <button type="button" data-mode="population" data-action="mode.population">Population</button>
     </nav>
     <div class="pickers">
+      <div class="ctx" role="group" aria-label="View">
       <label class="pick session-pick" title="Session"><select id="sessionSelect" aria-label="Session"><option>Loading…</option></select></label>
       <button class="pick roster-btn" id="rosterBtn" type="button" data-only="population" aria-haspopup="dialog" title="Choose the neurons in the population"><strong id="rosterLabel">no neurons</strong><span class="pick-label">▾</span></button>
       <div class="unit-pick" data-only="raster">
         <button class="icon-btn" id="prevUnit" type="button" aria-label="Previous unit" title="Previous unit (←)">‹</button>
-        <button class="pick unit-btn" id="unitBtn" type="button" aria-haspopup="dialog"><span class="pick-label">unit</span><strong id="unitLabel">—</strong></button>
+        <button class="pick unit-btn" id="unitBtn" type="button" aria-haspopup="dialog"><span class="vh">unit </span><strong id="unitLabel">—</strong></button>
         <button class="icon-btn" id="nextUnit" type="button" aria-label="Next unit" title="Next unit (→)">›</button>
       </div>
-      <button class="pick align-btn" id="alignBtn" type="button" aria-haspopup="dialog"><span class="pick-label">aligned to</span><strong id="alignLabel">—</strong></button>
+      <button class="pick align-btn" id="alignBtn" type="button" aria-haspopup="dialog"><span class="vh">aligned to </span><strong id="alignLabel">—</strong></button>
+      </div>
     </div>
     <div class="actions">
-      <button class="ghost" id="saveBtn" type="button" aria-haspopup="dialog" title="Save this figure as a finding, with notes"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l1.8 5.1 5.4.2-4.2 3.3 1.5 5.2L10 13.7l-4.5 3.1 1.5-5.2-4.2-3.3 5.4-.2z"/></svg><span>Save</span></button>
-      <button class="ghost" id="viewsBtn" type="button" aria-haspopup="dialog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12v14l-6-4-6 4z"/></svg><span>Views</span></button>
-      <button class="ghost" id="exportBtn" type="button" aria-haspopup="dialog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M6 9l4 4 4-4M4 16h12"/></svg><span>Export</span></button>
-      <button class="ghost" id="rvBtn" type="button" data-only="raster" title="Open this unit in Result Viewer"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 3h6v6M17 3l-7.5 7.5M14.5 12v4.5h-11v-11H8"/></svg><span>Result viewer</span></button>
-      <button class="icon-btn" id="menuBtn" type="button" aria-label="More" aria-haspopup="dialog">⋯</button>
+      <button class="ghost" id="saveBtn" type="button" data-action="finding.save" aria-haspopup="dialog" title="Save this figure as a finding, with notes"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l1.8 5.1 5.4.2-4.2 3.3 1.5 5.2L10 13.7l-4.5 3.1 1.5-5.2-4.2-3.3 5.4-.2z"/></svg><span>Save</span></button>
+      <button class="ghost" id="viewsBtn" type="button" data-action="views.open" aria-haspopup="dialog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3h12v14l-6-4-6 4z"/></svg><span>Views</span></button>
+      <button class="ghost" id="exportBtn" type="button" data-action="export.open" aria-haspopup="dialog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M6 9l4 4 4-4M4 16h12"/></svg><span>Export</span></button>
+      <button class="ghost" id="rvBtn" type="button" data-action="resultviewer.open" data-only="raster" title="Open this unit in Result Viewer"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 3h6v6M17 3l-7.5 7.5M14.5 12v4.5h-11v-11H8"/></svg><span>Result viewer</span></button>
+      <button class="icon-btn" id="menuBtn" type="button" data-action="menu.open" aria-label="More" aria-haspopup="dialog">⋯</button>
     </div>
   </header>
   <div class="busy" id="busy" hidden><span></span></div>
@@ -59,10 +60,10 @@
       </section>
 
       <section class="section" data-section="filter">
-        <header><h2>Filter</h2><button class="link" type="button" id="clearFilters">Clear</button></header>
+        <header><h2>Filter <span class="cnt" id="filterCnt"></span></h2><button class="link" type="button" id="clearFilters">Clear</button></header>
         <div id="quickFilters" class="quick-filters"></div>
         <div id="otherFilters" class="chip-row"></div>
-        <button class="add" type="button" id="addFilter">+ Filter on any field</button>
+        <button class="add" type="button" id="addFilter">+ Filter</button>
       </section>
 
       <section class="section" data-section="group">
@@ -74,29 +75,28 @@
           <label id="qbinsField" hidden><span>Number bins</span><select id="qbins"><option value="2">2 (median split)</option><option value="3">3 (terciles)</option><option value="4">4 (quartiles)</option><option value="5">5 (quintiles)</option></select></label>
         </div>
         <div class="presets" id="groupPresets"></div>
-        <div class="sort-row">
-          <label><span id="sortLabel">Sort rows by</span><select id="sortBy"></select></label>
+        <div class="sort-row" data-only="raster">
+          <label><span id="sortLabel">Sort</span><select id="sortBy"></select></label>
           <button class="icon-btn dir" id="sortDir" type="button" data-only="raster" title="Reverse order" aria-label="Reverse sort order">↑</button>
         </div>
-        <label class="switch" data-only="raster"><input type="checkbox" id="grouped" checked><span></span>Keep groups together in the raster</label>
-        <p class="note" data-only="population">By default every group enters one joint fit. Use Fit groups to train on a subset. Hiding a group in the legend only changes the display.</p>
+        <div class="seg-field rows-field" data-only="raster"><span>Rows</span><div class="seg" id="groupedSeg"><button type="button" data-grouped="1">grouped</button><button type="button" data-grouped="0">mixed</button></div></div>
       </section>
 
       <section class="section" data-section="markers">
         <header><h2>Markers</h2></header>
         <div id="markerList" class="marker-list"></div>
+        <div id="refList" class="chip-row ref-chips"></div>
         <div class="presets" id="markerPresets"></div>
-        <button class="add" type="button" id="addMarker">+ Marker from any event</button>
-        <div class="refs"><span class="mini-label">Reference lines</span><div id="refList" class="chip-row"></div>
-          <form id="refForm" class="ref-form"><input id="refInput" type="number" step="0.05" placeholder="t (s)" aria-label="Reference line time"><button type="submit" class="small">Add</button></form></div>
+        <div class="add-row">
+          <button class="add" type="button" id="addMarker">+ Marker</button>
+          <form id="refForm" class="add line-add"><label for="refInput">+ Line at</label><input id="refInput" type="number" step="0.05" aria-label="Reference line time (s)"><span>s</span></form>
+        </div>
         <div class="cloud" data-only="population">
-          <p class="note">t = 0 (●) and each reference line (■ ▲ ▼ ✚, in time order) are marked on every trajectory.</p>
           <label class="switch"><input type="checkbox" id="cloudOn"><span></span>Show single trials at those times</label>
           <div class="knob cloud-knob" id="cloudKnob"><div class="knob-head"><span>Trial cloud opacity</span><output id="cloudAlphaOut"></output></div><input type="range" id="cloudAlpha" min="5" max="100" step="5" aria-label="Trial cloud opacity"></div>
           <label class="switch" id="cloudZeroWrap"><input type="checkbox" id="cloudZero" checked><span></span>Include t = 0 in the cloud</label>
           <div class="seg-field cloud-fit" id="cloudFitWrap"><span>Fit axes to</span><div class="seg" data-key="cloudFit"><button data-v="traj">trajectories</button><button data-v="cloud">trial cloud</button></div></div>
         </div>
-        <label class="switch"><input type="checkbox" id="showMedians" checked><span></span>Median marker lines on the PSTH</label>
       </section>
 
       <section class="section" data-section="display">
@@ -104,29 +104,23 @@
         <div class="model" data-only="population">
           <div class="seg-field"><span>Method</span><div class="seg" data-key="method"><button data-v="pca">PCA</button><button data-v="ica">ICA</button><button data-v="fa">FA</button><button data-v="tdr" title="Targeted dimensionality reduction: one axis per task factor">TDR</button></div></div>
           <div class="knob" data-method="tdr"><div class="knob-head"><span>TDR factors</span></div><button class="pick" id="tdrBtn" type="button" aria-haspopup="dialog" title="Choose the TDR factors and how world is coded"><strong id="tdrLabel"></strong><span class="pick-label">▾</span></button>
-            <div class="knob-head" style="margin-top:8px"><span>TDR window <small>(blank = display window)</small></span><span class="nums"><input type="number" id="tdrLoN" step="0.1" aria-label="TDR window start (s)"><i>to</i><input type="number" id="tdrHiN" step="0.1" aria-label="TDR window end (s)"><i>s</i></span></div></div>
-          <div class="knob"><button class="pick" id="fitGroupsBtn" type="button">Fit groups: all</button></div>
-          <label class="field">Training trials <select id="fitSplit"><option value="all">All selected trials</option><option value="odd">Odd trial IDs → display even</option><option value="even">Even trial IDs → display odd</option></select></label>
-          <p class="help">Split projections are exploratory; neighboring trials may be dependent. Hidden groups still take part unless excluded under Fit groups.</p>
+            <div class="knob-head" style="margin-top:8px"><span>TDR window</span><span class="nums"><input type="number" id="tdrLoN" step="0.1" aria-label="TDR window start (s)"><i>to</i><input type="number" id="tdrHiN" step="0.1" aria-label="TDR window end (s)"><i>s</i></span></div></div>
+          <div class="seg-field fit-on"><span>Fit on</span><div><button class="pick" id="fitGroupsBtn" type="button" aria-haspopup="dialog" aria-label="Groups the basis is fitted on"><strong id="fitGroupsLabel">all groups</strong><span class="pick-label">▾</span></button><select id="fitSplit" aria-label="Trials the basis is fitted on"><option value="all">all trials</option><option value="odd">odd → show even</option><option value="even">even → show odd</option></select></div></div>
           <div class="seg-field"><span>Scaling</span><div class="seg" data-key="scaling"><button data-v="zscore">z-score</button><button data-v="center">center</button></div></div>
-          <div class="knob" data-not-method="tdr"><div class="knob-head"><span>Components <small>(type up to 50)</small></span><span class="nums"><input type="number" id="ncompN" min="2" max="50" step="1" aria-label="Number of components"></span></div><input type="range" id="ncomp" min="2" max="10" step="1" aria-label="Number of components, 2 to 10"></div>
+          <div class="seg-field" data-not-method="tdr"><span>Components</span><span class="stepper"><button type="button" id="ncompDown" aria-label="Fewer components">−</button><input type="number" id="ncompN" min="2" max="50" step="1" aria-label="Number of components, 2 to 50"><button type="button" id="ncompUp" aria-label="More components">+</button></span></div>
           <div class="seg-field"><span>Trajectory</span><div class="seg" data-key="dims"><button data-v="2">2D</button><button data-v="3">3D</button></div></div>
-          <div class="seg-field"><span>Heatmap</span><div class="seg" data-key="heatNorm"><button data-v="z">z-score</button><button data-v="peak">peak = 1</button></div></div>
         </div>
-        <div class="knob"><div class="knob-head"><span>Window</span><span class="nums"><input type="number" id="winLoN" step="0.1" aria-label="Window start (s)"><i>to</i><input type="number" id="winHiN" step="0.1" aria-label="Window end (s)"><i>s</i></span></div>
-          <div class="dual"><input type="range" id="winLo" min="-5" max="-0.1" step="0.1" aria-label="Window start"><input type="range" id="winHi" min="0.1" max="5" step="0.1" aria-label="Window end"></div></div>
-        <div class="knob"><div class="knob-head"><span>Count window <small>(or drag on the PSTH)</small></span><span class="nums"><input type="number" id="cwLoN" step="0.05" aria-label="Count window start (s)"><i>to</i><input type="number" id="cwHiN" step="0.05" aria-label="Count window end (s)"><i>s</i></span></div>
-          <div class="dual"><input type="range" id="cwLo" step="0.05" aria-label="Count window start"><input type="range" id="cwHi" step="0.05" aria-label="Count window end"></div></div>
+        <div class="knob ruler-knob"><div class="knob-head"><span>Window <span class="cnt" id="winCnt"></span></span><span class="nums"><input type="number" id="winLoN" step="0.1" aria-label="Window start (s)"><i>to</i><input type="number" id="winHiN" step="0.1" aria-label="Window end (s)"><i>s</i></span></div>
+          <div class="ruler" id="ruler" aria-hidden="true"><div class="r-win" id="rWin"></div><div class="r-cw" id="rCw"></div><div class="r-zero" id="rZero"></div></div>
+          <div class="r-ticks" aria-hidden="true"><span id="rLo"></span><span>0</span><span id="rHi"></span></div>
+          <div class="knob-head"><span class="cwlab"><i aria-hidden="true"></i>Count</span><span class="nums cw"><input type="number" id="cwLoN" step="0.05" aria-label="Count window start (s)"><i>to</i><input type="number" id="cwHiN" step="0.05" aria-label="Count window end (s)"><i>s</i></span></div></div>
         <div class="knob"><div class="knob-head"><span>Bin width</span><output id="binOut"></output></div><input type="range" id="bin" min="5" max="200" step="5" aria-label="Bin width (ms)"></div>
         <div class="knob"><div class="knob-head"><span>Smoothing σ</span><output id="sigmaOut"></output></div><input type="range" id="sigma" min="0" max="100" step="5" aria-label="Gaussian smoothing sigma (ms)"></div>
         <div class="seg-field" data-only="raster"><span>Error band</span><div class="seg" data-key="err"><button data-v="sem">SEM</button><button data-v="ci">95% CI</button><button data-v="none">None</button></div></div>
         <div class="seg-field"><span>Average over</span><div class="seg" data-key="weight"><button data-v="event">events</button><button data-v="trial">trials</button></div></div>
-        <div class="seg-field"><span>Trials</span><div class="seg" data-key="policy"><button data-v="verified_stable">stable for unit</button><button data-v="all_complete">all complete</button></div></div>
+        <div class="seg-field"><span>Trials</span><div class="seg" data-key="policy"><button data-v="verified_stable">stable<small class="cnt" data-cnt="verified_stable"></small></button><button data-v="all_complete">all complete<small class="cnt" data-cnt="all_complete"></small></button></div></div>
         <div class="seg-field" data-only="raster"><span>Raster ticks</span><div class="seg" data-key="tick"><button data-v="line">lines</button><button data-v="dot">dots</button></div></div>
-        <div class="knob" data-only="raster"><div class="knob-head"><span>Raster height</span><output id="rasterHOut"></output></div><input type="range" id="rasterH" min="80" max="700" step="10" aria-label="Raster height"></div>
-        <div class="seg-field" data-only="raster"><span>Y axis</span><div class="ylock"><label class="switch"><input type="checkbox" id="ylock"><span></span>lock at</label><input type="number" id="ymax" min="1" step="1" aria-label="Y maximum (spikes/s)"><small>spikes/s</small></div></div>
-        <label class="switch" data-only="raster"><input type="checkbox" id="showBars" checked><span></span>Window-rate bars beside the plot</label>
-        <label class="switch" data-only="raster"><input type="checkbox" id="showRowRate" checked><span></span>Rate by row beside the raster</label>
+        <div class="seg-field" data-only="raster"><span>Y max</span><span class="nums ymax"><input type="number" id="ymax" min="1" step="1" placeholder="auto" aria-label="Y maximum (spikes/s); empty for auto"></span></div>
       </section>
     </aside>
 
@@ -134,44 +128,53 @@
       <div class="finding-bar" id="findingBar" role="status" aria-live="polite" hidden></div>
       <div class="fig-card">
         <div class="fig-head">
-          <div><h1 id="title">Loading…</h1><p id="subtitle"></p></div>
+          <h1 id="title">Loading…</h1>
           <div class="support" id="support"></div>
         </div>
-        <div class="legend" id="legend" role="group" aria-label="Groups (tap to hide or show)"></div>
+        <div class="legend" id="legend" role="group" aria-label="Groups"></div>
         <div class="pop-toolbar" id="popToolbar" data-only="population">
-          <div class="tb-axes"><label>X <select id="axX" aria-label="Trajectory x component"></select></label><label>Y <select id="axY" aria-label="Trajectory y component"></select></label><label id="axZWrap">Z <select id="axZ" aria-label="Trajectory z component"></select></label></div>
           <div class="tb-cursor"><button class="icon-btn play" id="playBtn" type="button" aria-label="Play through time">▶</button><input type="range" id="cursor" min="0" max="0" value="0" aria-label="Time cursor"><output id="cursorOut">t —</output></div>
-          <label class="tb-heat">A · heatmap <select id="heatGroup" aria-label="Group shown in the heatmap"></select></label>
-          <label class="tb-heat">Subtract B <select id="heatCompare" aria-label="Group to subtract from heatmap A"></select></label>
         </div>
-        <div class="figure-wrap"><div class="figure" id="figure"></div><div class="bars" id="bars"></div></div>
+        <div class="figure-wrap"><div class="figure" id="figure"></div><div class="bars" id="bars"></div>
+          <div class="fig-overlay" id="figOverlay" data-only="population" hidden>
+            <label class="ov-axis" id="ovX"><span class="ax-letter">X</span><select class="axsel" id="axX" aria-label="Trajectory x component"></select></label>
+            <label class="ov-axis" id="ovY"><span class="ax-letter">Y</span><select class="axsel" id="axY" aria-label="Trajectory y component"></select></label>
+            <label class="ov-axis" id="axZWrap"><span class="ax-letter">Z</span><select class="axsel" id="axZ" aria-label="Trajectory z component"></select></label>
+            <div class="heat-ctl" id="heatCtl">
+              <select class="axsel" id="heatGroup" aria-label="Group shown in the heatmap"></select>
+              <span class="minus" aria-hidden="true">−</span>
+              <select class="axsel" id="heatCompare" aria-label="Group subtracted from the heatmap"></select>
+              <div class="seg" data-key="heatNorm" aria-label="Heatmap scaling"><button data-v="z">z-score</button><button data-v="peak">peak = 1</button></div>
+              <select class="axsel" id="heatSort" aria-label="Order of neurons in the heatmap"></select>
+            </div>
+          </div>
+        </div>
         <div class="empty" id="empty" hidden></div>
-        <div class="bt-split" id="btSplit" data-only="raster" role="separator" aria-orientation="horizontal" aria-label="Raster height: drag, or arrow keys; double-click or Enter to fit the window" tabindex="0"><span></span></div>
+        <div class="bt-divider" data-only="raster">
+          <div class="bt-split" id="btSplit" role="separator" aria-orientation="horizontal" aria-label="Raster height: drag, or arrow keys; double-click or Enter to fit the window" tabindex="0"><span></span></div>
+          <button class="yoke-link" id="btYoke" type="button" aria-pressed="false" aria-label="Yoke rasters to the trials shown below" title="Yoke rasters to these trials: at least 20, centred on the pinned trial"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-1 1"/><path d="M11.5 8.5a3 3 0 0 0-4.2 0L4.7 11.1a3 3 0 0 0 4.2 4.2l1-1"/></svg><span class="cnt" id="yokeCnt"></span></button>
+        </div>
         <section class="behavior" id="behavior" data-only="raster" aria-label="Behavior timeline">
           <header class="bt-head">
             <button class="bt-toggle" id="btToggle" type="button" aria-expanded="true" aria-controls="btBody"><span class="chev" aria-hidden="true">▾</span><h2>Behavior</h2></button>
+            <div class="bt-legend" aria-hidden="true">
+              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-touch"/></svg>touched</span>
+              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/></svg>passed</span>
+              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/><path d="M3.8 3.8l4.4 4.4M3.8 8.2l4.4-4.4" class="g-x"/></svg>incorrect</span>
+              <span><svg viewBox="0 0 22 12"><rect x="2" y="3.5" width="18" height="5" class="g-avoid"/></svg>bar</span>
+            </div>
             <div class="bt-pin" id="btPin"></div>
             <div class="bt-zoom">
-              <label class="switch bt-yoke" title="Show only these trials in the rasters: at least 20 (or every trial there is), centred on the pinned trial"><input type="checkbox" id="btYoke"><span></span>yoke to rasters</label>
               <button class="icon-btn sm" id="btPrev" type="button" aria-label="Earlier trials" title="Earlier trials">‹</button>
               <label class="bt-n" title="Trials shown (pinch or ctrl-scroll on the timeline also zooms; drag or swipe pans)"><input type="range" id="btN" min="3" max="400" step="1" aria-label="Trials shown"><output id="btNOut"></output></label>
               <button class="icon-btn sm" id="btNext" type="button" aria-label="Later trials" title="Later trials">›</button>
             </div>
           </header>
           <div class="bt-body" id="btBody">
-            <div class="bt-legend" aria-hidden="true">
-              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-touch"/></svg>touched</span>
-              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/></svg>passed</span>
-              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/><path d="M3.8 3.8l4.4 4.4M3.8 8.2l4.4-4.4" class="g-x"/></svg>incorrect</span>
-              <span><svg viewBox="0 0 22 12"><rect x="2" y="3.5" width="18" height="5" class="g-avoid"/></svg>bar</span>
-              <span class="bt-legend-note">outline = displayed colour · line = time on screen · shading = world</span>
-              <span class="bt-worlds"><i style="--c:#2b8a3e"></i>PP<i style="--c:#6741d9"></i>PM<i style="--c:#e03131"></i>MM</span>
-            </div>
             <div class="bt-fig" id="btFig"></div>
           </div>
         </section>
       </div>
-      <p class="foot" id="foot"></p>
     </main>
   </div>
 
@@ -189,6 +192,7 @@
   <div class="tooltip" id="tooltip" hidden></div>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </div>
+<script type="application/json" id="figure-state">{}</script>
 <script src="/core.js"></script>
 <script src="/explorer.js"></script>
 </body>

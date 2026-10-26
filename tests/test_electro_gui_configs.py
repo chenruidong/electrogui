@@ -292,8 +292,8 @@ class ConfigHooksInPageTests(unittest.TestCase):
         self.assertIn('id="cfgFile"', html)
         self.assertRegex(html, r'<input type="file" id="cfgFile" accept="\.json,application/json" hidden')
         # The section sits between Templates and Findings, and applying goes through sanitize() via applyView.
-        self.assertLess(js.index("Templates · keep the current unit"), js.index("configsHtml(cfg) +"))
-        self.assertLess(js.index("configsHtml(cfg) +"), js.index("Findings · reopen and check the numbers"))
+        self.assertLess(js.index('<div class="pop-group">Templates</div>'), js.index("configsHtml(cfg) +"))
+        self.assertLess(js.index("configsHtml(cfg) +"), js.index('<div class="pop-group">Findings</div>'))
         self.assertRegex(js, r"await applyView\(\{state\}\)")
 
     def test_opening_a_config_file_says_so_before_the_file_is_read(self):

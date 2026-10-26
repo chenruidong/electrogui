@@ -441,7 +441,7 @@ class FindingHooksInPageTests(unittest.TestCase):
         for needle in ("/api/findings", "function figureReady()", "function evidence()", "async function captureFinding()",
                        "C.compareEvidence(o.finding.evidence, evidence())", "C.stateChanges(o.finding.state, S)",
                        "fitStateToSession(summary);", "openFindingLink", "data-savefinding", "Your text is kept.",
-                       "Findings · reopen and check the numbers", "function showSavedFinding(saved)", "saved.can_reveal",
+                       '<div class="pop-group">Findings</div>', "function showSavedFinding(saved)", "saved.can_reveal",
                        "/reveal`", "id=\"fCopy\">Copy path", "Show in Finder"):
             self.assertIn(needle, js, needle)
         # Once saved, the dialog stays open to show the file instead of closing on a toast.
