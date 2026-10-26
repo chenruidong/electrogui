@@ -79,7 +79,6 @@
           <button class="icon-btn dir" id="sortDir" type="button" data-only="raster" title="Reverse order" aria-label="Reverse sort order">↑</button>
         </div>
         <label class="switch" data-only="raster"><input type="checkbox" id="grouped" checked><span></span>Keep groups together in the raster</label>
-        <p class="note" data-only="population">By default every group enters one joint fit. Use Fit groups to train on a subset. Hiding a group in the legend only changes the display.</p>
       </section>
 
       <section class="section" data-section="markers">
@@ -90,7 +89,6 @@
         <div class="refs"><span class="mini-label">Reference lines</span><div id="refList" class="chip-row"></div>
           <form id="refForm" class="ref-form"><input id="refInput" type="number" step="0.05" placeholder="t (s)" aria-label="Reference line time"><button type="submit" class="small">Add</button></form></div>
         <div class="cloud" data-only="population">
-          <p class="note">t = 0 (●) and each reference line (■ ▲ ▼ ✚, in time order) are marked on every trajectory.</p>
           <label class="switch"><input type="checkbox" id="cloudOn"><span></span>Show single trials at those times</label>
           <div class="knob cloud-knob" id="cloudKnob"><div class="knob-head"><span>Trial cloud opacity</span><output id="cloudAlphaOut"></output></div><input type="range" id="cloudAlpha" min="5" max="100" step="5" aria-label="Trial cloud opacity"></div>
           <label class="switch" id="cloudZeroWrap"><input type="checkbox" id="cloudZero" checked><span></span>Include t = 0 in the cloud</label>
@@ -107,7 +105,6 @@
             <div class="knob-head" style="margin-top:8px"><span>TDR window <small>(blank = display window)</small></span><span class="nums"><input type="number" id="tdrLoN" step="0.1" aria-label="TDR window start (s)"><i>to</i><input type="number" id="tdrHiN" step="0.1" aria-label="TDR window end (s)"><i>s</i></span></div></div>
           <div class="knob"><button class="pick" id="fitGroupsBtn" type="button">Fit groups: all</button></div>
           <label class="field">Training trials <select id="fitSplit"><option value="all">All selected trials</option><option value="odd">Odd trial IDs → display even</option><option value="even">Even trial IDs → display odd</option></select></label>
-          <p class="help">Split projections are exploratory; neighboring trials may be dependent. Hidden groups still take part unless excluded under Fit groups.</p>
           <div class="seg-field"><span>Scaling</span><div class="seg" data-key="scaling"><button data-v="zscore">z-score</button><button data-v="center">center</button></div></div>
           <div class="knob" data-not-method="tdr"><div class="knob-head"><span>Components <small>(type up to 50)</small></span><span class="nums"><input type="number" id="ncompN" min="2" max="50" step="1" aria-label="Number of components"></span></div><input type="range" id="ncomp" min="2" max="10" step="1" aria-label="Number of components, 2 to 10"></div>
           <div class="seg-field"><span>Trajectory</span><div class="seg" data-key="dims"><button data-v="2">2D</button><button data-v="3">3D</button></div></div>
@@ -134,7 +131,7 @@
       <div class="finding-bar" id="findingBar" role="status" aria-live="polite" hidden></div>
       <div class="fig-card">
         <div class="fig-head">
-          <div><h1 id="title">Loading…</h1><p id="subtitle"></p></div>
+          <h1 id="title">Loading…</h1>
           <div class="support" id="support"></div>
         </div>
         <div class="legend" id="legend" role="group" aria-label="Groups (tap to hide or show)"></div>
@@ -150,6 +147,12 @@
         <section class="behavior" id="behavior" data-only="raster" aria-label="Behavior timeline">
           <header class="bt-head">
             <button class="bt-toggle" id="btToggle" type="button" aria-expanded="true" aria-controls="btBody"><span class="chev" aria-hidden="true">▾</span><h2>Behavior</h2></button>
+            <div class="bt-legend" aria-hidden="true">
+              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-touch"/></svg>touched</span>
+              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/></svg>passed</span>
+              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/><path d="M3.8 3.8l4.4 4.4M3.8 8.2l4.4-4.4" class="g-x"/></svg>incorrect</span>
+              <span><svg viewBox="0 0 22 12"><rect x="2" y="3.5" width="18" height="5" class="g-avoid"/></svg>bar</span>
+            </div>
             <div class="bt-pin" id="btPin"></div>
             <div class="bt-zoom">
               <label class="switch bt-yoke" title="Show only these trials in the rasters: at least 20 (or every trial there is), centred on the pinned trial"><input type="checkbox" id="btYoke"><span></span>yoke to rasters</label>
@@ -159,19 +162,10 @@
             </div>
           </header>
           <div class="bt-body" id="btBody">
-            <div class="bt-legend" aria-hidden="true">
-              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-touch"/></svg>touched</span>
-              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/></svg>passed</span>
-              <span><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" class="g-avoid"/><path d="M3.8 3.8l4.4 4.4M3.8 8.2l4.4-4.4" class="g-x"/></svg>incorrect</span>
-              <span><svg viewBox="0 0 22 12"><rect x="2" y="3.5" width="18" height="5" class="g-avoid"/></svg>bar</span>
-              <span class="bt-legend-note">outline = displayed colour · line = time on screen · shading = world</span>
-              <span class="bt-worlds"><i style="--c:#2b8a3e"></i>PP<i style="--c:#6741d9"></i>PM<i style="--c:#e03131"></i>MM</span>
-            </div>
             <div class="bt-fig" id="btFig"></div>
           </div>
         </section>
       </div>
-      <p class="foot" id="foot"></p>
     </main>
   </div>
 
@@ -189,6 +183,7 @@
   <div class="tooltip" id="tooltip" hidden></div>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 </div>
+<script type="application/json" id="figure-state">{}</script>
 <script src="/core.js"></script>
 <script src="/explorer.js"></script>
 </body>

@@ -1,0 +1,48 @@
+"""The interface explains itself through its layout, not through captions.
+
+Taglines, helper paragraphs and secondary labels were cut from the explorer; where a screen needed
+one, its layout changed instead (electro_gui/DESIGN.md, "Quiet interface").  These checks keep the
+cut text from drifting back: they read the static page and script, so they need no session data.
+Empty and error states keep their one-line reasons, and exports keep their full captions.
+"""
+import re
+import unittest
+from pathlib import Path
+
+STATIC = Path(__file__).resolve().parents[1] / "electro_gui" / "static"
+HTML = (STATIC / "index.html").read_text()
+JS = (STATIC / "explorer.js").read_text()
+
+
+class QuietInterfaceTests(unittest.TestCase):
+    def test_page_has_no_caption_elements(self):
+        for cls in ("note", "help", "foot", "lg-hint", "bt-hint", "bt-legend-note", "bt-worlds"):
+            self.assertIsNone(re.search(rf'class="(?:[^"]* )?{cls}(?: [^"]*)?"', HTML), cls)
+        self.assertNotIn('id="subtitle"', HTML)
+
+    def test_script_draws_no_captions_on_screen(self):
+        for needle in ('class="lg-hint"', 'class="bt-hint"', "$('foot')", "$('subtitle')",
+                       "scroll for more", "drag to rotate", "your judgement, not a test", "separated by commas"):
+            self.assertFalse(needle in JS, needle)
+
+    def test_popover_notes_are_one_line_statuses(self):
+        # A pop-note may say what is empty or what failed; it may not explain the interface.
+        for m in re.finditer(r'class="pop-note"[^>]*>([^<`$]*)', JS):
+            self.assertLessEqual(len(m.group(1)), 60, m.group(1))
+
+    def test_menu_and_export_items_are_named_not_described(self):
+        for m in re.finditer(r'data-exp="[a-z]+"[^`]*', JS):
+            self.assertNotIn("<small>", m.group(0))
+        self.assertNotIn("Templates · ", JS)
+        self.assertNotIn("Config files · ", JS)
+
+    def test_what_left_the_screen_is_kept_for_exports_and_agents(self):
+        # Exported figures keep title and subtitle; the page publishes a machine-readable view.
+        self.assertIn("subtitle: `${D.summary.session_id} · ${D.figMeta.subtitle}`", JS)
+        self.assertIn('id="figure-state"', HTML)
+        self.assertIn("function figureState()", JS)
+        self.assertGreaterEqual(JS.count("publishState();"), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()

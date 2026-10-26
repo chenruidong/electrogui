@@ -337,7 +337,7 @@
     D.probes.clear(); D.probeErrors.clear(); D.probeShown = null;
     D.behavior = null; D.behaviorError = null; D.btC = null; D.btLayout = null; D.trains.clear(); D.trainErrors.clear();
     $('sessionSelect').value = sid;
-    showLoading(`Opening ${sid}`, 'The first open of a session verifies the whole NWB file — about 1–2 minutes for a 3 GB recording. After that, units, alignments and knobs respond immediately.');
+    showLoading(`Opening ${shortSession(sid)}`, '');
     try {
       const job = await getJSON('/api/jobs', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'load', session_id: sid})});
       const t0 = Date.now();
@@ -346,7 +346,8 @@
         if (token !== D.sessionToken) return;
         if (j.status === 'error') throw new Error(j.error || 'Session load failed');
         if (j.status === 'done') break;
-        showLoading(`Opening ${sid}`, `${j.message} (${Math.round((Date.now() - t0) / 1000)} s)`);
+        // The server's phase message stays available as the card's tooltip; the card itself shows the clock.
+        showLoading(`Opening ${shortSession(sid)}`, `${Math.round((Date.now() - t0) / 1000)} s`, j.message);
         await sleep(700);
       }
       const summary = await getJSON(`/api/explorer/session?${query({session: sid})}`);
@@ -801,13 +802,14 @@
 
   function render() {
     renderHeader();
-    if (D.fatal || !D.summary) { checkFinding(); return; }
-    if (S.mode === 'population') { D.layout = null; renderPopulation(); checkFinding(); return; }
+    if (D.fatal || !D.summary) { checkFinding(); publishState(); return; }
+    if (S.mode === 'population') { D.layout = null; renderPopulation(); checkFinding(); publishState(); return; }
     renderRaster();
     drawPin();
     renderBehavior();
     fitRaster();  // after the timeline, so a just-collapsed panel is measured as collapsed
     checkFinding();
+    publishState();
   }
   // Raster height.  On a desktop window it follows the window by default ("fit"): each
   // render measures where the behavior timeline ends and resizes the rasters so it ends at
@@ -859,7 +861,7 @@
     const title = `${unitName(u)} · ${u.area || 'area ?'} · ${String(u.quality || '').toUpperCase()}`;
     const subtitle = `${eventLabel(S.align)} · ${policyText()}${M.yoke ? ` · trials ${M.yoke.from}–${M.yoke.to}` : ''} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.weight === 'trial' ? 'trial-weighted' : 'event-weighted'} mean ± ${S.err === 'none' ? '—' : S.err === 'ci' ? '95% CI' : 'SEM'}`;
     $('title').textContent = title;
-    $('subtitle').textContent = subtitle;
+    D.figMeta = {...(D.figMeta || {}), title, subtitle};
     renderSupport(M);
     renderLegend(M);
     renderQuickFilters(M);
@@ -897,7 +899,7 @@
       $('bars').innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${barsW}" height="${Math.ceil(colH)}" viewBox="0 0 ${barsW} ${Math.ceil(colH)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">${inner}</svg>`;
     } else if (S.bars) $('bars').innerHTML = barsSVG(M, Math.min(Math.max(260, width), 140 + 70 * M.visible.length), 260);
     else $('bars').innerHTML = '';
-    $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · rows are events; half-open count window; ${S.policy === 'verified_stable' ? 'stability from the exact NWB (v0.1 rule, 0.4 s guard)' : 'no stability filter'} · electro_gui ${VERSION}`;
+    D.figMeta.method = `rows are events; half-open count window; ${S.policy === 'verified_stable' ? 'stability from the exact NWB (v0.1 rule, 0.4 s guard)' : 'no stability filter'}`;
   }
 
   function renderSupport(M) {
@@ -936,16 +938,16 @@
       const byTrial = S.weight === 'trial';
       const n = g.hidden ? g.rows.length : g.psth ? g.psth.n : byTrial ? new Set(g.rows.map(i => M.T.trial[i])).size : g.rows.length;
       const unitWord = byTrial ? 'trials' : 'events';
-      return `<button class="lg${g.hidden ? ' off' : ''}" type="button" data-g="${esc(g.key)}" title="${g.hidden ? 'Show' : 'Hide'} this group · double-click to show only this group">` +
-        `<svg viewBox="0 0 26 10"><line x1="1" x2="25" y1="5" y2="5" stroke="${g.color}" stroke-width="2.4" stroke-linecap="round"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/></svg>` +
+      const proj = g.sample && g.sample !== 'fit';
+      return `<button class="lg${g.hidden ? ' off' : ''}${proj ? ' proj' : ''}" type="button" data-g="${esc(g.key)}" aria-pressed="${!g.hidden}" title="${proj ? `${esc(g.sample)} · ` : ''}${g.hidden ? 'Show' : 'Hide'} · double-click: only this · right-click: style">` +
+        `<svg viewBox="0 0 26 10"><line x1="1" x2="25" y1="5" y2="5" stroke="${g.color}" stroke-width="2.4" stroke-linecap="round"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/>${proj ? `<circle cx="13" cy="5" r="3.4" fill="var(--card)" stroke="${g.color}" stroke-width="1.6"/>` : ''}</svg>` +
         `${esc(g.label)}${g.panelLabel ? ` <small>· ${esc(g.panelLabel)}</small>` : ''} <small>${n} ${g.hidden ? 'events' : unitWord}</small></button>`;
     }).join('');
-    const hint = matchMedia('(hover: none)').matches ? 'tap to hide · hold to restyle' : 'click to hide · right-click to restyle';
-    $('legend').innerHTML = html + (hiddenAny ? '<button class="link" type="button" data-g="__all">show all</button>' : '') + (groups.length ? `<span class="lg-hint">${hint}</span>` : '');
+    $('legend').innerHTML = html + (hiddenAny ? '<button class="link" type="button" data-g="__all">show all</button>' : '');
   }
 
-  function showLoading(title, text) {
-    $('figure').innerHTML = `<div class="loading-card"><div class="spinner"></div><div><b>${esc(title)}</b><p>${esc(text)}</p></div></div>`;
+  function showLoading(title, text, detail = '') {
+    $('figure').innerHTML = `<div class="loading-card"${detail ? ` title="${esc(detail)}"` : ''}><div class="spinner"></div><div><b>${esc(title)}</b>${text ? `<p>${esc(text)}</p>` : ''}</div></div>`;
     $('figure').classList.remove('stale');
     $('bars').innerHTML = '';
     $('legend').innerHTML = '';
@@ -1070,7 +1072,7 @@
         return `<button type="button" class="chip${on.has(l.key) ? ' on' : ''}${c ? '' : ' zero'}" data-qf="${esc(key)}" data-level="${esc(l.key)}"${color ? ` style="--c:${color}"` : ''}>${esc(l.key === C.MISSING ? 'missing' : C.formatLevel(key, l.value))} <small>${c}</small></button>`;
       }).join('') + '</div></div>');
     }
-    host.innerHTML = parts.join('') || '<p class="pop-note" style="padding:0">No task/object fields for this alignment; use “Filter on any field”.</p>';
+    host.innerHTML = parts.join('') || '<p class="pop-note" style="padding:0">No task or object fields for this alignment.</p>';
   }
 
   function filterText(f, T) {
@@ -1194,14 +1196,14 @@
     const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))];
     const qs = [...new Set(D.units.map(u => String(u.quality).toLowerCase()))];
     const html = popHead('Choose a unit') +
-      `<div class="pop-note"><label><input id="rosterStep" type="checkbox" ${S.unitStep === 'roster' ? 'checked' : ''}> Step through population roster</label><br>Uses the last displayed population order; falls back to roster ID order after settings change. Units absent from the fit follow in roster ID order. Filters below still apply.</div>` +
-      (!unitList().some(u => u.id === S.unit) ? '<div class="pop-note">The current unit is outside this stepping list. Arrows start at its first/last unit.</div>' : '') +
+      `<div class="pop-note"><label><input id="rosterStep" type="checkbox" ${S.unitStep === 'roster' ? 'checked' : ''}> Step through population roster</label></div>` +
+      (!unitList().some(u => u.id === S.unit) ? '<div class="pop-note">The current unit is not in this list.</div>' : '') +
       `<div class="pop-search"><input type="search" id="unitSearch" placeholder="unit id, channel, area, note, tag…" autocomplete="off">` +
       `<div class="chips">${qs.map(q => `<button type="button" class="chip${S.unitQ.includes(q) ? ' on' : ''}" data-uq="${esc(q)}">${esc(q.toUpperCase())}</button>`).join('')}` +
       `${areas.map(a => `<button type="button" class="chip${S.unitArea.includes(a) ? ' on' : ''}" data-ua="${esc(a)}">${esc(a)}</button>`).join('')}` +
       `<button type="button" class="chip${S.unitNoted ? ' on' : ''}" data-unoted aria-pressed="${S.unitNoted}">✎ Noted</button></div></div>` +
       `<div class="pop-note" id="unitNotesStatus" aria-live="polite"></div>` +
-      `<div class="pop-body" id="unitItems"></div><div class="pop-note">← / → step through the listed units. Channel IDs survive a re-sort; unit IDs do not.</div>`;
+      `<div class="pop-body" id="unitItems"></div>`;
     openPop($('unitBtn'), html);
     fillUnitItems('');
     renderUnitNotesStatus();
@@ -1227,14 +1229,14 @@
   }
 
   function openAlignPicker() {
-    const html = popHead('Align rasters to') + `<div class="pop-search"><input type="search" id="alignSearch" placeholder="search events…" autocomplete="off"></div><div class="pop-body" id="alignItems"></div>`;
+    const html = popHead('Align rasters to') + `<div class="pop-search"><input type="search" id="alignSearch" placeholder="Search" aria-label="Search events" autocomplete="off"></div><div class="pop-body" id="alignItems"></div>`;
     openPop($('alignBtn'), html);
     fillAlignItems('');
   }
   function fillAlignItems(text) {
     const t = text.trim().toLowerCase();
     const items = D.summary.alignments.filter(a => a.n > 0 && (!t || `${a.key} ${eventLabel(a.key)}`.toLowerCase().includes(t)));
-    const item = a => `<button type="button" class="item${a.key === S.align ? ' on' : ''}" data-align="${esc(a.key)}"><span class="main"><b>${esc(eventLabel(a.key))}</b><small>${esc(a.key)}</small></span><span class="n">${a.n}</span></button>`;
+    const item = a => `<button type="button" class="item${a.key === S.align ? ' on' : ''}" data-align="${esc(a.key)}" title="${esc(a.key)}"><span class="main"><b>${esc(eventLabel(a.key))}</b></span><span class="n">${a.n}</span></button>`;
     let html = '';
     if (!t) {
       const pinned = PINNED_ALIGN.map(k => items.find(a => a.key === k)).filter(Boolean);
@@ -1250,7 +1252,7 @@
   function openFieldPicker(anchor, onPick, title = 'Filter on…') {
     const T = D.tables.get(S.align);
     if (!T) return;
-    openPop(anchor, popHead(title) + `<div class="pop-search"><input type="search" id="fieldSearch" placeholder="search fields…" autocomplete="off"></div><div class="pop-body" id="fieldItems"></div>`);
+    openPop(anchor, popHead(title) + `<div class="pop-search"><input type="search" id="fieldSearch" placeholder="Search" aria-label="Search fields" autocomplete="off"></div><div class="pop-body" id="fieldItems"></div>`);
     const fill = text => {
       const t = text.trim().toLowerCase();
       let html = '';
@@ -1294,7 +1296,7 @@
         const on = new Set(f.v);
         body = `<div class="editor"><div class="chips">${levels.map(l => `<button type="button" class="chip${on.has(l.key) ? ' on' : ''}" data-lv="${esc(l.key)}">${esc(l.key === C.MISSING ? 'missing' : l.label)} <small>${counts.get(l.key) || 0}</small></button>`).join('')}</div>` +
           `<div class="chips"><button type="button" class="preset" data-lvall>all</button><button type="button" class="preset" data-lvnone>none</button><button type="button" class="preset" data-lvinv>invert</button></div>` +
-          `<p class="pop-note" style="padding:0">${esc(col.description || '')}${col.timing ? ` Timing: ${esc(String(col.timing).replace(/_/g, ' '))}.` : ''}</p></div>`;
+          `${fieldDefinition(col)}</div>`;
       } else {
         const vals = [];
         for (let i = 0; i < T.n; i++) if (mask[i] && !elig[i] && !Number.isNaN(col.data[i])) vals.push(col.data[i]);
@@ -1307,7 +1309,7 @@
         const inR = j => { const c = lo + (j + 0.5) * (hi - lo) / nb; return (a === null || c >= a) && (b === null || c <= b); };
         body = `<div class="editor"><div class="hist">${hist.map((h, j) => `<i class="${inR(j) ? 'in' : ''}" style="height:${Math.max(2, h / hmax * 100)}%"></i>`).join('')}</div>` +
           `<div class="range"><input type="number" id="rLo" step="any" placeholder="${C.fmtNum(lo)}" value="${a ?? ''}"><span>to</span><input type="number" id="rHi" step="any" placeholder="${C.fmtNum(hi)}" value="${b ?? ''}"></div>` +
-          `<p class="pop-note" style="padding:0">Observed ${C.fmtNum(lo)} to ${C.fmtNum(hi)} over ${vals.length} events (inclusive; empty = open). ${esc(col.description || '')}</p></div>`;
+          `${fieldDefinition(col)}</div>`;
       }
       $('popover').innerHTML = popHead(col.label) + `<div class="pop-body">${body}</div><div class="pop-foot"><button type="button" class="small" data-fdel>Remove filter</button><button type="button" class="primary" data-close>Done</button></div>`;
       placePop();
@@ -1329,6 +1331,11 @@
     renderFilterChips(); changed();
   }
 
+  // A field's meaning and timing are scientific content: kept, one click away.
+  function fieldDefinition(col) {
+    const text = `${col.description || ''}${col.timing ? ` Timing: ${String(col.timing).replace(/_/g, ' ')}.` : ''}`.trim();
+    return text ? `<details class="field-def"><summary aria-label="Definition of ${esc(col.label)}">ⓘ</summary><p>${esc(text)}</p></details>` : '';
+  }
   function eventOptions(selected, {none = null} = {}) {
     const evs = (D.summary ? D.summary.events : []).concat(['object_outcome']);
     let html = none ? `<option value="">${esc(none)}</option>` : '';
@@ -1355,12 +1362,11 @@
     const draw = () => {
       $('popover').innerHTML = popHead('Marker') + `<div class="pop-body"><div class="editor">` +
         `<label class="row"><span>Event</span><select id="mkEvent">${eventOptions(m.e)}</select></label>` +
-        `<div class="row"><span>Match rows by</span>${seg('match', [['object', 'same object'], ['trial', 'same trial']])}</div>` +
-        `<div class="row"><span>Which occurrence</span>${seg('occ', [['nearest', 'nearest'], ['first_after', 'first after'], ['last_before', 'last before'], ['all', 'all']])}</div>` +
-        `<label class="row"><span>Shade until (optional band)</span><select id="mkEnd">${eventOptions(m.end || '', {none: 'no band — tick only'})}</select></label>` +
+        `<div class="row"><span>Match</span>${seg('match', [['object', 'same object'], ['trial', 'same trial']])}</div>` +
+        `<div class="row"><span>Occurrence</span>${seg('occ', [['nearest', 'nearest'], ['first_after', 'first after'], ['last_before', 'last before'], ['all', 'all']])}</div>` +
+        `<label class="row"><span>Shade until</span><select id="mkEnd">${eventOptions(m.end || '', {none: 'none'})}</select></label>` +
         `<label class="row"><span>Label</span><input type="text" id="mkLabel" value="${esc(m.label || '')}" placeholder="${esc(eventLabel(m.e))}"></label>` +
         `<div class="row"><span>Colour</span><div class="swatches">${MARKER_COLORS.map(c => `<button type="button" class="swatch${m.c === c ? ' on' : ''}" data-sw="${c}" style="--c:${paint(c)}" aria-label="colour"></button>`).join('')}</div></div>` +
-        `<p class="pop-note" style="padding:0">Each raster row gets a dot at this event's time in the same ${m.match === 'object' ? 'object' : 'trial'}; the PSTH shows the median. Markers never change which events are counted.</p>` +
         `</div></div><div class="pop-foot"><button type="button" class="small" data-mdel="${esc(m.id)}">Remove</button><button type="button" class="small" data-mtoggle>${m.off ? 'Show' : 'Hide'}</button><button type="button" class="primary" data-close>Done</button></div>`;
       placePop();
       const pop = $('popover');
@@ -1405,11 +1411,11 @@
       : D.findings.length ? D.findings.slice(0, 6).map((f, i) => `<button type="button" class="item" data-finding="${i}"><span class="main"><b>${esc(f.title)}</b>` +
           `<small>${esc(findingLine(f))}</small></span><span class="st st-${esc(f.status)}">${esc(f.status)}</span></button>`).join('') +
         (D.findings.length > 6 ? `<a class="item" href="/findings/"><span class="main"><b>All ${D.findings.length} findings…</b></span></a>` : '')
-      : '<div class="pop-note">No findings yet. <b>Save finding</b> keeps the figure with your notes and the numbers it shows; every device that opens this server sees them.</div>';
-    const html = popHead('Views') + `<div class="pop-body"><div class="pop-group">Templates · keep the current unit</div>` +
-      TEMPLATES.map((t, i) => `<button type="button" class="item" data-tpl="${i}"><span class="main"><b>${esc(t.name)}</b><small>${esc(t.hint)}</small></span></button>`).join('') +
+      : '<div class="pop-note">No findings yet.</div>';
+    const html = popHead('Views') + `<div class="pop-body"><div class="pop-group">Templates</div>` +
+      TEMPLATES.map((t, i) => `<button type="button" class="item" data-tpl="${i}" title="${esc(t.hint)}"><span class="main"><b>${esc(t.name)}</b></span></button>`).join('') +
       configsHtml(cfg) +
-      `<div class="pop-group">Findings · reopen and check the numbers</div>${findingsHtml}</div>` +
+      `<div class="pop-group">Findings</div>${findingsHtml}</div>` +
       `<div class="pop-foot" style="flex-wrap:wrap"><button type="button" class="small" data-copylink>Copy link</button><button type="button" class="small" data-openconfig>Open config file…</button><a class="small" href="/findings/">All findings</a><button type="button" class="primary" data-savefinding${found === null ? ' disabled' : ''}>Save finding…</button></div>`;
     openPop($('viewsBtn').offsetParent ? $('viewsBtn') : $('menuBtn'), html, {wide: true});
   }
@@ -1419,12 +1425,12 @@
     const grouped = D.configs.some(c => c.group);
     let last = null;
     const items = D.configs.map((c, i) => {
-      const head = grouped && c.group !== last ? `<div class="pop-note" style="padding:8px 10px 2px"><b>${esc(c.group || 'Other')}</b></div>` : '';
+      const head = grouped && c.group !== last ? `<div class="pop-sub">${esc(c.group || 'Other')}</div>` : '';
       last = c.group;
       return `${head}<button type="button" class="item" data-cfg="${i}" title="${esc(c.note ? `${c.file} — ${c.note}` : c.file)}"><span class="main"><b>${esc(c.title)}</b><small>${esc(c.hint || summarizeState(c.state))}</small></span></button>`;
     }).join('');
     const bad = (cfg.errors || []).slice(0, 3).map(x => `${x.file}: ${String(x.error).slice(0, 90)}`).join(' · ');
-    return `<div class="pop-group">Config files · restore a saved figure</div>` +
+    return `<div class="pop-group">Config files</div>` +
       (items || '<div class="pop-note">No config files found under --config-dir.</div>') +
       (bad ? `<div class="pop-note">Skipped ${(cfg.errors || []).length} unreadable file(s): ${esc(bad)}</div>` : '');
   }
@@ -1565,23 +1571,47 @@
     const anchor = $('saveBtn').offsetParent ? $('saveBtn') : $('menuBtn');
     openPop(anchor, popHead('Save finding') + `<form class="editor finding-form" id="findingForm">` +
       `<label class="row"><span>Title</span><input type="text" id="fTitle" maxlength="200" required value="${esc(draft.title)}"></label>` +
-      `<label class="row"><span>Notes <small>optional</small></span><textarea id="fNote" rows="5" maxlength="20000" placeholder="Why it matters · what this view does not control (the joystick?) · what to check next">${esc(draft.note)}</textarea></label>` +
-      `<label class="row"><span>Tags <small>optional, separated by commas</small></span><input type="text" id="fTags" autocomplete="off" value="${esc(draft.tags)}" placeholder="world, joystick"></label>` +
-      (used.length ? `<div class="chips tag-picks">${used.map(t => `<button type="button" class="chip" data-addtag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : '') +
-      `<div class="row"><span>Status <small>your judgement, not a test</small></span><div class="seg" id="fStatus">${STATUSES.map(st => `<button type="button" data-st="${st}" class="${st === draft.status ? 'on' : ''}">${st}</button>`).join('')}</div></div>` +
-      `<p class="pop-note" style="padding:0">Keeps a picture of the figure, every setting and the numbers it shows: events, trials and count-window rate per group, the unit's channel and the NWB checksum. Reopening it redraws the figure and says whether any of them has changed. Notes, tags and status can be edited later under Findings.</p>` +
+      `<label class="row"><span>Notes</span><textarea id="fNote" rows="5" maxlength="20000">${esc(draft.note)}</textarea></label>` +
+      `<div class="row"><span>Tags</span><div class="tag-field" id="fTagField"><span id="fTagChips"></span><input type="text" id="fTagInput" autocomplete="off" aria-label="Add a tag"></div>` +
+      `<input type="hidden" id="fTags" value="${esc(draft.tags)}"></div>` +
+      (used.length ? `<div class="chips tag-picks">${used.map(t => `<button type="button" class="chip" data-addtag="${esc(t)}">+ ${esc(t)}</button>`).join('')}</div>` : '') +
+      `<div class="row"><span>Status</span><div class="seg" id="fStatus">${STATUSES.map(st => `<button type="button" data-st="${st}" class="${st === draft.status ? 'on' : ''}">${st}</button>`).join('')}</div></div>` +
       `<div class="pop-foot" style="padding:0;border:0"><button type="button" class="small" data-close>Cancel</button><button type="submit" class="primary" id="fSave">Save finding</button></div></form>`, {wide: true});
     const form = $('findingForm');
-    const read = () => ({title: $('fTitle').value, note: $('fNote').value, tags: $('fTags').value,
-      status: (form.querySelector('[data-st].on') || {dataset: {st: STATUSES[0]}}).dataset.st});
+    // Tags are chips: Enter or a comma turns what is typed into one; Backspace in an empty box takes the last one back.
+    // The hidden #fTags keeps the comma list the server and the draft have always used.
+    const tagList = () => $('fTags').value.split(',').map(t => t.trim()).filter(Boolean);
+    const drawTags = () => {
+      $('fTagChips').innerHTML = tagList().map((t, i) => `<span class="chip on">${esc(t)}<button type="button" class="x" data-tagx="${i}" aria-label="Remove tag ${esc(t)}">×</button></span>`).join('');
+    };
+    const addTags = text => {
+      const have = tagList();
+      for (const t of text.split(',').map(x => x.trim()).filter(Boolean)) if (!have.some(h => h.toLowerCase() === t.toLowerCase())) have.push(t);
+      $('fTags').value = have.join(', '); drawTags();
+    };
+    const commitTyped = () => { const inp = $('fTagInput'); if (inp.value.trim()) { addTags(inp.value); inp.value = ''; } };
+    drawTags();
+    const read = () => {
+      commitTyped();
+      return {title: $('fTitle').value, note: $('fNote').value, tags: $('fTags').value, status: (form.querySelector('[data-st].on') || {dataset: {st: STATUSES[0]}}).dataset.st};
+    };
     const keep = () => { findingDraft = {...read(), titleEdited: (findingDraft && findingDraft.titleEdited) || $('fTitle').value !== draft.title}; };
-    form.addEventListener('input', keep);
+    form.addEventListener('input', e => {
+      if (e.target.id !== 'fTagInput') keep();
+      else if (e.target.value.includes(',')) { commitTyped(); keep(); }
+    });
+    $('fTagInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); commitTyped(); keep(); }
+      else if (e.key === 'Backspace' && !e.target.value) { const have = tagList(); have.pop(); $('fTags').value = have.join(', '); drawTags(); keep(); }
+    });
+    $('fTagInput').addEventListener('blur', () => { commitTyped(); keep(); });
+    $('fTagField').addEventListener('click', e => {
+      const x = e.target.closest('[data-tagx]');
+      if (x) { const have = tagList(); have.splice(Number(x.dataset.tagx), 1); $('fTags').value = have.join(', '); drawTags(); keep(); return; }
+      $('fTagInput').focus();
+    });
     form.querySelectorAll('[data-st]').forEach(b => b.addEventListener('click', () => { form.querySelectorAll('[data-st]').forEach(x => x.classList.toggle('on', x === b)); keep(); }));
-    form.querySelectorAll('[data-addtag]').forEach(b => b.addEventListener('click', () => {
-      const have = $('fTags').value.split(',').map(t => t.trim()).filter(Boolean);
-      if (!have.some(t => t.toLowerCase() === b.dataset.addtag.toLowerCase())) $('fTags').value = [...have, b.dataset.addtag].join(', ');
-      keep();
-    }));
+    form.querySelectorAll('[data-addtag]').forEach(b => b.addEventListener('click', () => { addTags(b.dataset.addtag); keep(); }));
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const btn = $('fSave'), typed = read();
@@ -1617,10 +1647,9 @@
     const path = saved.path || '', id = encodeURIComponent(saved.id);
     $('popover').innerHTML = popHead('Finding saved') + `<div class="editor finding-saved">` +
       `<p>Saved “${esc(saved.title)}”.</p>` +
-      `<div class="row"><span>File <small>its picture, ${esc(saved.id)}.png, is beside it</small></span><code class="file-path" id="fPath">${esc(path)}</code></div>` +
+      `<div class="row"><span>File</span><code class="file-path" id="fPath" title="${esc(saved.id)}.png is beside it">${esc(path)}</code></div>` +
       `<div class="saved-actions"><button type="button" class="small" id="fCopy">Copy path</button>` +
       (saved.can_reveal ? `<button type="button" class="small" id="fReveal">Show in Finder</button>` : '') + `</div>` +
-      (saved.can_reveal ? '' : `<p class="pop-note" style="padding:0">This page is not open on the Mac that holds the file. In Finder, press ⇧⌘G and paste the path (Dropbox keeps the same folder on each Mac).</p>`) +
       `<div class="pop-foot" style="padding:0;border:0"><a class="small" href="/findings/#${id}">Notes &amp; edit</a><button type="button" class="primary" data-close>Done</button></div></div>`;
     $('fCopy').addEventListener('click', async () => {
       toast(await copyText(path, $('fPath')) ? 'Path copied.' : 'Could not copy; the path is selected, press ⌘C.');
@@ -1757,24 +1786,13 @@
   }
 
   function openExport() {
-    if (S.mode === 'population') {
-      const html = popHead('Export') + `<div class="pop-body">` +
-        `<button type="button" class="item" data-exp="svg"><span class="main"><b>Figure · SVG</b><small>vector, with title, legend and embedded settings</small></span></button>` +
-        `<button type="button" class="item" data-exp="png"><span class="main"><b>Figure · PNG</b><small>2× resolution</small></span></button>` +
-        `<button type="button" class="item" data-exp="coords"><span class="main"><b>Coordinates · CSV</b><small>every group's component time courses</small></span></button>` +
-        `<button type="button" class="item" data-exp="loadings"><span class="main"><b>Loadings · CSV</b><small>one row per neuron: unit, channel, area, quality, loadings</small></span></button>` +
-        (D.probeShown ? `<button type="button" class="item" data-exp="cloud"><span class="main"><b>Single-trial cloud · CSV</b><small>every ${D.probeShown.unit === 'event' ? 'event' : 'trial'}'s projection at t = 0 / reference lines</small></span></button>` : '') +
-        `<button type="button" class="item" data-exp="json"><span class="main"><b>Settings & fit · JSON</b><small>roster, groups, method, variance explained, source SHA256</small></span></button></div>`;
-      openPop($('exportBtn').offsetParent ? $('exportBtn') : $('menuBtn'), html);
-      return;
-    }
-    const html = popHead('Export') + `<div class="pop-body">` +
-      `<button type="button" class="item" data-exp="svg"><span class="main"><b>Figure · SVG</b><small>vector, with title, legend and embedded settings</small></span></button>` +
-      `<button type="button" class="item" data-exp="png"><span class="main"><b>Figure · PNG</b><small>2× resolution, for slides and chat</small></span></button>` +
-      `<button type="button" class="item" data-exp="psth"><span class="main"><b>PSTH · CSV</b><small>mean and SEM per group and time bin</small></span></button>` +
-      `<button type="button" class="item" data-exp="rows"><span class="main"><b>Rows · CSV</b><small>one row per event: group, spike count and rate in the count window, marker times, fields</small></span></button>` +
-      `<button type="button" class="item" data-exp="json"><span class="main"><b>Settings & provenance · JSON</b><small>source file, SHA256, unit, alignment, filters, knobs</small></span></button>` +
-      `</div><div class="pop-note">Formal block-permutation tests and population PCA/ICA/FA are in the <a href="/classic/">classic workspace</a>.</div>`;
+    const b = (kind, label) => `<button type="button" class="small" data-exp="${kind}">${label}</button>`;
+    const row = (name, buttons) => `<div class="exp-row"><span>${name}</span><div>${buttons}</div></div>`;
+    const data = S.mode === 'population'
+      ? b('coords', 'Coordinates · CSV') + b('loadings', 'Loadings · CSV') + (D.probeShown ? b('cloud', 'Single trials · CSV') : '')
+      : b('psth', 'PSTH · CSV') + b('rows', 'Rows · CSV');
+    const html = popHead('Export') + `<div class="editor exp-grid">` + row('Figure', b('svg', 'SVG') + b('png', 'PNG')) + row('Data', data) +
+      row('Settings', b('json', 'JSON')) + `</div>`;
     openPop($('exportBtn').offsetParent ? $('exportBtn') : $('menuBtn'), html);
   }
   /** GET /api/health, or null from a server that predates it. */
@@ -1881,8 +1899,7 @@
       `<button type="button" class="item" data-menu="restart"><span class="main"><b>Restart server</b><small id="restartInfo">load the code now on disk, then reload this page</small></span></button><div class="editor">` +
       `<label class="row"><span>Session</span><select id="menuSession">${D.catalog.map(s => `<option value="${esc(s.id)}"${s.id === S.session ? ' selected' : ''}>${esc(shortSession(s.id))}</option>`).join('')}</select></label>` +
       `<div class="row"><span>Theme</span><div class="seg" id="themeSeg">${['auto', 'light', 'dark'].map(t => `<button type="button" data-theme="${t}" class="${theme === t ? 'on' : ''}">${t}</button>`).join('')}</div></div>` +
-      `<p class="pop-note" style="padding:0"><b>Shortcuts</b> — ← / → previous / next unit · drag across the PSTH to set the count window · click a legend entry to hide a group, double-click to show only it.</p>` +
-      `<p class="pop-note" style="padding:0"><a href="/classic/">Classic workspace (v0.1)</a> — unit block-permutation tests and provenance-bound job exports; its Population tab is the population view.</p>` +
+      `<a class="item" href="/classic/"><span class="main"><b>Classic workspace</b></span><span class="n">v0.1</span></a>` +
       `<p class="pop-note" style="padding:0">${D.summary ? `${esc(D.summary.session_id)} · ${D.summary.counts.units} units · ${D.summary.counts.trials} trials<br><code>${esc(D.summary.source.path || '')}</code>` : ''}</p>` +
       `</div></div>`;
     openPop($('menuBtn'), html);
@@ -1923,10 +1940,9 @@
     const hasWorld = S.tdrFactors.includes('world');
     const wc = (v, main, sub) => `<button type="button" data-wc="${v}" class="${S.worldCoding === v ? 'on' : ''}" aria-pressed="${S.worldCoding === v}"><b>${main}</b><small>${sub}</small></button>`;
     const html = popHead('TDR factors') + `<div class="pop-body">` +
-      `<div class="pop-group">World coding${hasWorld ? '' : ' · add world below to use it'}</div>` +
+      `<div class="pop-group">World coding</div>` +
       `<div class="tdr-wc${hasWorld ? '' : ' off'}"><div class="seg" id="worldCoding">${wc('linear', 'Linear · 1 axis', 'PP −1, PM 0, MM +1')}${wc('steps', 'Steps · 2 axes', 'PP→PM and PM→MM')}</div>` +
-      `<p class="pop-note">${S.worldCoding === 'steps' ? 'Two axes whose coefficients are PM − PP and MM − PM, so a PM-specific effect gets its own axis. Needs PP, PM and MM all in the selection.' : 'One axis for the PP→MM trend; it assumes PM sits between PP and MM.'}</p></div>` +
-      `<div class="pop-group">Factors · ${nComp()} axes · tap to add or remove</div>` +
+      `</div><div class="pop-group">Factors · ${nComp()} axes</div>` +
       `<div class="chips tdr-chips">${S.tdrFactors.map(k => chip(k, true)).join('')}${cols.map(c => chip(c.key, false)).join('')}</div></div>` +
       `<div class="pop-foot"><button type="button" class="small" data-tdr-reset>Defaults</button><button type="button" class="primary" data-close>Done</button></div>`;
     const body = $('popover').hidden ? null : $('popover').querySelector('.pop-body');
@@ -2042,7 +2058,7 @@
     const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))].sort();
     const qs = [...new Set(D.units.map(u => String(u.quality).toLowerCase()))];
     const html = popHead('Choose neurons') +
-      `<div class="pop-search"><input type="search" id="rosterSearch" placeholder="unit id, channel, area…" autocomplete="off" value="${esc(RF.text)}">` +
+      `<div class="pop-search"><input type="search" id="rosterSearch" placeholder="Search" aria-label="Search units" autocomplete="off" value="${esc(RF.text)}">` +
       `<div class="chips">${qs.map(q => `<button type="button" class="chip${RF.q.includes(q) ? ' on' : ''}" data-rq="${esc(q)}">${esc(q.toUpperCase())}</button>`).join('')}` +
       `${areas.map(a => `<button type="button" class="chip${RF.a.includes(a) ? ' on' : ''}" data-ra="${esc(a)}">${esc(a)}</button>`).join('')}</div>` +
       `<div class="pop-live" id="rosterLive"></div></div><div class="pop-body" id="rosterItems"></div>` +
@@ -2117,9 +2133,9 @@
   function openFitGroups() {
     const M = buildPopModel(); if (!M || !M.grouping) return;
     const keys = S.fitGroups === null ? M.grouping.groups.map(g => g.key) : S.fitGroups;
-    openPop($('fitGroupsBtn'), popHead('Groups used to fit the basis') + '<div class="pop-note">All groups are displayed. Projected groups can share trials with training groups. Use a trial split to hold out whole trial IDs.</div><div class="pop-body">' +
+    openPop($('fitGroupsBtn'), popHead('Fit on groups') + '<div class="pop-body">' +
       M.grouping.groups.map(g => `<button class="item${keys.includes(g.key) ? ' on' : ''}" type="button" data-fitgroup="${esc(g.key)}"><span class="main">${esc(g.label)}</span><span>${keys.includes(g.key) ? 'fit' : 'project'}</span></button>`).join('') +
-      '</div><div class="pop-note"><button type="button" data-fitall>Fit all groups</button></div>');
+      '</div><div class="pop-foot"><button type="button" class="small" data-fitall>All groups</button><button type="button" class="primary" data-close>Done</button></div>');
   }
   function prepareFit(fit) {
     fit.groupIndex = new Map(fit.groups.map((g, i) => [g.key, i]));
@@ -2280,9 +2296,12 @@
     // diagnostics take what is left of the row, or go underneath.
     const vbox = {x: 0, y: varY, w: narrow ? width : Math.min(440, Math.round(width * 0.4)), h: 136};
     const cbox = narrow ? {x: 0, y: varY + vbox.h + 18, w: width, h: 136} : {x: vbox.w + 34, y: varY, w: Math.min(360, Math.round(width * 0.3)), h: 136};
+    // Fit diagnostics (rows, rank, weighting, training split) go into exports; on screen only a warning shows.
+    const warn = fit.warnings && fit.warnings.length ? String(fit.warnings[0]).slice(0, 110) : '';
+    const diagLines = opts.export ? 6 : warn ? 1 : 0;
     const dRight = !narrow && width - (cbox.x + cbox.w + 34) >= 540;
     const dbox = dRight ? {x: cbox.x + cbox.w + 34, y: varY + 10, w: width - cbox.x - cbox.w - 34} : {x: 0, y: cbox.y + cbox.h + 18, w: width};
-    const height = Math.ceil(dRight ? varY + vbox.h + 8 : dbox.y + 96);
+    const height = Math.ceil(dRight || !diagLines ? Math.max(varY + vbox.h + 8, narrow ? cbox.y + cbox.h + 8 : 0) : opts.export ? dbox.y + 96 : dbox.y + 32);
     const layout = {width, height, n, times, pre, post, vis, split: narrow ? null : {avail, w: trajW}};
     let tcOverlay = '';
     // A time marks the bin that contains it: the same rule the server uses for single-trial probes.
@@ -2381,8 +2400,8 @@
         for (const r of refTimes) out.push(lab(r, idxOf(r)));
       }
       const unitWord = D.probeShown && D.probeShown.unit === 'event' ? 'events' : 'trials';
-      out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 17)}" font-size="10.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${three ? 'drag to rotate · ' : ''}○ start${zeroIdx >= 0 ? ' · ● t = 0' : ''}${refTimes.map(r => ` · ${SHAPE_GLYPH[shapeFor(r, refTimes)]} ${C.fmtNum(r)} s`).join('')}${markers.length ? ' · ◆ marker median' : ''}</text>`);
-      if (cloud.length) out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 31)}" font-size="10.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">small shapes: single ${unitWord}, centred on the large ones${layout.cloudOutside ? ` · ${layout.cloudOutside} beyond the frame` : ''}</text>`);
+      out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 17)}" font-size="10.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">○ start${zeroIdx >= 0 ? ' · ● t = 0' : ''}${refTimes.map(r => ` · ${SHAPE_GLYPH[shapeFor(r, refTimes)]} ${C.fmtNum(r)} s`).join('')}${markers.length ? ' · ◆ marker median' : ''}</text>`);
+      if (cloud.length && (opts.export || layout.cloudOutside)) out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 31)}" font-size="10.5" fill="${muted}" stroke="${bg}" stroke-width="3" paint-order="stroke" stroke-linejoin="round">${opts.export ? `small shapes: single ${unitWord}, centred on the large ones` : ''}${layout.cloudOutside ? `${opts.export ? ' · ' : ''}${layout.cloudOutside} ${unitWord} beyond the frame` : ''}</text>`);
       else if (S.cloud && D.probePending) out.push(`<text x="${f(traj.x + 10)}" y="${f(traj.y + 31)}" font-size="10.5" fill="${muted}">loading single ${S.weight === 'trial' ? 'trials' : 'events'}…</text>`);
       layout.traj = {box: traj, screen, project, three, cloud: cloudScreen};
       if (!opts.export) out.push(`<rect class="hit" data-kind="traj" x="${f(traj.x)}" y="${f(traj.y)}" width="${f(traj.w)}" height="${f(traj.h)}" fill="transparent"${three ? ' style="touch-action:none;cursor:grab"' : ''}/>`);
@@ -2419,7 +2438,7 @@
       if (tcScroll) {
         // The box ends on the axis line, so scrolled to the end it shows the last panels exactly.
         const vw = tc.w - 10, fullH = K * tcPanel - 10;
-        out.push(`<text id="tcRange" x="${f(x0)}" y="${f(tc.y + 11)}" font-size="10.5" fill="${muted}">${compName(0)}–${compName(tcShown - 1)} of ${K} · scroll for more</text>`);
+        out.push(`<text id="tcRange" x="${f(x0)}" y="${f(tc.y + 11)}" font-size="10.5" fill="${muted}">${compName(0)}–${compName(tcShown - 1)} of ${K}</text>`);
         tcOverlay = `<div class="tc-scroll" style="left:${f(tc.x)}px;top:${f(py)}px;width:${f(tc.w)}px;height:${f(yb - py)}px">` +
           `<svg xmlns="http://www.w3.org/2000/svg" width="${f(vw)}" height="${f(fullH)}" viewBox="${f(tc.x)} ${f(py)} ${f(vw)} ${f(fullH)}" font-family="${font}">` +
           `${po.join('')}<g id="tcCursor" pointer-events="none"></g><g id="tcHover" pointer-events="none"></g></svg></div>`;
@@ -2497,7 +2516,8 @@
       // Past about ten components, label every nth bar and drop the per-bar percentages.
       const every = Math.max(1, Math.ceil(30 / step)), valueLabels = step >= 22;
       const nameAt = k => (k % every === 0 ? `<text x="${f(x0 + (k + 0.5) * step)}" y="${f(yb + 13)}" text-anchor="middle" font-size="10" fill="${muted}">${compName(k)}</text>` : '');
-      out.push(`<text x="${f(vbox.x)}" y="${f(vbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">${S.method === 'pca' ? 'training variance explained' : 'training R² by each component alone'}</text>`);
+      const r2Title = S.method === 'pca' ? 'variance explained' : 'R² by each component alone';
+      out.push(`<text x="${f(vbox.x)}" y="${f(vbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">${opts.export ? `training ${r2Title}` : r2Title}</text>`);
       r2.forEach((v, k) => {
         const cx = x0 + (k + 0.5) * step, y = yb - v / maxv * h;
         out.push(`<rect x="${f(cx - bw / 2)}" y="${f(y)}" width="${f(bw)}" height="${f(yb - y)}" rx="2" fill="${paint('#3b5bdb')}" opacity="${(0.9 - 0.45 * k / Math.max(9, K - 1)).toFixed(3)}"/>`,
@@ -2511,7 +2531,7 @@
         const cx0 = cbox.x + ml, cx1 = cbox.x + cbox.w, cyb = cbox.y + cbox.h - 20, ch = cbox.h - 44, cstep = (cx1 - cx0) / K;
         const cevery = Math.max(1, Math.ceil(30 / cstep));
         const CX = k => cx0 + (k + 0.5) * cstep, CY = v => cyb - clamp(v, 0, 1) * ch;
-        out.push(`<text x="${f(cbox.x)}" y="${f(cbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">cumulative training variance explained</text>`);
+        out.push(`<text x="${f(cbox.x)}" y="${f(cbox.y + 10)}" font-size="12" font-weight="600" fill="${ink}">${opts.export ? 'cumulative training variance explained' : 'cumulative'}</text>`);
         for (const v of [0, 0.5, 1]) out.push(`<line x1="${f(cx0)}" x2="${f(cx1)}" y1="${f(CY(v))}" y2="${f(CY(v))}" stroke="${v ? gridC : axisC}"/>`,
           `<text x="${f(cx0 - 4)}" y="${f(CY(v) + 3.5)}" text-anchor="end" font-size="9.5" fill="${muted}">${v * 100}%</text>`);
         out.push(`<path d="${cum.map((v, k) => `${k ? 'L' : 'M'}${f(CX(k))} ${f(CY(v))}`).join('')}" fill="none" stroke="${paint('#3b5bdb')}" stroke-width="1.8" stroke-linejoin="round"/>`);
@@ -2529,8 +2549,9 @@
         fit.training ? `fit ${fit.training.events} events / ${fit.training.trials} trials → display ${fit.training.display_events} / ${fit.training.display_trials}; shared trials ${fit.training.shared_trials}` : fit.scope,
         fit.training && fit.training.held_out_trials ? 'held-out trial IDs · exploratory; neighboring trials may be dependent' : 'selected-group fit / projections · no significance test',
       ];
-      if (fit.warnings && fit.warnings.length) lines.push(`warning: ${String(fit.warnings[0]).slice(0, 110)}`);
-      lines.forEach((t, i) => out.push(`<text x="${f(dbox.x)}" y="${f(dbox.y + 12 + i * 16)}" font-size="11" fill="${i === 4 ? paint('#e8590c') : i < 2 ? ink : muted}">${esc(t)}</text>`));
+      if (warn) lines.push(`warning: ${warn}`);
+      if (opts.export) lines.forEach((t, i) => out.push(`<text x="${f(dbox.x)}" y="${f(dbox.y + 12 + i * 16)}" font-size="11" fill="${i === 4 ? paint('#e8590c') : i < 2 ? ink : muted}">${esc(t)}</text>`));
+      else if (warn) out.push(`<text x="${f(dbox.x)}" y="${f(dbox.y + 12)}" font-size="11" fill="${paint('#e8590c')}">${esc(`warning: ${warn}`)}</text>`);
     }
     const meta = opts.export ? `<metadata>${esc(JSON.stringify(popProvenance(M, fit)))}</metadata>` : '';
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="${font}">${meta}` +
@@ -2610,16 +2631,15 @@
     const presetButtons = rosterPresetList().slice(0, 5).map((p, i) => `<button type="button" class="${i ? 'small' : 'primary'}" data-act="rp:${esc(p.id)}">${esc(p.label)}${p.ids ? ` · ${p.ids.length}` : ''}</button>`).join('') +
       '<button type="button" class="small" data-act="choose">Choose neurons…</button>';
     if (M.needRoster) {
-      $('title').textContent = 'Population'; $('subtitle').textContent = eventLabel(S.align); $('support').innerHTML = ''; $('legend').innerHTML = '';
+      $('title').textContent = 'Population'; $('support').innerHTML = ''; $('legend').innerHTML = '';
       renderQuickFilters({T: M.T, raster: {n: M.T.n, span: new Array(M.T.n).fill([-1e9, 1e9]), status: []}, pre: S.win[0], post: S.win[1]});
-      popEmpty('Choose neurons for the population', ['The population view fits one PCA / ICA / factor-analysis basis to the condition means of many neurons, using the same alignment, filters, groups and window as the raster view.',
-        '<b>Shared-stable SUA + MUA</b> picks the most neurons that share many stable trials — the usual starting point.'], presetButtons);
+      popEmpty('Choose neurons', [], presetButtons);
       return;
     }
     D.popModel = M;
     const areas = [...new Set(S.roster.map(id => (D.unitMap.get(id) || {}).area).filter(Boolean))];
     $('title').textContent = `Population · ${S.roster.length} neurons${areas.length ? ` · ${areas.join(' + ')}` : ''}`;
-    $('subtitle').textContent = `${eventLabel(S.align)} · ${S.policy === 'verified_stable' ? 'trials stable for every neuron' : 'all complete trials'} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.method.toUpperCase()} (${S.scaling === 'zscore' ? 'z-scored' : 'centred'}) · ${S.method === 'tdr' ? `axes: ${S.tdrFactors.map(tdrLabel).join(', ')} · window ${tdrWindow().map(v => C.fmtNum(v)).join(' to ')} s` : `${S.ncomp} components`} · ${S.weight === 'trial' ? 'trial' : 'event'}-weighted means`;
+    const popCaption = `${eventLabel(S.align)} · ${S.policy === 'verified_stable' ? 'trials stable for every neuron' : 'all complete trials'} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.method.toUpperCase()} (${S.scaling === 'zscore' ? 'z-scored' : 'centred'}) · ${S.method === 'tdr' ? `axes: ${S.tdrFactors.map(tdrLabel).join(', ')} · window ${tdrWindow().map(v => C.fmtNum(v)).join(' to ')} s` : `${S.ncomp} components`} · ${S.weight === 'trial' ? 'trial' : 'event'}-weighted means`;
     const shown = M.visible.reduce((acc, g) => acc + g.rows.length, 0);
     const trials = new Set(); M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
     const detail = [];
@@ -2627,6 +2647,7 @@
     if (M.excl[1] + M.excl[2]) detail.push(`${M.excl[1] + M.excl[2]} outside the ${M.common} ${S.policy === 'verified_stable' ? 'shared stable' : 'complete'} trials`);
     if (M.excl[3]) detail.push(`${M.excl[3]} whose window leaves the shared run`);
     $('support').innerHTML = `<b>${shown}</b> events · <b>${trials.size}</b> trials · <b>${S.roster.length}</b> neurons` + (detail.length ? `<br>${esc(detail.join(' · '))}` : '');
+    D.figMeta = {...(D.figMeta || {}), title: $('title').textContent, subtitle: popCaption, method: ''};
     renderLegend(M);
     renderQuickFilters(M);
     if (S.roster.length < 2) { popEmpty('Add at least one more neuron', ['A population fit needs two or more neurons.'], presetButtons); return; }
@@ -2659,11 +2680,11 @@
     if (fit.training) {
       const rowSets = new Map(fit.groups.map(g => [g.key, new Set(g.row_ids)]));
       const samples = new Map(fit.groups.map(g => [g.key, g.sample]));
-      const groups = M.grouping.groups.map(g => ({...g, label: `${g.label} [${samples.get(g.key)}]`, rows: g.rows.filter(i => rowSets.get(g.key)?.has(M.T.rowId[i]))}));
+      const groups = M.grouping.groups.map(g => ({...g, sample: samples.get(g.key), rows: g.rows.filter(i => rowSets.get(g.key)?.has(M.T.rowId[i]))}));
       M = {...M, grouping: {...M.grouping, groups}, visible: groups.filter(g => !g.hidden), rows: groups.flatMap(g => g.rows)};
       D.popModel = M;
       const shownTrials = new Set(M.visible.flatMap(g => g.rows.map(i => M.T.trial[i])));
-      $('support').innerHTML = `<b>${M.visible.reduce((a, g) => a + g.rows.length, 0)}</b> displayed events · <b>${shownTrials.size}</b> displayed trials · <b>${fit.active_unit_ids.length}</b> active neurons<br>Training: ${fit.training.events} events / ${fit.training.trials} trials; ${fit.training.shared_trials} shared trial IDs · ${fit.training.held_out_trials ? 'held-out display' : 'fit and projected groups'}`;
+      $('support').innerHTML = `<b>${M.visible.reduce((a, g) => a + g.rows.length, 0)}</b> events · <b>${shownTrials.size}</b> trials · <b>${fit.active_unit_ids.length}</b> neurons`;
       renderLegend(M);
     }
     D.popFit = fit; D.popKey = key; D.popReq = req; D.popModelKey = popModelKey();
@@ -2680,9 +2701,9 @@
     const width = Math.max(300, Math.floor(document.querySelector('.figure-wrap').clientWidth || ($('stage').clientWidth - 36)));
     const {svg, layout} = popFigureSVG(M, fit, width);
     mountPopFigure(fig, svg, layout);
-    D.figMeta = {title: $('title').textContent, subtitle: $('subtitle').textContent, width};
+    D.figMeta = {title: $('title').textContent, subtitle: popCaption, width};
     drawCursor();
-    $('foot').innerHTML = `Source <code>${esc(D.summary.source.path || '')}</code> · SHA256 <code>${esc(String(D.summary.source.sha256 || '').slice(0, 12))}…</code> · ${esc(fit.scope)} · double-click a neuron row or loading bar to open its raster · condition means per group, ${S.method === 'tdr' ? `one axis per factor: regression of single-event rates on the factors (world coded ${S.worldCoding === 'steps' ? 'as PP→PM and PM→MM steps' : 'PP −1, PM 0, MM +1'}; other categories effect-coded), read at each factor's peak time, denoised in the leading PC subspace and orthogonalised by QR` : `one joint ${S.method.toUpperCase()} basis (sklearn, as the classic workspace) · component signs set so each component's largest loading is positive`} · electro_gui ${VERSION}`;
+    D.figMeta.method = `${fit.scope} · condition means per group, ${S.method === 'tdr' ? `one axis per factor: regression of single-event rates on the factors (world coded ${S.worldCoding === 'steps' ? 'as PP→PM and PM→MM steps' : 'PP −1, PM 0, MM +1'}; other categories effect-coded), read at each factor's peak time, denoised in the leading PC subspace and orthogonalised by QR` : `one joint ${S.method.toUpperCase()} basis (sklearn, as the classic workspace) · component signs set so each component's largest loading is positive`}`;
   }
   function rerenderPopFigure() {
     const M = D.popModel, fit = D.popFit;
@@ -2701,7 +2722,7 @@
     const L = D.popLayout, el = document.getElementById('tcRange');
     if (!L || !el || !L.tc.scroll) return;
     const K = L.tc.panels.length, a = clamp(Math.round(box.scrollTop / L.tc.panelH), 0, K - L.tc.shown);
-    el.textContent = `${compName(a)}–${compName(a + L.tc.shown - 1)} of ${K} · scroll for more`;
+    el.textContent = `${compName(a)}–${compName(a + L.tc.shown - 1)} of ${K}`;
   }
 
   // hover and 3D rotation in the population figure
@@ -2879,6 +2900,34 @@
       source: D.summary.source, unit: M.unit, alignment: S.align, policy: S.policy, guard_s: C.GUARD_S,
       yoked_trials: M.yoke ? {first: M.yoke.from, last: M.yoke.to, n: M.yoke.last - M.yoke.first + 1} : null,
       events_shown: M.visible.reduce((a, g) => a + g.rows.length, 0), state: S};
+  }
+  // What the figure shows, for scripts and agents: one JSON node instead of a footer and a subtitle to scrape.
+  // Same source identity as the exports; refreshed on every render.
+  function figureState() {
+    if (!D.summary) return {tool: `electro_gui ${VERSION}`, session: S.session, ready: false, error: D.fatal || null};
+    const pop = S.mode === 'population', M = pop ? D.popModel : D.model;
+    const groups = M && M.visible ? M.visible.map(g => ({key: g.key, label: g.label, events: g.rows.length, ...(g.sample ? {sample: g.sample} : {})})) : [];
+    const trials = new Set(); if (M && M.visible) M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
+    const excl = M && M.excl ? {filtered: M.filtered || 0, yoked: M.yoked || 0, outside_trials: M.excl[1] + M.excl[2], window: M.excl[3],
+      hidden: M.grouping ? M.grouping.groups.filter(g => g.hidden).reduce((a, g) => a + g.rows.length, 0) : 0} : null;
+    const u = !pop && M ? M.unit : null;
+    return {
+      tool: `electro_gui ${VERSION}`, ready: !!(M && M.visible), mode: pop ? 'population' : 'raster',
+      session: D.summary.session_id, source: {path: D.summary.source.path || null, sha256: D.summary.source.sha256 || null},
+      alignment: {key: S.align, label: eventLabel(S.align)},
+      ...(pop ? {neurons: S.roster.length, method: S.method} : {unit: u ? {id: u.id, peak_channel: u.peak_channel ?? null, area: u.area || null, quality: u.quality || null} : {id: S.unit}}),
+      counts: M && M.visible ? {events: groups.reduce((a, g) => a + g.events, 0), trials: trials.size, excluded: excl} : null,
+      groups, title: $('title').textContent, caption: D.figMeta ? D.figMeta.subtitle || '' : '', method_note: D.figMeta ? D.figMeta.method || '' : '',
+      settings: {policy: S.policy, window_s: S.win, count_window_s: S.cw, bin_ms: Math.round(S.bin * 1000), sigma_ms: Math.round(S.sigma * 1000),
+        weight: S.weight, error: S.err, color: S.color, style: S.style, panel: S.panel, filters: S.filters, sort: pop ? S.nsort : S.sort},
+      ...(pop && D.popFit && popFitIsCurrent() ? {fit: {components: D.popFit.components, component_r2: D.popFit.component_r2, training: D.popFit.training || null,
+        scope: D.popFit.scope || null, warnings: D.popFit.warnings || []}} : {}),
+    };
+  }
+  function publishState() {
+    const node = document.getElementById('figure-state');
+    if (!node) return;
+    try { node.textContent = JSON.stringify(figureState()); } catch (e) { node.textContent = JSON.stringify({error: e.message}); }
   }
   function download(name, blob) {
     const a = document.createElement('a');
@@ -3508,7 +3557,7 @@
     const el = $('btPin');
     if (!el) return;
     const pin = S.pin;
-    if (!pin) { el.innerHTML = '<span class="bt-hint">click a raster row, object or trial to pin it</span>'; return; }
+    if (!pin) { el.innerHTML = ''; return; }
     const B = D.behavior, M = D.model;
     const bits = [`<b>trial ${pin.trial}</b>`];
     const p = B ? B.trials.pos.get(pin.trial) : undefined;
