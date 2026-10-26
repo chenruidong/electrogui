@@ -202,10 +202,29 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
 .marker button { border: 0; background: transparent; color: var(--muted); width: 28px; height: 28px; border-radius: 7px; }
 .marker button:hover { background: var(--line); color: var(--ink); }
 .marker.off { opacity: .5; }
-.refs { margin-top: 4px; }
-.refs .chip-row { margin: 0 0 6px; }
-.ref-form { display: flex; gap: 6px; }
-.ref-form input { width: 110px; }
+.ref-chips { margin: 8px 0 0; }
+.ref-chips .glyph { font-style: normal; font-size: 11px; margin-right: 4px; color: var(--muted); }
+.add-row { display: flex; gap: 6px; margin-top: 12px; }
+.add-row > .add { width: auto; flex: 1 1 0; min-width: 0; margin-top: 0; padding: 0 8px; }
+.add.line-add { display: inline-flex; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; cursor: text; }
+.add.line-add label { cursor: text; }
+.add.line-add input { width: 52px; min-width: 0; height: 26px; padding: 0 6px; text-align: right; font-variant-numeric: tabular-nums; }
+.add.line-add:focus-within { border-color: var(--accent); }
+.cnt { color: var(--danger); font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; margin-left: 4px; cursor: help; }
+.cnt:empty { display: none; }
+.seg button .cnt { margin-left: 5px; }
+.stats { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.5; }
+.stats b { color: var(--ink); font-weight: 650; }
+.stats .warn { color: var(--danger); }
+.rows-field { margin: 12px 0 0; }
+.fit-on > div { display: flex; gap: 6px; min-width: 0; }
+.fit-on .pick { height: 32px; padding: 0 10px; box-shadow: none; flex: 1; justify-content: space-between; font-size: 12.5px; min-width: 0; }
+.fit-on select { height: 32px; flex: 1; min-width: 0; font-size: 12.5px; padding: 0 6px; }
+.stepper { display: inline-flex; align-items: center; justify-self: end; border: 1px solid var(--line); border-radius: 9px; background: var(--card-2); }
+.stepper button { width: 30px; height: 30px; border: 0; background: transparent; color: var(--ink-2); font-size: 16px; border-radius: 8px; }
+.stepper button:hover { background: var(--line); color: var(--ink); }
+.stepper input[type="number"] { width: 44px; height: 30px; border: 0; background: transparent; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; box-shadow: none; padding: 0; -moz-appearance: textfield; }
+.stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 button.small, a.small { height: 34px; padding: 0 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--card-2); font-weight: 550; }
 a.small { display: inline-flex; align-items: center; color: var(--ink); text-decoration: none; font-size: 14px; }
 
@@ -260,10 +279,8 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius
 .seg button { flex: 1; min-height: 28px; border: 0; border-radius: 7px; background: transparent; color: var(--ink-2); font-size: 12.5px; font-weight: 540; white-space: nowrap; padding: 0 6px; }
 .seg button.on { background: var(--card); color: var(--accent); box-shadow: 0 1px 2px rgba(16,24,40,.14), inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); font-weight: 650; }
 :root[data-theme="dark"] .seg button.on { background: var(--accent-soft); }
-.ylock { display: flex; align-items: center; gap: 8px; }
-.ylock .switch { margin: 0; }
-.ylock input[type="number"] { width: 78px; }
-.ylock small { color: var(--muted); }
+.nums.ymax { justify-self: start; }
+.nums.ymax input[type="number"] { width: 96px; text-align: left; font-weight: 500; }
 
 /* ---------------------------------------------------------------- stage */
 .stage { min-width: 0; }

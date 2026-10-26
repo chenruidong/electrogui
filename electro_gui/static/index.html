@@ -59,10 +59,10 @@
       </section>
 
       <section class="section" data-section="filter">
-        <header><h2>Filter</h2><button class="link" type="button" id="clearFilters">Clear</button></header>
+        <header><h2>Filter <span class="cnt" id="filterCnt"></span></h2><button class="link" type="button" id="clearFilters">Clear</button></header>
         <div id="quickFilters" class="quick-filters"></div>
         <div id="otherFilters" class="chip-row"></div>
-        <button class="add" type="button" id="addFilter">+ Filter on any field</button>
+        <button class="add" type="button" id="addFilter">+ Filter</button>
       </section>
 
       <section class="section" data-section="group">
@@ -75,19 +75,21 @@
         </div>
         <div class="presets" id="groupPresets"></div>
         <div class="sort-row">
-          <label><span id="sortLabel">Sort rows by</span><select id="sortBy"></select></label>
+          <label><span id="sortLabel">Sort</span><select id="sortBy"></select></label>
           <button class="icon-btn dir" id="sortDir" type="button" data-only="raster" title="Reverse order" aria-label="Reverse sort order">↑</button>
         </div>
-        <label class="switch" data-only="raster"><input type="checkbox" id="grouped" checked><span></span>Keep groups together in the raster</label>
+        <div class="seg-field rows-field" data-only="raster"><span>Rows</span><div class="seg" id="groupedSeg"><button type="button" data-grouped="1">grouped</button><button type="button" data-grouped="0">mixed</button></div></div>
       </section>
 
       <section class="section" data-section="markers">
         <header><h2>Markers</h2></header>
         <div id="markerList" class="marker-list"></div>
+        <div id="refList" class="chip-row ref-chips"></div>
         <div class="presets" id="markerPresets"></div>
-        <button class="add" type="button" id="addMarker">+ Marker from any event</button>
-        <div class="refs"><span class="mini-label">Reference lines</span><div id="refList" class="chip-row"></div>
-          <form id="refForm" class="ref-form"><input id="refInput" type="number" step="0.05" placeholder="t (s)" aria-label="Reference line time"><button type="submit" class="small">Add</button></form></div>
+        <div class="add-row">
+          <button class="add" type="button" id="addMarker">+ Marker</button>
+          <form id="refForm" class="add line-add"><label for="refInput">+ Line at</label><input id="refInput" type="number" step="0.05" aria-label="Reference line time (s)"><span>s</span></form>
+        </div>
         <div class="cloud" data-only="population">
           <label class="switch"><input type="checkbox" id="cloudOn"><span></span>Show single trials at those times</label>
           <div class="knob cloud-knob" id="cloudKnob"><div class="knob-head"><span>Trial cloud opacity</span><output id="cloudAlphaOut"></output></div><input type="range" id="cloudAlpha" min="5" max="100" step="5" aria-label="Trial cloud opacity"></div>
@@ -102,15 +104,14 @@
         <div class="model" data-only="population">
           <div class="seg-field"><span>Method</span><div class="seg" data-key="method"><button data-v="pca">PCA</button><button data-v="ica">ICA</button><button data-v="fa">FA</button><button data-v="tdr" title="Targeted dimensionality reduction: one axis per task factor">TDR</button></div></div>
           <div class="knob" data-method="tdr"><div class="knob-head"><span>TDR factors</span></div><button class="pick" id="tdrBtn" type="button" aria-haspopup="dialog" title="Choose the TDR factors and how world is coded"><strong id="tdrLabel"></strong><span class="pick-label">▾</span></button>
-            <div class="knob-head" style="margin-top:8px"><span>TDR window <small>(blank = display window)</small></span><span class="nums"><input type="number" id="tdrLoN" step="0.1" aria-label="TDR window start (s)"><i>to</i><input type="number" id="tdrHiN" step="0.1" aria-label="TDR window end (s)"><i>s</i></span></div></div>
-          <div class="knob"><button class="pick" id="fitGroupsBtn" type="button">Fit groups: all</button></div>
-          <label class="field">Training trials <select id="fitSplit"><option value="all">All selected trials</option><option value="odd">Odd trial IDs → display even</option><option value="even">Even trial IDs → display odd</option></select></label>
+            <div class="knob-head" style="margin-top:8px"><span>TDR window</span><span class="nums"><input type="number" id="tdrLoN" step="0.1" aria-label="TDR window start (s)"><i>to</i><input type="number" id="tdrHiN" step="0.1" aria-label="TDR window end (s)"><i>s</i></span></div></div>
+          <div class="seg-field fit-on"><span>Fit on</span><div><button class="pick" id="fitGroupsBtn" type="button" aria-haspopup="dialog" aria-label="Groups the basis is fitted on"><strong id="fitGroupsLabel">all groups</strong><span class="pick-label">▾</span></button><select id="fitSplit" aria-label="Trials the basis is fitted on"><option value="all">all trials</option><option value="odd">odd → show even</option><option value="even">even → show odd</option></select></div></div>
           <div class="seg-field"><span>Scaling</span><div class="seg" data-key="scaling"><button data-v="zscore">z-score</button><button data-v="center">center</button></div></div>
-          <div class="knob" data-not-method="tdr"><div class="knob-head"><span>Components <small>(type up to 50)</small></span><span class="nums"><input type="number" id="ncompN" min="2" max="50" step="1" aria-label="Number of components"></span></div><input type="range" id="ncomp" min="2" max="10" step="1" aria-label="Number of components, 2 to 10"></div>
+          <div class="seg-field" data-not-method="tdr"><span>Components</span><span class="stepper"><button type="button" id="ncompDown" aria-label="Fewer components">−</button><input type="number" id="ncompN" min="2" max="50" step="1" aria-label="Number of components, 2 to 50"><button type="button" id="ncompUp" aria-label="More components">+</button></span></div>
           <div class="seg-field"><span>Trajectory</span><div class="seg" data-key="dims"><button data-v="2">2D</button><button data-v="3">3D</button></div></div>
           <div class="seg-field"><span>Heatmap</span><div class="seg" data-key="heatNorm"><button data-v="z">z-score</button><button data-v="peak">peak = 1</button></div></div>
         </div>
-        <div class="knob"><div class="knob-head"><span>Window</span><span class="nums"><input type="number" id="winLoN" step="0.1" aria-label="Window start (s)"><i>to</i><input type="number" id="winHiN" step="0.1" aria-label="Window end (s)"><i>s</i></span></div>
+        <div class="knob"><div class="knob-head"><span>Window <span class="cnt" id="winCnt"></span></span><span class="nums"><input type="number" id="winLoN" step="0.1" aria-label="Window start (s)"><i>to</i><input type="number" id="winHiN" step="0.1" aria-label="Window end (s)"><i>s</i></span></div>
           <div class="dual"><input type="range" id="winLo" min="-5" max="-0.1" step="0.1" aria-label="Window start"><input type="range" id="winHi" min="0.1" max="5" step="0.1" aria-label="Window end"></div></div>
         <div class="knob"><div class="knob-head"><span>Count window <small>(or drag on the PSTH)</small></span><span class="nums"><input type="number" id="cwLoN" step="0.05" aria-label="Count window start (s)"><i>to</i><input type="number" id="cwHiN" step="0.05" aria-label="Count window end (s)"><i>s</i></span></div>
           <div class="dual"><input type="range" id="cwLo" step="0.05" aria-label="Count window start"><input type="range" id="cwHi" step="0.05" aria-label="Count window end"></div></div>
@@ -118,10 +119,9 @@
         <div class="knob"><div class="knob-head"><span>Smoothing σ</span><output id="sigmaOut"></output></div><input type="range" id="sigma" min="0" max="100" step="5" aria-label="Gaussian smoothing sigma (ms)"></div>
         <div class="seg-field" data-only="raster"><span>Error band</span><div class="seg" data-key="err"><button data-v="sem">SEM</button><button data-v="ci">95% CI</button><button data-v="none">None</button></div></div>
         <div class="seg-field"><span>Average over</span><div class="seg" data-key="weight"><button data-v="event">events</button><button data-v="trial">trials</button></div></div>
-        <div class="seg-field"><span>Trials</span><div class="seg" data-key="policy"><button data-v="verified_stable">stable for unit</button><button data-v="all_complete">all complete</button></div></div>
+        <div class="seg-field"><span>Trials</span><div class="seg" data-key="policy"><button data-v="verified_stable">stable<small class="cnt" data-cnt="verified_stable"></small></button><button data-v="all_complete">all complete<small class="cnt" data-cnt="all_complete"></small></button></div></div>
         <div class="seg-field" data-only="raster"><span>Raster ticks</span><div class="seg" data-key="tick"><button data-v="line">lines</button><button data-v="dot">dots</button></div></div>
-        <div class="knob" data-only="raster"><div class="knob-head"><span>Raster height</span><output id="rasterHOut"></output></div><input type="range" id="rasterH" min="80" max="700" step="10" aria-label="Raster height"></div>
-        <div class="seg-field" data-only="raster"><span>Y axis</span><div class="ylock"><label class="switch"><input type="checkbox" id="ylock"><span></span>lock at</label><input type="number" id="ymax" min="1" step="1" aria-label="Y maximum (spikes/s)"><small>spikes/s</small></div></div>
+        <div class="seg-field" data-only="raster"><span>Y max</span><span class="nums ymax"><input type="number" id="ymax" min="1" step="1" placeholder="auto" aria-label="Y maximum (spikes/s); empty for auto"></span></div>
         <label class="switch" data-only="raster"><input type="checkbox" id="showBars" checked><span></span>Window-rate bars beside the plot</label>
         <label class="switch" data-only="raster"><input type="checkbox" id="showRowRate" checked><span></span>Rate by row beside the raster</label>
       </section>
@@ -155,7 +155,7 @@
             </div>
             <div class="bt-pin" id="btPin"></div>
             <div class="bt-zoom">
-              <label class="switch bt-yoke" title="Show only these trials in the rasters: at least 20 (or every trial there is), centred on the pinned trial"><input type="checkbox" id="btYoke"><span></span>yoke to rasters</label>
+              <label class="switch bt-yoke" title="Show only these trials in the rasters: at least 20 (or every trial there is), centred on the pinned trial"><input type="checkbox" id="btYoke"><span></span>yoke to rasters <span class="cnt" id="yokeCnt"></span></label>
               <button class="icon-btn sm" id="btPrev" type="button" aria-label="Earlier trials" title="Earlier trials">‹</button>
               <label class="bt-n" title="Trials shown (pinch or ctrl-scroll on the timeline also zooms; drag or swipe pans)"><input type="range" id="btN" min="3" max="400" step="1" aria-label="Trials shown"><output id="btNOut"></output></label>
               <button class="icon-btn sm" id="btNext" type="button" aria-label="Later trials" title="Later trials">›</button>

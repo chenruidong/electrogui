@@ -10,7 +10,7 @@
   const tidy = (v, d = 3) => Number(Number(v).toFixed(d));
   const f1 = v => Math.round(v * 10) / 10;
   const VERSION = '0.2';
-  const MAX_NCOMP = 50;   // explorer.MAX_COMPONENTS; the slider covers 2-10, the number box the rest
+  const MAX_NCOMP = 50;   // explorer.MAX_COMPONENTS: the components stepper's upper bound
   const TC_SHOWN = 8;     // on screen, more component time courses than this scroll in a fixed-height box
   const SPLIT_MIN = 240;  // px either side of the draggable trajectory | time-course divider
 
@@ -840,9 +840,6 @@
     syncRasterOut();
   }
   function syncRasterOut() {
-    const h = rasterHeight();
-    $('rasterH').value = h;
-    $('rasterHOut').textContent = fitsWindow() ? `fit · ${h} px` : `${S.rasterH} px`;
     $('btSplit').title = fitsWindow() ? 'Drag to resize the rasters (fitted to the window now); double-click to fit again' : 'Drag to resize the rasters; double-click to fit them to the window';
   }
 
@@ -905,16 +902,19 @@
   function renderSupport(M) {
     const shown = M.visible.reduce((a, g) => a + g.rows.length, 0);
     const trials = new Set(); M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
-    const ex = M.excl[1] + M.excl[2] + M.excl[3];
-    const bits = [`<b>${shown}</b> events · <b>${trials.size}</b> trials`];
-    const detail = [];
-    if (M.filtered) detail.push(`${M.filtered} filtered out`);
-    if (M.yoke) detail.push(`${M.yoked} outside trials ${M.yoke.from}–${M.yoke.to} (yoked to behavior)`);
-    if (M.excl[1] + M.excl[2]) detail.push(`${M.excl[1] + M.excl[2]} in trials not ${S.policy === 'verified_stable' ? 'stable for this unit' : 'complete'}`);
-    if (M.excl[3]) detail.push(`${M.excl[3]} whose window leaves the stable run`);
-    const hiddenRows = M.grouping.groups.filter(g => g.hidden).reduce((a, g) => a + g.rows.length, 0);
-    if (hiddenRows) detail.push(`${hiddenRows} in hidden groups`);
-    $('support').innerHTML = bits.join('') + (detail.length ? `<br>${esc(detail.join(' · '))}` : '') + (ex && S.policy === 'verified_stable' && !M.rows.length ? '' : '');
+    $('support').innerHTML = `<b>${shown}</b> events · <b>${trials.size}</b> trials`;
+    markExclusions(M);
+  }
+  // Each control that leaves events out says how many, on itself: Trials, Window, Filter and the yoke.
+  // (Hidden groups show their own counts in the legend.)  The same numbers are in #figure-state.
+  function markExclusions(M) {
+    const set = (el, n, title) => { if (!el) return; el.textContent = n ? `−${n}` : ''; el.title = n ? title : ''; };
+    const unstable = M ? M.excl[1] + M.excl[2] : 0, who = M && M.pop ? 'every neuron' : 'this unit';
+    document.querySelectorAll('[data-cnt]').forEach(el => set(el, el.dataset.cnt === S.policy ? unstable : 0,
+      `${unstable} events in trials not ${S.policy === 'verified_stable' ? `stable for ${who}` : 'complete'}${M && M.pop && M.common !== undefined ? ` (${M.common} shared)` : ''}`));
+    set($('winCnt'), M ? M.excl[3] : 0, `${M ? M.excl[3] : 0} events whose window (plus the 0.4 s guard) leaves the ${M && M.pop ? 'shared' : 'stable'} run`);
+    set($('filterCnt'), M ? M.filtered : 0, `${M ? M.filtered : 0} events filtered out`);
+    set($('yokeCnt'), M && M.yoke ? M.yoked : 0, M && M.yoke ? `${M.yoked} events outside trials ${M.yoke.from}–${M.yoke.to}` : '');
   }
 
   function renderEmptyReason(M) {
@@ -1012,7 +1012,6 @@
     setSel('colorBy', S.color); setSel('styleBy', S.style); setSel('panelBy', S.panel);
     if (S.mode === 'population') { $('sortBy').value = S.nsort; if ($('sortBy').value !== S.nsort) { S.nsort = 'loading:0'; $('sortBy').value = S.nsort; } }
     else { $('sortBy').value = S.sort; if ($('sortBy').value !== S.sort) $('sortBy').value = 'session'; }
-    $('sortLabel').textContent = S.mode === 'population' ? 'Sort neurons' : 'Sort rows by';
     document.querySelectorAll('[data-method]').forEach(el => { el.hidden = el.dataset.method !== S.method; });
     document.querySelectorAll('[data-not-method]').forEach(el => { el.hidden = el.dataset.notMethod === S.method; });
     if (S.method === 'tdr') {
@@ -1021,14 +1020,15 @@
       if (document.activeElement !== $('tdrLoN')) $('tdrLoN').value = w[0];
       if (document.activeElement !== $('tdrHiN')) $('tdrHiN').value = w[1];
     }
-    $('ncomp').value = Math.min(S.ncomp, 10); if (document.activeElement !== $('ncompN')) $('ncompN').value = S.ncomp;
-    $('fitSplit').value = S.fitSplit; $('fitGroupsBtn').textContent = S.fitGroups === null ? 'Fit groups: all' : `Fit groups: ${S.fitGroups.length} selected`;
+    if (document.activeElement !== $('ncompN')) $('ncompN').value = S.ncomp;
+    $('fitSplit').value = S.fitSplit; $('fitGroupsLabel').textContent = fitGroupsText();
     $('cloudOn').checked = S.cloud; $('cloudZero').checked = S.cloudZero;
     $('cloudAlpha').value = Math.round(S.cloudAlpha * 100); $('cloudAlphaOut').textContent = `${Math.round(S.cloudAlpha * 100)}%`;
-    $('cloudKnob').classList.toggle('off', !S.cloud); $('cloudZeroWrap').classList.toggle('off', !S.cloud); $('cloudFitWrap').classList.toggle('off', !S.cloud);
+    // Cloud options exist only while the cloud is on.
+    $('cloudKnob').hidden = !S.cloud; $('cloudZeroWrap').hidden = !S.cloud; $('cloudFitWrap').hidden = !S.cloud;
     applyMode();
     $('sortDir').textContent = S.dir === 1 ? '↑' : '↓';
-    $('grouped').checked = S.grouped;
+    $('groupedSeg').querySelectorAll('[data-grouped]').forEach(b => b.classList.toggle('on', (b.dataset.grouped === '1') === S.grouped));
     const cont = T && [S.color, S.style, S.panel].some(k => { const c = k && T.byKey.get(k); return c && c.kind === 'num' && !c.discrete; });
     $('qbinsField').hidden = !cont; $('qbins').value = String(S.qbins);
     $('showMedians').checked = S.medians;
@@ -1042,8 +1042,8 @@
     $('bin').value = Math.round(S.bin * 1000); $('binOut').textContent = `${Math.round(S.bin * 1000)} ms`;
     $('sigma').value = Math.round(S.sigma * 1000); $('sigmaOut').textContent = S.sigma ? `${Math.round(S.sigma * 1000)} ms` : 'off';
     syncRasterOut();
-    $('ylock').checked = S.ylock !== null; $('ymax').disabled = S.ylock === null;
-    if (document.activeElement !== $('ymax')) $('ymax').value = S.ylock !== null ? S.ylock : (D.model ? tidy(D.model.ymax, 1) : '');
+    if (document.activeElement !== $('ymax')) $('ymax').value = S.ylock !== null ? S.ylock : '';
+    $('ymax').placeholder = S.ylock === null && D.model ? `auto · ${tidy(D.model.ymax, 1)}` : 'auto';
     $('showBars').checked = S.bars;
     $('showRowRate').checked = S.rowRate;
     document.querySelectorAll('.seg[data-key]').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', S[seg.dataset.key] === b.dataset.v)));
@@ -1107,7 +1107,9 @@
       return `<div class="marker${m.off ? ' off' : ''}" style="--c:${paint(m.c)}"><i class="${m.end ? 'band' : ''}"></i><div><b>${esc(m.label || eventLabel(m.e))}</b><small>${esc(eventLabel(m.e))}${m.end ? ` → ${esc(eventLabel(m.end))}` : ''} · ${where} · ${occ}</small></div>` +
         `<button type="button" data-medit="${esc(m.id)}" title="Edit" aria-label="Edit marker">✎</button><button type="button" data-mdel="${esc(m.id)}" title="Remove" aria-label="Remove marker">×</button></div>`;
     }).join('');
-    $('refList').innerHTML = S.refs.map((r, i) => `<span class="chip fchip">${C.fmtNum(r)} s<button class="x" type="button" data-rdel="${i}" aria-label="Remove line">×</button></span>`).join('');
+    const inWin = [...new Set(S.refs.filter(r => r >= S.win[0] && r <= S.win[1]))].sort((a, b) => a - b);
+    $('refList').innerHTML = S.refs.map((r, i) => `<span class="chip fchip">${S.mode === 'population' && inWin.includes(r) ? `<i class="glyph" aria-hidden="true">${SHAPE_GLYPH[shapeFor(r, inWin)]}</i>` : ''}` +
+      `${C.fmtNum(r)} s<button class="x" type="button" data-rdel="${i}" aria-label="Remove line at ${C.fmtNum(r)} s">×</button></span>`).join('');
   }
 
   function renderPresets() {
@@ -1188,21 +1190,25 @@
     const status = $('unitNotesStatus');
     if (!status) return;
     const count = Object.keys(D.unitNotes?.units || {}).length;
-    status.textContent = [D.unitNotesError ? `${D.unitNotesError}${D.unitNotes ? ' Showing previously loaded notes.' : ''}`
-      : D.unitNotes ? `${count} noted unit${count === 1 ? '' : 's'} in this session · Result Viewer` : 'Loading Result Viewer notes…',
-      ...(D.unitNotes?.notices || [])].join(' ');
+    const n = document.getElementById('unitNotedN');
+    if (n) n.textContent = D.unitNotes ? count : '';
+    // Only trouble is worth a line: an unreadable notebook, or what the server noticed about it.
+    const text = [D.unitNotesError ? `${D.unitNotesError}${D.unitNotes ? ' Showing previously loaded notes.' : ''}` : '', ...(D.unitNotes?.notices || [])].filter(Boolean).join(' ');
+    status.textContent = text; status.hidden = !text;
   }
   function openUnitPicker() {
     const areas = [...new Set(D.units.map(u => u.area).filter(Boolean))];
     const qs = [...new Set(D.units.map(u => String(u.quality).toLowerCase()))];
+    const step = S.roster.length || S.unitStep === 'roster'
+      ? `<div class="seg" id="unitStepSeg" aria-label="Units the arrows step through"><button type="button" data-ustep="all" class="${S.unitStep === 'roster' ? '' : 'on'}">All units</button>` +
+        `<button type="button" data-ustep="roster" class="${S.unitStep === 'roster' ? 'on' : ''}">Roster <small>${S.roster.length}</small></button></div>` : '';
     const html = popHead('Choose a unit') +
-      `<div class="pop-note"><label><input id="rosterStep" type="checkbox" ${S.unitStep === 'roster' ? 'checked' : ''}> Step through population roster</label></div>` +
-      (!unitList().some(u => u.id === S.unit) ? '<div class="pop-note">The current unit is not in this list.</div>' : '') +
-      `<div class="pop-search"><input type="search" id="unitSearch" placeholder="unit id, channel, area, note, tag…" autocomplete="off">` +
+      `<div class="pop-search">${step}<input type="search" id="unitSearch" placeholder="Search" aria-label="Search units by id, channel, area, note or tag" autocomplete="off">` +
       `<div class="chips">${qs.map(q => `<button type="button" class="chip${S.unitQ.includes(q) ? ' on' : ''}" data-uq="${esc(q)}">${esc(q.toUpperCase())}</button>`).join('')}` +
       `${areas.map(a => `<button type="button" class="chip${S.unitArea.includes(a) ? ' on' : ''}" data-ua="${esc(a)}">${esc(a)}</button>`).join('')}` +
-      `<button type="button" class="chip${S.unitNoted ? ' on' : ''}" data-unoted aria-pressed="${S.unitNoted}">✎ Noted</button></div></div>` +
-      `<div class="pop-note" id="unitNotesStatus" aria-live="polite"></div>` +
+      `<button type="button" class="chip${S.unitNoted ? ' on' : ''}" data-unoted aria-pressed="${S.unitNoted}" title="Units with Result Viewer notes">✎ Noted <small id="unitNotedN"></small></button></div></div>` +
+      (!unitList().some(u => u.id === S.unit) ? '<div class="pop-note">The current unit is not in this list.</div>' : '') +
+      `<div class="pop-note" id="unitNotesStatus" aria-live="polite" hidden></div>` +
       `<div class="pop-body" id="unitItems"></div>`;
     openPop($('unitBtn'), html);
     fillUnitItems('');
@@ -2030,22 +2036,19 @@
     }
     const shared = sharedCount(ids);
     $('rosterLabel').textContent = ids.length ? `${ids.length} neurons` : 'no neurons';
-    const sharedText = shared === null ? 'checking shared trials…'
-      : S.policy === 'all_complete' ? `all <b>${shared}</b> complete trials (no stability filter)`
-        : `<b>${shared}</b> stable trials shared by all of them`;
+    const sharedText = shared === null ? '<b>…</b> shared trials' : `<b>${shared}</b> ${S.policy === 'all_complete' ? 'complete' : 'shared stable'} trials`;
     $('rosterSummary').innerHTML = ids.length
-      ? `<div class="big"><b>${ids.length}</b> neurons · ${[...areas].map(([a, n]) => `${esc(a)} ${n}`).join(' · ')}</div>` +
-        `<div>${[...quals].map(([q, n]) => `${esc(q)} ${n}`).join(' · ')}</div><div class="${shared === 0 ? 'warn' : ''}">${sharedText}</div>`
-      : '<div>No neurons chosen yet — pick a set below.</div>';
+      ? `<div class="stats">${[...areas, ...quals].map(([a, n]) => `<b>${n}</b> ${esc(a)}`).join(' · ')} · <span class="${shared === 0 ? 'warn' : ''}">${sharedText}</span></div>`
+      : '';
     $('rosterPresets').innerHTML = rosterPresetList().map(p =>
       `<button type="button" class="preset" data-rp="${esc(p.id)}" title="${esc(p.hint || `${p.ids.length} neurons`)}">${esc(p.label)}${p.ids ? ` · ${p.ids.length}` : ''}</button>`).join('');
     const lim = limitingUnits(ids);
     const zero = D.stab && S.policy === 'verified_stable' ? ids.filter(id => !D.stab.masks.has(id) || C.popcount(D.stab.masks.get(id), D.stab.n) === 0) : [];
     const trimRow = D.stab && S.policy === 'verified_stable' && ids.length > 2 && shared !== null && shared < 100
-      ? `<div class="limit"><span>Keep the subset of these neurons with the most neurons × shared stable trials</span><button type="button" class="small" data-trim>trim</button></div>` : '';
-    const zeroRow = zero.length ? `<div class="limit"><span>${zero.length} neuron${zero.length === 1 ? ' has' : 's have'} no stable trials at all</span><button type="button" class="small" data-rmzero>remove</button></div>` : '';
-    $('rosterLimits').innerHTML = zeroRow + trimRow + (lim.length ? '<span class="mini-label" style="margin:0 0 2px">Most limiting — trials regained if removed</span>' +
-      lim.map(x => { const u = D.unitMap.get(x.id); return `<div class="limit"><span>${esc(unitShort(u))} · ${esc((u && u.area) || '')}</span><b>+${x.gain}</b><button type="button" class="small" data-rmunit="${x.id}">remove</button></div>`; }).join('') : '');
+      ? `<div class="limit"><span>Fewer neurons, more shared trials</span><button type="button" class="small" data-trim title="Keep the subset with the most neurons × shared stable trials (greedy)">trim</button></div>` : '';
+    const zeroRow = zero.length ? `<div class="limit"><span>${zero.length} with no stable trials</span><button type="button" class="small" data-rmzero>remove</button></div>` : '';
+    $('rosterLimits').innerHTML = zeroRow + trimRow +
+      lim.map(x => { const u = D.unitMap.get(x.id); return `<div class="limit"><span>${esc(unitShort(u))} · ${esc((u && u.area) || '')}</span><b title="Trials regained if removed">+${x.gain} trial${x.gain === 1 ? '' : 's'}</b><button type="button" class="small" data-rmunit="${x.id}">remove</button></div>`; }).join('');
   }
 
   const RF = {q: ['sua', 'mua'], a: [], text: ''};
@@ -2610,12 +2613,13 @@
     if (!compare.some(g => g.key === S.heatCompare)) S.heatCompare = null;
     $('heatCompare').innerHTML = '<option value="">None</option>' + compare.map(g => `<option value="${esc(g.key)}"${g.key === S.heatCompare ? ' selected' : ''}>${esc(g.label)}</option>`).join('');
     $('heatCompare').disabled = !compare.length;
-    $('fitGroupsBtn').textContent = S.fitGroups === null ? 'Fit groups: all' : `Fit groups: ${S.fitGroups.length} selected`;
+    $('fitGroupsLabel').textContent = fitGroupsText();
     $('fitSplit').value = S.fitSplit;
   }
+  const fitGroupsText = () => (S.fitGroups === null ? 'all groups' : `${S.fitGroups.length} group${S.fitGroups.length === 1 ? '' : 's'}`);
 
   function popEmpty(title, lines, buttons) {
-    $('figure').innerHTML = ''; $('figure').classList.remove('stale');
+    $('figure').innerHTML = ''; $('figure').classList.remove('stale'); $('popToolbar').hidden = true;
     D.popLayout = null; D.popFit = null; D.popModelKey = null; D.navOrder = null;
     for (const id of ['heatGroup', 'heatCompare']) { $(id).innerHTML = ''; $(id).disabled = true; }
     $('empty').innerHTML = `<h3>${esc(title)}</h3>${lines.map(l => `<p>${l}</p>`).join('')}<div class="chips" style="justify-content:center;margin-top:12px">${buttons}</div>`;
@@ -2627,6 +2631,7 @@
     document.querySelector('.figure-wrap').classList.add('stacked');
     renderRosterSection();
     let M = buildPopModel();
+    if (!D.popLayout) $('popToolbar').hidden = true;
     if (!M) { if (fig.querySelector('svg')) fig.classList.add('stale'); else showLoading('Loading…', ''); return; }
     const presetButtons = rosterPresetList().slice(0, 5).map((p, i) => `<button type="button" class="${i ? 'small' : 'primary'}" data-act="rp:${esc(p.id)}">${esc(p.label)}${p.ids ? ` · ${p.ids.length}` : ''}</button>`).join('') +
       '<button type="button" class="small" data-act="choose">Choose neurons…</button>';
@@ -2642,11 +2647,8 @@
     const popCaption = `${eventLabel(S.align)} · ${S.policy === 'verified_stable' ? 'trials stable for every neuron' : 'all complete trials'} · bin ${Math.round(S.bin * 1000)} ms · σ ${Math.round(S.sigma * 1000)} ms · ${S.method.toUpperCase()} (${S.scaling === 'zscore' ? 'z-scored' : 'centred'}) · ${S.method === 'tdr' ? `axes: ${S.tdrFactors.map(tdrLabel).join(', ')} · window ${tdrWindow().map(v => C.fmtNum(v)).join(' to ')} s` : `${S.ncomp} components`} · ${S.weight === 'trial' ? 'trial' : 'event'}-weighted means`;
     const shown = M.visible.reduce((acc, g) => acc + g.rows.length, 0);
     const trials = new Set(); M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
-    const detail = [];
-    if (M.filtered) detail.push(`${M.filtered} filtered out`);
-    if (M.excl[1] + M.excl[2]) detail.push(`${M.excl[1] + M.excl[2]} outside the ${M.common} ${S.policy === 'verified_stable' ? 'shared stable' : 'complete'} trials`);
-    if (M.excl[3]) detail.push(`${M.excl[3]} whose window leaves the shared run`);
-    $('support').innerHTML = `<b>${shown}</b> events · <b>${trials.size}</b> trials · <b>${S.roster.length}</b> neurons` + (detail.length ? `<br>${esc(detail.join(' · '))}` : '');
+    $('support').innerHTML = `<b>${shown}</b> events · <b>${trials.size}</b> trials · <b>${S.roster.length}</b> neurons`;
+    markExclusions(M);
     D.figMeta = {...(D.figMeta || {}), title: $('title').textContent, subtitle: popCaption, method: ''};
     renderLegend(M);
     renderQuickFilters(M);
@@ -2714,7 +2716,7 @@
   }
   // Redraws keep the time-course box where it was scrolled to.
   function mountPopFigure(fig, svg, layout) {
-    fig.innerHTML = svg; D.popLayout = layout;
+    fig.innerHTML = svg; D.popLayout = layout; $('popToolbar').hidden = false;
     const box = fig.querySelector('.tc-scroll');
     if (box) { box.scrollTop = D.tcScroll || 0; tcRangeLabel(box); }
   }
@@ -3748,6 +3750,7 @@
       }
       if (t.dataset.uq) { const q = t.dataset.uq; S.unitQ = S.unitQ.includes(q) ? S.unitQ.filter(x => x !== q) : [...S.unitQ, q]; t.classList.toggle('on'); fillUnitItems($('unitSearch').value); saveState(); return; }
       if (t.dataset.ua) { const a = t.dataset.ua; S.unitArea = S.unitArea.includes(a) ? S.unitArea.filter(x => x !== a) : [...S.unitArea, a]; t.classList.toggle('on'); fillUnitItems($('unitSearch').value); saveState(); return; }
+      if (t.dataset.ustep) { S.unitStep = t.dataset.ustep; saveState(); openUnitPicker(); return; }
       if (t.hasAttribute('data-unoted')) { S.unitNoted = !S.unitNoted; t.classList.toggle('on', S.unitNoted); t.setAttribute('aria-pressed', String(S.unitNoted)); fillUnitItems($('unitSearch').value); saveState(); return; }
       if (t.dataset.tpl) { closePop(); applyTemplate(TEMPLATES[Number(t.dataset.tpl)]); return; }
       if (t.dataset.finding) { const f = D.findings[Number(t.dataset.finding)]; if (f) openFinding(f); return; }
@@ -3757,9 +3760,6 @@
       if (t.hasAttribute('data-copylink')) { saveState(); setTimeout(() => navigator.clipboard.writeText(location.href).then(() => toast('Link copied — it restores this exact view.'), () => toast(location.href)), 300); return; }
       if (t.dataset.exp) { closePop(); (S.mode === 'population' ? popExport : doExport)(t.dataset.exp).catch(err => toast(err.message, true)); return; }
       if (t.dataset.mdel) { S.markers = S.markers.filter(m => m.id !== t.dataset.mdel); if (S.sort === `marker:${t.dataset.mdel}`) S.sort = 'session'; closePop(); renderStructure(); changed(); return; }
-    });
-    pop.addEventListener('change', e => {
-      if (e.target.id === 'rosterStep') { S.unitStep = e.target.checked ? 'roster' : 'all'; saveState(); openUnitPicker(); }
     });
     pop.addEventListener('input', e => {
       if (e.target.id === 'unitSearch') fillUnitItems(e.target.value);
@@ -3837,13 +3837,14 @@
       changed();
     };
     $('tdrLoN').addEventListener('change', tdrWinChange); $('tdrHiN').addEventListener('change', tdrWinChange);
-    $('ncomp').addEventListener('input', e => { S.ncomp = Number(e.target.value); $('ncompN').value = S.ncomp; renderStructure(); changed(); });
-    $('ncompN').addEventListener('change', e => {
-      const v = Number(e.target.value);
+    const setNcomp = v => {
       if (!Number.isInteger(v) || v < 2) { syncControls(); return; }
       if (v > MAX_NCOMP) toast(`At most ${MAX_NCOMP} components.`, true);
       S.ncomp = Math.min(v, MAX_NCOMP); $('ncompN').value = S.ncomp; renderStructure(); changed();
-    });
+    };
+    $('ncompN').addEventListener('change', e => setNcomp(Number(e.target.value)));
+    $('ncompDown').addEventListener('click', () => setNcomp(Math.max(2, S.ncomp - 1)));
+    $('ncompUp').addEventListener('click', () => setNcomp(Math.min(MAX_NCOMP, S.ncomp + 1)));
     for (const [id, i] of [['axX', 0], ['axY', 1], ['axZ', 2]]) $(id).addEventListener('change', e => { S.axes[i] = Number(e.target.value); saveState(); rerenderPopFigure(); });
     $('fitGroupsBtn').addEventListener('click', openFitGroups);
     $('fitSplit').addEventListener('change', e => { S.fitSplit = e.target.value; changed(); });
@@ -3855,7 +3856,7 @@
     $('cloudZero').addEventListener('change', e => { S.cloudZero = e.target.checked; changed(); });
     $('cloudAlpha').addEventListener('input', e => { S.cloudAlpha = Number(e.target.value) / 100; $('cloudAlphaOut').textContent = `${Math.round(S.cloudAlpha * 100)}%`; saveState(); rerenderPopFigure(); });
     $('sortDir').addEventListener('click', () => { S.dir = -S.dir; changed(); });
-    $('grouped').addEventListener('change', e => { S.grouped = e.target.checked; changed(); });
+    $('groupedSeg').addEventListener('click', e => { const b = e.target.closest('[data-grouped]'); if (b) { S.grouped = b.dataset.grouped === '1'; changed(); } });
     $('legend').addEventListener('click', e => {
       const b = e.target.closest('[data-g]');
       if (!b) return;
@@ -3909,7 +3910,6 @@
     $('cwHiN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v > S.cw[0]) S.cw[1] = v; changed(); });
     $('bin').addEventListener('input', e => { S.bin = Number(e.target.value) / 1000; changed(); });
     $('sigma').addEventListener('input', e => { S.sigma = Number(e.target.value) / 1000; changed(); });
-    $('rasterH').addEventListener('input', e => { S.rasterH = Number(e.target.value); S.rasterFit = false; changed(); });
     // The divider above the behavior timeline: drag to set the raster height, double-click
     // (two presses within 400 ms, as the population divider) to fit the window again.
     let rsplit = null, rsplitDown = 0;
@@ -3938,8 +3938,12 @@
     });
     // Collapsing the timeline or a wrapping header changes what has to fit.
     if (window.ResizeObserver) new ResizeObserver(() => { if (fitsWindow() && S.mode === 'raster') schedule(); }).observe($('behavior'));
-    $('ylock').addEventListener('change', e => { S.ylock = e.target.checked ? (D.model ? tidy(D.model.ymax, 1) : 20) : null; changed(); });
-    $('ymax').addEventListener('change', e => { const v = Number(e.target.value); if (v > 0) { S.ylock = v; changed(); } });
+    // Empty is auto; a positive number fixes the PSTH's top (S.ylock has always been null or that number).
+    $('ymax').addEventListener('change', e => {
+      const raw = e.target.value.trim(), v = Number(raw);
+      if (raw === '') S.ylock = null; else if (v > 0) S.ylock = v; else { syncControls(); return; }
+      changed();
+    });
     $('showBars').addEventListener('change', e => { S.bars = e.target.checked; changed(); });
     $('showRowRate').addEventListener('change', e => { S.rowRate = e.target.checked; changed(); });
     document.querySelectorAll('.seg[data-key]').forEach(seg => seg.addEventListener('click', e => {

@@ -16,12 +16,16 @@ JS = (STATIC / "explorer.js").read_text()
 
 class QuietInterfaceTests(unittest.TestCase):
     def test_page_has_no_caption_elements(self):
-        for cls in ("note", "help", "foot", "lg-hint", "bt-hint", "bt-legend-note", "bt-worlds"):
+        for cls in ("note", "help", "foot", "lg-hint", "bt-hint", "bt-legend-note", "bt-worlds", "mini-label", "ylock"):
             self.assertIsNone(re.search(rf'class="(?:[^"]* )?{cls}(?: [^"]*)?"', HTML), cls)
         self.assertNotIn('id="subtitle"', HTML)
+        # Sentence-long switch labels and parenthetical captions became segments, steppers and placeholders.
+        for text in ("Keep groups together", "lock at", "type up to 50", "blank = display window", "Filter on any field",
+                     "Marker from any event", "<span>Raster height</span>"):
+            self.assertNotIn(text, HTML, text)
 
     def test_script_draws_no_captions_on_screen(self):
-        for needle in ('class="lg-hint"', 'class="bt-hint"', "$('foot')", "$('subtitle')",
+        for needle in ('class="lg-hint"', 'class="bt-hint"', "$('foot')", "$('subtitle')", "Most limiting", "in this session · Result Viewer",
                        "scroll for more", "drag to rotate", "your judgement, not a test", "separated by commas"):
             self.assertFalse(needle in JS, needle)
 
