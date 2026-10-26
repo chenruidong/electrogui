@@ -21,8 +21,23 @@ class QuietInterfaceTests(unittest.TestCase):
         self.assertNotIn('id="subtitle"', HTML)
         # Sentence-long switch labels and parenthetical captions became segments, steppers and placeholders.
         for text in ("Keep groups together", "lock at", "type up to 50", "blank = display window", "Filter on any field",
-                     "Marker from any event", "<span>Raster height</span>"):
+                     "Marker from any event", "<span>Raster height</span>", "or drag on the PSTH", "Median marker lines",
+                     "Window-rate bars beside", "Rate by row beside", "yoke to rasters", "A · heatmap", "Subtract B",
+                     '<span class="pick-label">unit</span>', '<span class="pick-label">aligned to</span>'):
             self.assertNotIn(text, HTML, text)
+
+    def test_figure_controls_sit_on_the_figure(self):
+        # Axis pickers and the heatmap header are overlays on the population figure; the yoke sits on the divider.
+        overlay = HTML[HTML.index('id="figOverlay"'):HTML.index('<div class="empty"')]
+        for control in ('id="axX"', 'id="axY"', 'id="axZ"', 'id="heatGroup"', 'id="heatCompare"', 'data-key="heatNorm"', 'id="heatSort"'):
+            self.assertIn(control, overlay, control)
+        divider = HTML[HTML.index('class="bt-divider"'):HTML.index('<section class="behavior"')]
+        self.assertIn('id="btYoke"', divider)
+        self.assertIn('id="ruler"', HTML)
+        # Exports still draw the captions the screen replaced with controls.
+        for kept in ("if (opts.export) out.push(`<text x=\"${f(heat.x)}\"", "events (${L.thinned.shown} of ${L.thinned.total} drawn)",
+                     "rate in [${C.fmtNum(M.cw[0])}, ${C.fmtNum(M.cw[1])}) s"):
+            self.assertIn(kept, JS, kept)
 
     def test_script_draws_no_captions_on_screen(self):
         for needle in ('class="lg-hint"', 'class="bt-hint"', "$('foot')", "$('subtitle')", "Most limiting", "in this session · Result Viewer",

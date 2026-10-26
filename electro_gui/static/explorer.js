@@ -592,12 +592,20 @@
       const zeroX = X(0);
       if (pre < 0 && post > 0) out.push(`<line x1="${f(zeroX)}" x2="${f(zeroX)}" y1="${f(rTop)}" y2="${f(rBot)}" stroke="${ink}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>`);
       for (const r of S.refs) if (r > pre && r < post) out.push(`<line x1="${f(X(r))}" x2="${f(X(r))}" y1="${f(rTop)}" y2="${f(rBot)}" stroke="${muted}" stroke-width="1" stroke-dasharray="5 3"/>`);
-      out.push(`<text transform="translate(${f(x0 - 16)},${f((rTop + rBot) / 2)}) rotate(-90)" text-anchor="middle" font-size="11" fill="${muted}">${L.thinned ? `events (${L.thinned.shown} of ${L.thinned.total} drawn)` : 'events'}</text>`);
+      out.push(`<text transform="translate(${f(x0 - 16)},${f((rTop + rBot) / 2)}) rotate(-90)" text-anchor="middle" font-size="11" fill="${muted}">${L.thinned && opts.export ? `events (${L.thinned.shown} of ${L.thinned.total} drawn)` : 'events'}</text>`);
+      // On screen, thinning is a state, shown only while it happens.
+      if (L.thinned && !opts.export) {
+        const tx = `${L.thinned.shown} / ${L.thinned.total} rows`, bw = tx.length * 5.7 + 14;
+        out.push(`<rect x="${f(x0 + 6)}" y="${f(rTop + 6)}" width="${f(bw)}" height="17" rx="8.5" fill="${bg}" stroke="${axisC}" opacity="0.94"/>`,
+          `<text x="${f(x0 + 6 + bw / 2)}" y="${f(rTop + 18)}" text-anchor="middle" font-size="10.5" font-weight="600" fill="${muted}">${tx}</text>`);
+      }
 
       // ---- PSTH
       const yt = niceTicks(0, M.ymax, psthH > 180 ? 5 : 4);
       for (const v of yt) out.push(`<line x1="${f(x0)}" x2="${f(x1)}" y1="${f(Y(v))}" y2="${f(Y(v))}" stroke="${gridC}" stroke-width="1"/>`);
       out.push(`<rect x="${f(cw0)}" y="${f(pTop)}" width="${f(cw1 - cw0)}" height="${psthH}" fill="${windowC}" opacity="${isDark() ? 0.55 : 0.6}"/>`);
+      // Grips on the count window's edges: drag one to move it (bindFigure).
+      if (!opts.export) for (const gx of [cw0, cw1]) out.push(`<rect x="${f(gx - 3)}" y="${f(pTop + psthH / 2 - 14)}" width="6" height="28" rx="3" fill="${isDark() ? '#b08a3a' : '#c99a2e'}" pointer-events="none"/>`);
       if (pre < 0 && post > 0) out.push(`<line x1="${f(zeroX)}" x2="${f(zeroX)}" y1="${f(pTop)}" y2="${f(pBot)}" stroke="${ink}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>`);
       for (const r of S.refs) if (r > pre && r < post) out.push(`<line x1="${f(X(r))}" x2="${f(X(r))}" y1="${f(pTop)}" y2="${f(pBot)}" stroke="${muted}" stroke-width="1" stroke-dasharray="5 3"/>`);
       // marker medians
@@ -675,18 +683,18 @@
     return {svg: parts.join(''), height: y + 18};
   }
 
-  function barsSVG(M, width, height) {
-    const ink = figVar('--fig-ink'), muted = figVar('--fig-muted'), gridC = figVar('--fig-grid'), axisC = figVar('--fig-axis');
+  function barsSVG(M, width, height, {screen = false} = {}) {
+    const ink = figVar('--fig-ink'), muted = figVar('--fig-muted'), gridC = figVar('--fig-grid'), axisC = figVar('--fig-axis'), windowC = figVar('--fig-window');
     const gs = M.visible.filter(g => g.rate && g.rate.n);
     if (!gs.length) return '';
     const f = f1;
     const labelOf = g => g.label + (g.panelLabel ? ` · ${g.panelLabel}` : '');
-    const ml = 36, mr = 6, mt = 26;
+    const ml = 36, mr = 6, mt = screen ? 12 : 26;
     const slotsGuess = gs.length + (new Set(gs.map(g => g.panel)).size - 1) * 0.6;
     const longestLine = Math.max(...gs.map(g => Math.max(...labelOf(g).split(' · ').map(x => x.length))));
     const many = gs.length > 6 || longestLine * 5.3 > (width - ml - mr) / slotsGuess * 0.96;
     const longest = Math.max(...gs.map(g => labelOf(g).length));
-    const mb = many ? Math.min(130, 22 + longest * 4.3) : 22 + 11 * Math.max(...gs.map(g => Math.min(3, labelOf(g).split(' · ').length)));
+    const mb = screen ? 10 : many ? Math.min(130, 22 + longest * 4.3) : 22 + 11 * Math.max(...gs.map(g => Math.min(3, labelOf(g).split(' · ').length)));
     const w = width - ml - mr, h = Math.max(60, height - mt - mb);
     let max = 0;
     for (const g of gs) max = Math.max(max, g.rate.mean + (M.errMul || 1) * (g.rate.sem || 0));
@@ -697,7 +705,8 @@
     const slots = gs.length + (panelsSeen.length - 1) * 0.6;
     const step = w / slots, bw = Math.min(46, step * 0.72);
     const out = [];
-    out.push(`<text x="0" y="12" font-size="11.5" font-weight="600" fill="${ink}">rate in [${C.fmtNum(M.cw[0])}, ${C.fmtNum(M.cw[1])}) s</text>`);
+    if (screen) out.push(`<rect x="${ml - 6}" y="${mt - 8}" width="${w + 10}" height="${h + 10}" rx="6" fill="${windowC}" opacity="${isDark() ? 0.45 : 0.5}"/>`);
+    else out.push(`<text x="0" y="12" font-size="11.5" font-weight="600" fill="${ink}">rate in [${C.fmtNum(M.cw[0])}, ${C.fmtNum(M.cw[1])}) s</text>`);
     for (const v of niceTicks(0, max, 4)) {
       out.push(`<line x1="${ml}" x2="${ml + w}" y1="${f(Y(v))}" y2="${f(Y(v))}" stroke="${gridC}"/>`);
       out.push(`<text x="${ml - 5}" y="${f(Y(v) + 3.5)}" text-anchor="end" font-size="10" fill="${muted}">${C.fmtNum(v)}</text>`);
@@ -709,10 +718,11 @@
       slot += 1;
       const top = Y(g.rate.mean), e = (M.errMul || 1) * (g.rate.sem || 0);
       const light = g.dash ? 0.45 : 0.88;
-      out.push(`<rect x="${f(cx - bw / 2)}" y="${f(top)}" width="${f(bw)}" height="${f(mt + h - top)}" rx="2" fill="${g.color}" opacity="${light}"${g.dash ? ` stroke="${g.color}" stroke-dasharray="${g.dash}" stroke-width="1.4"` : ''}/>`);
+      out.push(`<rect x="${f(cx - bw / 2)}" y="${f(top)}" width="${f(bw)}" height="${f(mt + h - top)}" rx="2" fill="${g.color}" opacity="${light}"${g.dash ? ` stroke="${g.color}" stroke-dasharray="${g.dash}" stroke-width="1.4"` : ''}>${screen ? `<title>${esc(labelOf(g))}: ${C.fmtNum(g.rate.mean, 1)} spikes/s, n = ${g.rate.n}</title>` : ''}</rect>`);
       if (g.rate.n > 1) out.push(`<path d="M${f(cx)} ${f(Y(g.rate.mean + e))}V${f(Y(Math.max(0, g.rate.mean - e)))}M${f(cx - 4)} ${f(Y(g.rate.mean + e))}h8M${f(cx - 4)} ${f(Y(Math.max(0, g.rate.mean - e)))}h8" stroke="${ink}" stroke-width="1.2" fill="none"/>`);
       out.push(`<text x="${f(cx)}" y="${f(mt + h - 4)}" text-anchor="middle" font-size="9.5" fill="${light > 0.6 ? '#fff' : ink}">${g.rate.n}</text>`);
       const lines = labelOf(g).split(' · ');
+      if (screen) return;
       if (many) out.push(`<text transform="translate(${f(cx + 3)},${f(mt + h + 10)}) rotate(-40)" text-anchor="end" font-size="9.5" fill="${muted}">${esc(lines.join(' · '))}</text>`);
       else lines.slice(0, 3).forEach((line, k) => out.push(`<text x="${f(cx)}" y="${f(mt + h + 13 + k * 11)}" text-anchor="middle" font-size="9.5" fill="${muted}">${esc(line)}</text>`));
     });
@@ -890,15 +900,17 @@
       if (S.bars) {
         const barsTop = S.rowRate ? L.rBot + ROW_RATE_GAP : Math.max(0, L.pTop - 30);
         const h = Math.max(160, layout.height - barsTop);
-        inner += barsSVG(M, barsW, h).replace(/^<svg /, `<svg x="0" y="${f1(barsTop)}" `);
+        inner += barsSVG(M, barsW, h, {screen: true}).replace(/^<svg /, `<svg x="0" y="${f1(barsTop)}" `);
         colH = Math.max(colH, barsTop + h);
       }
-      $('bars').innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${barsW}" height="${Math.ceil(colH)}" viewBox="0 0 ${barsW} ${Math.ceil(colH)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">${inner}</svg>`;
-    } else if (S.bars) $('bars').innerHTML = barsSVG(M, Math.min(Math.max(260, width), 140 + 70 * M.visible.length), 260);
+      $('bars').innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${barsW}" height="${Math.ceil(colH)}" viewBox="0 0 ${barsW} ${Math.ceil(colH)}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">${inner}</svg>` +
+        (S.rowRate ? sideHide('rowRate', L.rTop, 'rate by row') : '') + (S.bars ? sideHide('bars', (S.rowRate ? L.rBot + ROW_RATE_GAP : Math.max(0, L.pTop - 30)) + 2, 'window-rate bars') : '');
+    } else if (S.bars) $('bars').innerHTML = barsSVG(M, Math.min(Math.max(260, width), 140 + 70 * M.visible.length), 260, {screen: true}) + sideHide('bars', 2, 'window-rate bars');
     else $('bars').innerHTML = '';
     D.figMeta.method = `rows are events; half-open count window; ${S.policy === 'verified_stable' ? 'stability from the exact NWB (v0.1 rule, 0.4 s guard)' : 'no stability filter'}`;
   }
 
+  const sideHide = (key, top, name) => `<button type="button" class="side-x" data-hide="${key}" style="top:${f1(top)}px" aria-label="Hide ${name}" title="Hide ${name}">×</button>`;
   function renderSupport(M) {
     const shown = M.visible.reduce((a, g) => a + g.rows.length, 0);
     const trials = new Set(); M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
@@ -943,10 +955,16 @@
         `<svg viewBox="0 0 26 10"><line x1="1" x2="25" y1="5" y2="5" stroke="${g.color}" stroke-width="2.4" stroke-linecap="round"${g.dash ? ` stroke-dasharray="${g.dash}"` : ''}/>${proj ? `<circle cx="13" cy="5" r="3.4" fill="var(--card)" stroke="${g.color}" stroke-width="1.6"/>` : ''}</svg>` +
         `${esc(g.label)}${g.panelLabel ? ` <small>· ${esc(g.panelLabel)}</small>` : ''} <small>${n} ${g.hidden ? 'events' : unitWord}</small></button>`;
     }).join('');
-    $('legend').innerHTML = html + (hiddenAny ? '<button class="link" type="button" data-g="__all">show all</button>' : '');
+    const marks = S.markers.filter(m => !m.off && M.markerData && M.markerData[m.id]);
+    const medians = marks.length ? `<button class="lg lg-med${S.medians ? '' : ' off'}" type="button" data-medians aria-pressed="${S.medians}" title="Marker medians on the ${S.mode === 'population' ? 'time courses' : 'PSTH'}">` +
+      `<svg viewBox="0 0 26 10">${marks.slice(0, 4).map((m, i) => `<line x1="${5 + i * 5.5}" x2="${5 + i * 5.5}" y1="0.5" y2="9.5" stroke="${paint(m.c)}" stroke-width="1.6" stroke-dasharray="2.2 1.6"/>`).join('')}</svg>medians</button>` : '';
+    const panels = S.mode === 'raster' ? [['rowRate', 'rate by row'], ['bars', 'rate bars']].filter(([k]) => !S[k])
+      .map(([k, name]) => `<button class="lg lg-add" type="button" data-panel="${k}" aria-label="Show ${name}">+ ${name}</button>`).join('') : '';
+    $('legend').innerHTML = html + medians + (hiddenAny ? '<button class="link" type="button" data-g="__all">show all</button>' : '') + panels;
   }
 
   function showLoading(title, text, detail = '') {
+    if ($('figOverlay')) $('figOverlay').hidden = true;
     $('figure').innerHTML = `<div class="loading-card"${detail ? ` title="${esc(detail)}"` : ''}><div class="spinner"></div><div><b>${esc(title)}</b>${text ? `<p>${esc(text)}</p>` : ''}</div></div>`;
     $('figure').classList.remove('stale');
     $('bars').innerHTML = '';
@@ -995,10 +1013,9 @@
       $('colorBy').innerHTML = fieldOptions(T, {none: 'none', grouping: true});
       $('styleBy').innerHTML = fieldOptions(T, {none: 'none', grouping: true});
       $('panelBy').innerHTML = fieldOptions(T, {none: 'none', grouping: true});
-      $('sortBy').innerHTML = S.mode === 'population'
-        ? [...Array(nComp()).keys()].map(k => `<option value="loading:${k}">loading on ${compName(k)}</option>`).join('') +
-          '<option value="peak">peak time (heatmap group)</option><option value="rate">mean rate</option><option value="channel">peak channel</option><option value="area">area, then channel</option><option value="id">unit ID</option>'
-        : fieldOptions(T, {none: '', sortExtras: true});
+      $('sortBy').innerHTML = fieldOptions(T, {none: '', sortExtras: true});
+      $('heatSort').innerHTML = [...Array(nComp()).keys()].map(k => `<option value="loading:${k}">⇅ ${esc(compName(k))} loading</option>`).join('') +
+        '<option value="peak">⇅ peak time</option><option value="rate">⇅ mean rate</option><option value="channel">⇅ peak channel</option><option value="area">⇅ area, then channel</option><option value="id">⇅ unit ID</option>';
     }
     renderFilterChips();
     renderMarkers();
@@ -1010,8 +1027,8 @@
     const T = D.tables.get(S.align);
     const setSel = (id, v) => { const el = $(id); el.value = v || ''; if (el.value !== (v || '') && el.options.length) el.value = ''; };
     setSel('colorBy', S.color); setSel('styleBy', S.style); setSel('panelBy', S.panel);
-    if (S.mode === 'population') { $('sortBy').value = S.nsort; if ($('sortBy').value !== S.nsort) { S.nsort = 'loading:0'; $('sortBy').value = S.nsort; } }
-    else { $('sortBy').value = S.sort; if ($('sortBy').value !== S.sort) $('sortBy').value = 'session'; }
+    $('sortBy').value = S.sort; if ($('sortBy').value !== S.sort) $('sortBy').value = 'session';
+    $('heatSort').value = S.nsort; if ($('heatSort').value !== S.nsort && ($('heatSort').options || []).length) { S.nsort = 'loading:0'; $('heatSort').value = S.nsort; }
     document.querySelectorAll('[data-method]').forEach(el => { el.hidden = el.dataset.method !== S.method; });
     document.querySelectorAll('[data-not-method]').forEach(el => { el.hidden = el.dataset.notMethod === S.method; });
     if (S.method === 'tdr') {
@@ -1031,12 +1048,9 @@
     $('groupedSeg').querySelectorAll('[data-grouped]').forEach(b => b.classList.toggle('on', (b.dataset.grouped === '1') === S.grouped));
     const cont = T && [S.color, S.style, S.panel].some(k => { const c = k && T.byKey.get(k); return c && c.kind === 'num' && !c.discrete; });
     $('qbinsField').hidden = !cont; $('qbins').value = String(S.qbins);
-    $('showMedians').checked = S.medians;
-    $('winLo').value = S.win[0]; $('winHi').value = S.win[1];
     if (document.activeElement !== $('winLoN')) $('winLoN').value = S.win[0];
     if (document.activeElement !== $('winHiN')) $('winHiN').value = S.win[1];
-    $('cwLo').min = $('cwHi').min = S.win[0]; $('cwLo').max = $('cwHi').max = S.win[1];
-    $('cwLo').value = S.cw[0]; $('cwHi').value = S.cw[1];
+    drawRuler();
     if (document.activeElement !== $('cwLoN')) $('cwLoN').value = S.cw[0];
     if (document.activeElement !== $('cwHiN')) $('cwHiN').value = S.cw[1];
     $('bin').value = Math.round(S.bin * 1000); $('binOut').textContent = `${Math.round(S.bin * 1000)} ms`;
@@ -1044,11 +1058,19 @@
     syncRasterOut();
     if (document.activeElement !== $('ymax')) $('ymax').value = S.ylock !== null ? S.ylock : '';
     $('ymax').placeholder = S.ylock === null && D.model ? `auto · ${tidy(D.model.ymax, 1)}` : 'auto';
-    $('showBars').checked = S.bars;
-    $('showRowRate').checked = S.rowRate;
     document.querySelectorAll('.seg[data-key]').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', S[seg.dataset.key] === b.dataset.v)));
   }
 
+  // The window ruler: the display window as a span, the count window nested in it in the PSTH's amber.
+  // Drag an edge to move it or the amber band to slide the count window; the number fields stay exact.
+  const rulerSpan = () => Math.max(5, Math.ceil(Math.max(-S.win[0], S.win[1])));
+  function drawRuler() {
+    const R = rulerSpan(), pct = v => `${(v + R) / (2 * R) * 100}%`, span = (a, b) => `${(b - a) / (2 * R) * 100}%`;
+    $('rWin').style.left = pct(S.win[0]); $('rWin').style.width = span(S.win[0], S.win[1]);
+    $('rCw').style.left = pct(S.cw[0]); $('rCw').style.width = span(S.cw[0], S.cw[1]);
+    $('rZero').style.left = pct(0);
+    $('rLo').textContent = `−${R}`; $('rHi').textContent = `${R} s`;
+  }
   function renderQuickFilters(M) {
     const T = M.T;
     const host = $('quickFilters');
@@ -2366,7 +2388,7 @@
         const zx = traj.x + traj.w / 2 - cx * scale, zy = traj.y + traj.h / 2 + cy * scale;
         if (zx > traj.x + pad && zx < traj.x + traj.w - pad) out.push(`<line x1="${f(zx)}" x2="${f(zx)}" y1="${f(traj.y + pad)}" y2="${f(traj.y + traj.h - pad)}" stroke="${gridC}"/>`);
         if (zy > traj.y + pad && zy < traj.y + traj.h - pad) out.push(`<line x1="${f(traj.x + pad)}" x2="${f(traj.x + traj.w - pad)}" y1="${f(zy)}" y2="${f(zy)}" stroke="${gridC}"/>`);
-        out.push(`<text x="${f(traj.x + traj.w / 2)}" y="${f(traj.y + traj.h - 8)}" text-anchor="middle" font-size="11.5" fill="${ink}">${compName(a)} · ${pct(a)}</text>`,
+        if (opts.export) out.push(`<text x="${f(traj.x + traj.w / 2)}" y="${f(traj.y + traj.h - 8)}" text-anchor="middle" font-size="11.5" fill="${ink}">${compName(a)} · ${pct(a)}</text>`,
           `<text transform="translate(${f(traj.x + 12)},${f(traj.y + traj.h / 2)}) rotate(-90)" text-anchor="middle" font-size="11.5" fill="${ink}">${compName(b)} · ${pct(b)}</text>`);
       }
       out.push(`<rect x="${f(traj.x + 0.5)}" y="${f(traj.y + 0.5)}" width="${f(traj.w - 1)}" height="${f(traj.h - 1)}" rx="10" fill="none" stroke="${gridC}"/>`);
@@ -2468,7 +2490,7 @@
       const ml = 50, x0 = heat.x + ml, x1 = heat.x + heat.w, pw = x1 - x0, rowH = heat.h / Math.max(1, U);
       const X = t => x0 + (t - pre) / (post - pre) * pw;
       const sortName = {loading: `${compName(loadingComp(fit))} loading`, peak: 'peak time', rate: 'mean rate', id: 'unit ID', channel: 'peak channel', area: 'area'}[String(S.nsort).split(':')[0]] || 'unit ID';
-      out.push(`<text x="${f(heat.x)}" y="${f(heat.y - 8)}" font-size="12" font-weight="600" fill="${ink}">neurons × time · <tspan fill="${hg.g.color}">${esc(heatLabel)}</tspan><tspan font-weight="400" fill="${muted}"> · ${scaleLabel} · sorted by ${sortName}</tspan></text>`);
+      if (opts.export) out.push(`<text x="${f(heat.x)}" y="${f(heat.y - 8)}" font-size="12" font-weight="600" fill="${ink}">neurons × time · <tspan fill="${hg.g.color}">${esc(heatLabel)}</tspan><tspan font-weight="400" fill="${muted}"> · ${scaleLabel} · sorted by ${sortName}</tspan></text>`);
       out.push(`<image href="${heatImage(fit, hg.gi, order)}" x="${f(x0)}" y="${f(heat.y)}" width="${f(pw)}" height="${f(heat.h)}" preserveAspectRatio="none" style="image-rendering:pixelated"/>`);
       let runStart = 0;
       for (let r = 1; r <= U; r++) {
@@ -2611,7 +2633,7 @@
     $('heatGroup').innerHTML = vis.map(g => `<option value="${esc(g.key)}"${hg && hg.g.key === g.key ? ' selected' : ''}>${esc(g.label)}</option>`).join('');
     const compare = vis.length >= 2 && vis.length <= 4 ? vis.filter(g => !hg || g.key !== hg.g.key) : [];
     if (!compare.some(g => g.key === S.heatCompare)) S.heatCompare = null;
-    $('heatCompare').innerHTML = '<option value="">None</option>' + compare.map(g => `<option value="${esc(g.key)}"${g.key === S.heatCompare ? ' selected' : ''}>${esc(g.label)}</option>`).join('');
+    $('heatCompare').innerHTML = '<option value="">none</option>' + compare.map(g => `<option value="${esc(g.key)}"${g.key === S.heatCompare ? ' selected' : ''}>${esc(g.label)}</option>`).join('');
     $('heatCompare').disabled = !compare.length;
     $('fitGroupsLabel').textContent = fitGroupsText();
     $('fitSplit').value = S.fitSplit;
@@ -2619,7 +2641,7 @@
   const fitGroupsText = () => (S.fitGroups === null ? 'all groups' : `${S.fitGroups.length} group${S.fitGroups.length === 1 ? '' : 's'}`);
 
   function popEmpty(title, lines, buttons) {
-    $('figure').innerHTML = ''; $('figure').classList.remove('stale'); $('popToolbar').hidden = true;
+    $('figure').innerHTML = ''; $('figure').classList.remove('stale'); $('popToolbar').hidden = true; $('figOverlay').hidden = true;
     D.popLayout = null; D.popFit = null; D.popModelKey = null; D.navOrder = null;
     for (const id of ['heatGroup', 'heatCompare']) { $(id).innerHTML = ''; $(id).disabled = true; }
     $('empty').innerHTML = `<h3>${esc(title)}</h3>${lines.map(l => `<p>${l}</p>`).join('')}<div class="chips" style="justify-content:center;margin-top:12px">${buttons}</div>`;
@@ -2717,8 +2739,30 @@
   // Redraws keep the time-course box where it was scrolled to.
   function mountPopFigure(fig, svg, layout) {
     fig.innerHTML = svg; D.popLayout = layout; $('popToolbar').hidden = false;
+    placePopOverlay();
     const box = fig.querySelector('.tc-scroll');
     if (box) { box.scrollTop = D.tcScroll || 0; tcRangeLabel(box); }
+  }
+  // The overlay's controls sit on the SVG's own coordinates: the figure is drawn 1:1 at the top-left of .figure-wrap.
+  function placePopOverlay() {
+    const ov = $('figOverlay'), L = D.popLayout;
+    if (!ov) return;
+    ov.hidden = !(S.mode === 'population' && L && L.traj);
+    if (ov.hidden) return;
+    const at = (el, x, y) => { el.style.left = `${f1(x)}px`; el.style.top = `${f1(y)}px`; };
+    const b = L.traj.box, three = L.traj.three, X = $('ovX'), Y = $('ovY'), Z = $('axZWrap');
+    ov.classList.toggle('three', three);
+    Y.classList.toggle('rot', !three);
+    if (three) {
+      // Rotating in 3D: the three pickers, lettered, along the box's bottom edge.
+      at(X, b.x + 10, b.y + b.h - 34); at(Y, b.x + 16 + X.offsetWidth, b.y + b.h - 34); at(Z, b.x + 22 + X.offsetWidth + Y.offsetWidth, b.y + b.h - 34);
+    } else {
+      at(X, b.x + b.w / 2 - X.offsetWidth / 2, b.y + b.h - 6 - X.offsetHeight);
+      at(Y, b.x + 4 + Y.offsetHeight / 2 - Y.offsetWidth / 2, b.y + b.h / 2 - Y.offsetHeight / 2);
+    }
+    const H = L.heat, ctl = $('heatCtl');
+    ctl.hidden = !H;
+    if (H) at(ctl, H.box.x, H.box.y - ctl.offsetHeight - 6);
   }
   function tcRangeLabel(box) {
     const L = D.popLayout, el = document.getElementById('tcRange');
@@ -3046,7 +3090,13 @@
     if (hl) hl.innerHTML = `<rect x="${f1(L.x0)}" y="${f1(yc - Math.max(b.rowH, 2) / 2)}" width="${f1(L.plotW)}" height="${f1(Math.max(b.rowH, 2))}" fill="${g.color}" opacity="0.18"/>`;
   }
 
-  let brush = null, tipTimer = 0;
+  let brush = null, tipTimer = 0, cwEdge = null;
+  /** The count-window edge (0 or 1) within reach of an SVG x on panel L, or -1. */
+  function cwEdgeAt(L, x, reach) {
+    const X = t => L.x0 + (t - D.layout.pre) / (D.layout.post - D.layout.pre) * L.plotW;
+    const d = [0, 1].map(k => Math.abs(x - X(S.cw[k]))), k = d[0] <= d[1] ? 0 : 1;
+    return d[k] <= reach ? k : -1;
+  }
   // Raster | PSTH divider.  Height moves between the two and their sum stays put, so a
   // fitted page still fits; in fit mode the raster share lives in D.fitRasterH.
   let psplit = null, psplitDown = 0;
@@ -3081,6 +3131,11 @@
       if (!D.layout || !D.model) return;
       if (psplit) { dragPsthSplit(evt); return; }
       const p = svgPoint(evt);
+      if (cwEdge) {
+        const L = D.layout.panels[cwEdge.p], t = tidy(Math.round(timeAt(L, clamp(p.x, L.x0, L.x1)) / 0.01) * 0.01);
+        if (cwEdge.k === 0) S.cw[0] = Math.min(t, S.cw[1] - 0.01); else S.cw[1] = Math.max(t, S.cw[0] + 0.01);
+        changed(); return;
+      }
       if (brush) {
         const L = D.layout.panels[brush.p];
         const a = clamp(Math.min(brush.x, p.x), L.x0, L.x1), z = clamp(Math.max(brush.x, p.x), L.x0, L.x1);
@@ -3091,6 +3146,7 @@
       const hit = evt.target.closest && evt.target.closest('.hit');
       if (!hit || hit.dataset.kind === 'rsplit') { if (evt.pointerType === 'mouse' || hit) hideTip(); return; }
       const L = D.layout.panels[Number(hit.dataset.p)];
+      fig.style.cursor = hit.dataset.kind === 'psth' && evt.pointerType === 'mouse' && cwEdgeAt(L, p.x, 6) >= 0 ? 'ew-resize' : '';
       hit.dataset.kind === 'psth' ? hoverPsth(L, p, evt) : hoverRaster(L, p, evt);
     });
     fig.addEventListener('pointerleave', evt => { if (evt.pointerType === 'mouse' && !brush) hideTip(); });
@@ -3108,6 +3164,10 @@
         fig.setPointerCapture(evt.pointerId); fig.style.cursor = 'row-resize'; hideTip(); evt.preventDefault();
         return;
       }
+      if (hit.dataset.kind === 'psth' && (evt.pointerType !== 'mouse' || evt.button === 0)) {
+        const pi = Number(hit.dataset.p), k = cwEdgeAt(D.layout.panels[pi], svgPoint(evt).x, evt.pointerType === 'mouse' ? 6 : 14);
+        if (k >= 0) { cwEdge = {p: pi, k}; fig.setPointerCapture(evt.pointerId); hideTip(); evt.preventDefault(); return; }
+      }
       if (evt.pointerType === 'mouse' && evt.button === 0 && hit.dataset.kind === 'psth') {
         brush = {p: Number(hit.dataset.p), x: svgPoint(evt).x, moved: false};
         fig.setPointerCapture(evt.pointerId);
@@ -3120,6 +3180,7 @@
     });
     fig.addEventListener('pointerup', evt => {
       if (psplit) { psplit = null; fig.style.cursor = ''; saveState(); return; }
+      if (cwEdge) { cwEdge = null; fig.style.cursor = ''; return; }
       if (!brush) return;
       const L = D.layout.panels[brush.p], x = svgPoint(evt).x;
       if (Math.abs(x - brush.x) > 4) {
@@ -3129,7 +3190,7 @@
       }
       brush = null; hideTip();
     });
-    fig.addEventListener('pointercancel', () => { brush = null; if (psplit) { psplit = null; fig.style.cursor = ''; saveState(); } hideTip(); });
+    fig.addEventListener('pointercancel', () => { brush = null; cwEdge = null; if (psplit) { psplit = null; fig.style.cursor = ''; saveState(); } hideTip(); });
     fig.addEventListener('click', evt => {
       const hit = evt.target.closest && evt.target.closest('.hit');
       if (!hit || hit.dataset.kind !== 'raster' || !D.layout || !D.model) return;
@@ -3259,7 +3320,7 @@
     $('btN').value = String(Math.min(S.btN, n));
     const {first, last} = C.viewTrials(B, layout.view);
     $('btNOut').textContent = S.btN >= n ? `all ${n} trials` : `${last - first + 1} trials · ${B.trials.id[first]}–${B.trials.id[last]}`;
-    $('btYoke').checked = S.yoke;
+    $('btYoke').setAttribute('aria-pressed', String(S.yoke)); $('btYoke').classList.toggle('on', S.yoke);
     drawBehaviorPin();
   }
 
@@ -3650,7 +3711,7 @@
       }
     }, {passive: false});
     $('btToggle').addEventListener('click', () => { S.bt = !S.bt; changed({data: S.bt}); });
-    $('btYoke').addEventListener('change', e => { S.yoke = e.target.checked; changed({data: S.yoke}); });
+    $('btYoke').addEventListener('click', () => { S.yoke = !S.yoke; changed({data: S.yoke}); });
     $('btN').addEventListener('input', e => { S.btN = Number(e.target.value); saveState(); behaviorMoved(); });
     const pan = dir => { if (!D.btLayout) return; const V = D.btLayout.view; D.btC += dir * Math.max(1, (V.b - V.a) / 2); behaviorMoved(); };
     $('btPrev').addEventListener('click', () => pan(-1));
@@ -3802,7 +3863,8 @@
     $('panelBy').addEventListener('change', e => { S.panel = e.target.value || null; regroup(); });
     $('qbins').addEventListener('change', e => { S.qbins = Number(e.target.value); regroup(); });
     $('groupPresets').addEventListener('click', e => { const b = e.target.closest('[data-gp]'); if (!b) return; const [a, c] = b.dataset.gp.split('|'); S.color = a; S.style = c || null; regroup(); });
-    $('sortBy').addEventListener('change', e => { if (S.mode === 'population') S.nsort = e.target.value; else S.sort = e.target.value; changed(); });
+    $('sortBy').addEventListener('change', e => { S.sort = e.target.value; changed(); });
+    $('heatSort').addEventListener('change', e => { S.nsort = e.target.value; changed(); });
     $('modes').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
     $('rosterBtn').addEventListener('click', e => D.units.length && openRosterPicker(e.currentTarget));
     $('chooseNeurons').addEventListener('click', e => D.units.length && openRosterPicker(e.currentTarget));
@@ -3858,6 +3920,9 @@
     $('sortDir').addEventListener('click', () => { S.dir = -S.dir; changed(); });
     $('groupedSeg').addEventListener('click', e => { const b = e.target.closest('[data-grouped]'); if (b) { S.grouped = b.dataset.grouped === '1'; changed(); } });
     $('legend').addEventListener('click', e => {
+      if (e.target.closest('[data-medians]')) { S.medians = !S.medians; changed(); return; }
+      const add = e.target.closest('[data-panel]');
+      if (add) { S[add.dataset.panel] = true; changed(); return; }
       const b = e.target.closest('[data-g]');
       if (!b) return;
       if (b.dataset.g === '__all') S.hidden = [];
@@ -3896,16 +3961,37 @@
     });
     $('refForm').addEventListener('submit', e => { e.preventDefault(); const v = Number($('refInput').value); if ($('refInput').value !== '' && Number.isFinite(v)) { S.refs.push(v); $('refInput').value = ''; renderMarkers(); changed(); } });
     $('refList').addEventListener('click', e => { const b = e.target.closest('[data-rdel]'); if (b) { S.refs.splice(Number(b.dataset.rdel), 1); renderMarkers(); changed(); } });
-    $('showMedians').addEventListener('change', e => { S.medians = e.target.checked; changed(); });
+    $('bars').addEventListener('click', e => { const b = e.target.closest('[data-hide]'); if (b) { S[b.dataset.hide] = false; changed(); } });
 
     // display knobs
     const winChanged = () => { clampCw(); changed({data: !rasterCovers(D.rasters.get(rasterKey()))}); };
-    $('winLo').addEventListener('input', e => { S.win[0] = tidy(Number(e.target.value), 2); winChanged(); });
-    $('winHi').addEventListener('input', e => { S.win[1] = tidy(Number(e.target.value), 2); winChanged(); });
+    const ruler = $('ruler');
+    let rdrag = null;
+    const rulerT = evt => { const r = ruler.getBoundingClientRect(), R = rulerSpan(); return -R + clamp((evt.clientX - r.left) / Math.max(1, r.width), 0, 1) * 2 * R; };
+    const rulerMove = evt => {
+      if (!rdrag) return;
+      const t = rulerT(evt), cwStep = v => tidy(Math.round(v * 20) / 20), winStep = v => tidy(Math.round(v * 10) / 10, 2);
+      if (rdrag.kind === 'w0') S.win[0] = clamp(winStep(t), -10, -0.1);
+      else if (rdrag.kind === 'w1') S.win[1] = clamp(winStep(t), 0.1, 10);
+      else if (rdrag.kind === 'c0') S.cw[0] = Math.min(cwStep(t), S.cw[1] - 0.05);
+      else if (rdrag.kind === 'c1') S.cw[1] = Math.max(cwStep(t), S.cw[0] + 0.05);
+      else { const w = rdrag.cw0[1] - rdrag.cw0[0], a = clamp(rdrag.cw0[0] + cwStep(t - rdrag.t0), S.win[0], S.win[1] - w); S.cw = [tidy(a), tidy(a + w)]; }
+      if (rdrag.kind[0] === 'w') winChanged(); else changed();
+    };
+    ruler.addEventListener('pointerdown', evt => {
+      const r = ruler.getBoundingClientRect(), R = rulerSpan(), px = v => r.left + (v + R) / (2 * R) * r.width, t = rulerT(evt);
+      // The nearest edge within reach (count-window edges first when they coincide), else the band, else the nearer side.
+      const near = [['c0', S.cw[0]], ['c1', S.cw[1]], ['w0', S.win[0]], ['w1', S.win[1]]].map(([k, v]) => [k, Math.abs(evt.clientX - px(v))]).sort((a, b) => a[1] - b[1])[0];
+      const kind = near[1] <= 8 ? near[0] : t > S.cw[0] && t < S.cw[1] ? 'band' : t < S.win[0] ? 'w0' : t > S.win[1] ? 'w1' : Math.abs(t - S.cw[0]) < Math.abs(t - S.cw[1]) ? 'c0' : 'c1';
+      rdrag = {kind, t0: t, cw0: S.cw.slice()};
+      ruler.setPointerCapture(evt.pointerId); evt.preventDefault();
+      if (kind !== 'band') rulerMove(evt);
+    });
+    ruler.addEventListener('pointermove', rulerMove);
+    const rulerEnd = () => { rdrag = null; };
+    ruler.addEventListener('pointerup', rulerEnd); ruler.addEventListener('pointercancel', rulerEnd);
     $('winLoN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v < S.win[1] && v >= -10) { S.win[0] = v; winChanged(); } else syncControls(); });
     $('winHiN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v > S.win[0] && v <= 10) { S.win[1] = v; winChanged(); } else syncControls(); });
-    $('cwLo').addEventListener('input', e => { S.cw[0] = Math.min(Number(e.target.value), S.cw[1] - 0.01); changed(); });
-    $('cwHi').addEventListener('input', e => { S.cw[1] = Math.max(Number(e.target.value), S.cw[0] + 0.01); changed(); });
     $('cwLoN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v < S.cw[1]) S.cw[0] = v; changed(); });
     $('cwHiN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v > S.cw[0]) S.cw[1] = v; changed(); });
     $('bin').addEventListener('input', e => { S.bin = Number(e.target.value) / 1000; changed(); });
@@ -3944,8 +4030,6 @@
       if (raw === '') S.ylock = null; else if (v > 0) S.ylock = v; else { syncControls(); return; }
       changed();
     });
-    $('showBars').addEventListener('change', e => { S.bars = e.target.checked; changed(); });
-    $('showRowRate').addEventListener('change', e => { S.rowRate = e.target.checked; changed(); });
     document.querySelectorAll('.seg[data-key]').forEach(seg => seg.addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
       const key = seg.dataset.key;
