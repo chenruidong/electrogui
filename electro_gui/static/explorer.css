@@ -458,6 +458,13 @@ a.item { text-decoration: none; }
 :root[data-theme="dark"] .item .q.mua { background: #3c2f15; color: #f2c46d; }
 .pop-note { padding: 8px 12px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .pop-sub { padding: 8px 10px 2px; font-size: 12px; font-weight: 650; color: var(--ink-2); }
+kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 5px; background: var(--card-2);
+  font: 600 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-2); text-align: center; white-space: nowrap; }
+.item kbd { margin-left: auto; }
+.keys, .about { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; margin: 6px 8px 10px; align-items: baseline; font-size: 13px; }
+.keys dt, .about dt { color: var(--muted); font-size: 12.5px; }
+.keys dd, .about dd { margin: 0; color: var(--ink); }
+.about dd { overflow-wrap: anywhere; font-size: 12.5px; }
 .field-def summary { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); color: var(--muted); font-size: 12px; cursor: pointer; list-style: none; }
 .field-def summary::-webkit-details-marker { display: none; }
 .field-def[open] summary { color: var(--accent); border-color: var(--accent); }
@@ -566,7 +573,6 @@ textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent
   .brand { grid-area: brand; }
   .top { grid-template-columns: auto auto minmax(0, 1fr) auto; grid-template-areas: "brand modes unit actions" "align align align align"; }
   .modes { grid-area: modes; }
-  .brand span { display: none; }
   .pickers, .ctx { display: contents; }
   .unit-pick { grid-area: unit; display: flex; min-width: 0; }
   .roster-btn { grid-area: unit; justify-content: center; min-width: 0; }

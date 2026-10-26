@@ -161,3 +161,38 @@ model signature binds redraws, exports/findings and row navigation to the
 current model/fit inputs, including quantile bins and hidden groups; only a
 fresh result publishes a stepping order. Error/empty views invalidate that fit
 and clear/disable heatmap selectors.
+
+## Quiet interface
+
+The explorer shows no taglines, helper paragraphs or secondary labels. When a
+screen seemed to need one, its layout changed instead, and every change had to
+help the person at the screen, the maintainer and an agent driving the page,
+without breaking saved state.
+
+- **Counts on the controls that cause them.** `markExclusions()` writes `−n` on
+  the active Trials choice, the Window heading, the Filter heading and the yoke
+  button (tooltips give the sentence); the support line shows only what is drawn.
+- **Controls on the figure.** The population trajectory's axis titles are the
+  component selects and the heatmap header holds group, subtraction, scaling and
+  neuron order (`#figOverlay`, positioned by `placePopOverlay()` on the SVG's own
+  coordinates; `.figure-wrap` draws the figure 1:1). The yoke is a button on the
+  divider it joins; side panels close with `×` and return from the legend; marker
+  medians toggle from the legend; the PSTH's count-window shade has grips
+  (`cwEdgeAt()`); one window ruler (`drawRuler()`) replaces four sliders.
+- **Segments and steppers instead of sentence switches**: Rows grouped|mixed,
+  Y max (empty = auto), Fit on [groups] [trials], a components stepper, All
+  units | Roster in the unit picker. Each maps onto the state key it replaced
+  (`grouped`, `ylock`, `fitGroups`, `fitSplit`, `ncomp`, `unitStep`), so links,
+  config files and findings need no migration.
+- **Captions kept where the figure travels.** Exports pass `opts.export` and keep
+  the subtitle, axis texts, heatmap title, bars heading and fit diagnostics;
+  `figureState()` publishes the same identity as JSON in `#figure-state` on
+  every render; ⋯ → *About this figure* shows it on screen. Field definitions
+  open from ⓘ in the filter editor; they are scientific content, not help text.
+- **One action table.** `ACTIONS` drives the top-bar buttons, the ⋯ menu (which
+  lists only actions whose button is not visible, so phones fold them in), the
+  `?` key sheet (`GESTURES`) and `data-action` ids on every control.
+
+`tests/test_no_helper_text.py` reads the static page and script and fails if
+the cut text or caption classes return, if a popover note grows past one line,
+or if the overlays, action table or export captions go missing.

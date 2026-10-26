@@ -135,13 +135,32 @@ window-rate bars — beside a control panel
 with four sections.  On narrow screens the controls move into a bottom sheet
 with Filter / Group / Markers / Display tabs.
 
-- **Unit and alignment.**  `‹ ›` (or ← / →) step through units; the unit picker
+The page carries no captions or helper text; controls sit on what they change
+(electro_gui/DESIGN.md, *Quiet interface*).  Where the words went:
+
+- the settings line that used to sit under the title is in every exported
+  figure and in ⋯ → **About this figure** (with source path, SHA256, method and
+  version, and *Copy as JSON*);
+- what each control leaves out is counted on the control: the active **Trials**
+  choice shows `−240` for events in unstable trials, **Window** for events whose
+  window leaves the stable run, **Filter** for filtered events and the yoke
+  button for events outside the yoked trials (hover for the sentence);
+- ⋯ → **Keyboard and mouse** (or `?`) lists every key and gesture;
+- `<script type="application/json" id="figure-state">` holds the drawn view for
+  scripts and agents — session, unit or roster, alignment, counts with each
+  exclusion reason, groups, settings, source identity and the fit summary —
+  refreshed on every render; the tab title names the view; every top-bar and
+  menu control has a `data-action` id (`finding.save`, `export.svg`, …).
+
+- **Unit and alignment.**  Session, unit and alignment share one control in the
+  top bar.  `‹ ›` (or ← / →) step through units; the unit picker
   searches by unit ID, peak channel, area, Result Viewer note or tag and filters
   by quality (SUA and MUA by default), area and **✎ Noted**. Noted means a saved
   note, tag or flag in Result Viewer's notebook for this session. Each noted row
   shows its tags, flag and a note preview (the full note is in its tooltip).
+  The ✎ Noted chip shows how many units are noted.
   The Noted filter also applies to arrow-key stepping, together with the quality,
-  area and optional population-roster filters. Notes refresh when the picker
+  area and the *All units | Roster* switch. Notes refresh when the picker
   opens. A read failure is shown and keeps previously loaded notes for the same
   session; missing/unavailable notebooks never block the explorer. Notes are
   matched by session and NWB unit ID; saved channel, area or quality differences
@@ -174,10 +193,12 @@ with Filter / Group / Markers / Display tabs.
   padded window reaches into it leaves the stable run (09_15 trial 315 at a
   −1.5 s trial-display-start window).
 - **Filter.**  World, role and action are one-tap chips with live counts (counts
-  honour every other filter and the eligibility rule).  *Filter on any field*
+  honour every other filter and the eligibility rule).  *+ Filter*
   opens a searchable list — Common, History, Task & trial, Timing (s from
   event), Object details, Trial details — and a value editor: category chips
-  with counts (missing is its own chip), or a numeric range over a histogram.
+  with counts (missing is its own chip), or a numeric range over a histogram
+  whose empty bounds show the observed minimum and maximum.  ⓘ in the editor
+  opens the field's definition and timing.
   A filter on a field the current alignment lacks is kept, shown dashed, and
   ignored.  In History, *strategy changed* compares a trial's strategy with
   the trial before it and *strategy changes next trial* with the trial after
@@ -192,22 +213,33 @@ with Filter / Group / Markers / Display tabs.
   *no next object*.  Click a legend entry to hide a group, double-click to show
   only it, right-click (long-press on touch) to set its colour and dash.  Rows
   can be sorted by session order, spikes in the count window, any marker's
-  latency or any field; *Keep groups together* stacks one block per group.
+  latency or any field; *Rows: grouped* stacks one block per group, *mixed*
+  interleaves them.
 - **Markers.**  A marker is a recorded event matched to each row in the same
   object or the same trial, choosing the nearest, first-after, last-before or
   every occurrence; optionally *shade until* a second event draws a per-row
   band.  Rows show a dot at the event; the PSTH shows the median across shown
   rows as a dashed line plus a small triangle per group.  One-tap presets add
   object visible, joystick onset, trial initiation, goal release, reward and
-  outcome.  Reference lines sit at fixed times.  Markers never change which
-  events are counted.  Joystick markers use the recorded joystick events,
+  outcome.  *+ Line at … s* adds a reference line at a fixed time; lines show as
+  chips beside the markers.  The legend's *medians* entry hides or shows the
+  median lines.  Markers never change which events are counted.  Joystick markers use the recorded joystick events,
   which are sparse in the Sep 15 session and are not detected movement bouts.
-- **Display.**  Window (−10 to 10 s), count window (sliders, number boxes, or
-  drag across the PSTH with a mouse), bin width 5–200 ms, Gaussian σ 0–100 ms,
-  error band (SEM, 95% CI = 1.96 SEM, none), averaging over events or trials,
-  eligibility (*stable for unit* = v0.1's verified stable, or *all complete*),
-  raster ticks as lines or dots, raster height, a locked y-maximum for
-  comparing units, the window-rate bars and the rate-by-row strip.
+- **Display.**  Window (−10 to 10 s) and count window on one ruler, the count
+  window in the PSTH's amber: drag a window's edge, slide the amber band, type
+  exact values, drag across the PSTH with a mouse for a new count window, or
+  drag a grip on the PSTH's amber shade to move one edge.  Bin width 5–200 ms,
+  Gaussian σ 0–100 ms, error band (SEM, 95% CI = 1.96 SEM, none), averaging over
+  events or trials, eligibility (*stable* = v0.1's verified stable for this
+  unit, or *all complete*), raster ticks as lines or dots, and *Y max* (empty
+  is auto, showing the current top; a number locks it for comparing units).
+  The raster's height follows the window; drag the divider under the raster
+  (or the one above the timeline) to fix it, double-click to fit again.  The
+  window-rate bars and the rate-by-row strip close with their `×`; *+ rate
+  bars* / *+ rate by row* at the end of the legend bring them back.  On screen
+  the bars sit on the count window's amber without group names (the legend's
+  colours and dashes name them; hover a bar for its group and rate); exports
+  keep the heading and names.
 
 **Rate by row.**  Beside the raster, level with its rows, each group's
 count-window rate is drawn against the raster's own row order (session order by
@@ -216,7 +248,7 @@ Gaussian-weighted mean of the count-window rates of that row and the same
 group's neighbouring rows in raster order (σ = n/60 rows, rounded, between 4
 and 15, for a group of n events; cut at 3σ and renormalised at the ends).
 Single rows are too noisy to read: one 0.5 s window holds a spike or two, or a
-burst of 15.  With *Keep groups together* off the groups' rows interleave and
+burst of 15.  With *Rows: mixed* the groups' rows interleave and
 each line runs through its own group's rows.  It uses every row, including
 those the drawing thins out, and appears only where the side column fits (one
 panel, a wide window) and in exports of one panel.
@@ -261,13 +293,14 @@ whole session with the visible window boxed.
   It follows alignment changes (it is a trial, not a row), survives reloads and
   links, and clears on `Esc`, its `×`, or a session change.  Clicking the chip
   re-centres the timeline.
-- **Yoke to rasters** (the switch left of the slider) makes the rasters, PSTHs,
+- **Yoke** (the link button on the divider between the rasters and the
+  timeline) makes the rasters, PSTHs,
   window-rate bars, quick-filter counts and exports use only the timeline's
   trials — those whose centre is in view — widened to at least 20 (or every
   trial there is), as close to centred on the pinned trial as covering the whole
   view allows (on the view's centre when nothing is pinned).  An accent bar
   under the trial numbers and under the session strip marks those trials; the
-  subtitle and support line name them, and exports record them as
+  button counts the events left out, #figure-state names them, and exports record them as
   `yoked_trials` in their provenance.  Panning or zooming redraws the rasters
   only when that range changes.  Yoking is inactive while the timeline is
   collapsed; off, the rasters show every trial.
@@ -305,24 +338,27 @@ Neurons tab on phones) and a model block at the top of *Model & display*.
   Every event is re-checked on the server against the common-trial eligibility
   rule for this roster and window.  Component signs are set so each
   component's largest loading is positive; ICA/FA components are listed by
-  variance explained.  *Components* has a 2–10 slider and a number box that
-  takes up to 50 (`explorer.MAX_COMPONENTS`); past that the neurons and the
+  variance explained.  *Components* is a − n + stepper from 2 to 50
+  (`explorer.MAX_COMPONENTS`); past that the neurons and the
   fit's rank are the limit.  Refits run automatically about 0.3 s after a change
   that affects them and are cached; hiding a group in the legend, axes,
   2D/3D, heatmap group, sorting and the cursor only redraw.
-- **Figure.**  A trajectory (any two components, or three in a 3D view you
-  drag to rotate; ○ start, ● t = 0, the count window thickened, ◆ marker
+- **Figure.**  A trajectory (any two components, picked from its axis titles,
+  or three in a 3D view you drag to rotate, picked from the X Y Z row; ○ start, ● t = 0, the count window thickened, ◆ marker
   medians), the component time courses in the PSTH's style (count window,
   t = 0, reference lines and marker medians), a neuron × time heatmap for one
-  group — z-scored per neuron with the training means/SD, or rate / training neuron peak — with
+  group — z-scored per neuron with the training means/SD, or rate / training neuron peak,
+  chosen with the group, subtraction, scaling and order controls on its header — with
   an area strip, sorted by a component's loading, peak time, mean rate, peak
   channel, area or unit ID, the chosen component's loadings as bars aligned to
   the heatmap rows, variance explained per component (single-component R²
   for ICA/FA) and, to its right, the cumulative variance explained by
   components 1…k together, in the order shown — computed from the partial
   reconstruction, so it ends at the diagnostics' "all K components together"
-  figure and is exact for FA, whose scores need not be uncorrelated — with the
-  fit's diagnostics.  The toolbar's time cursor (▶ plays;
+  figure and is exact for FA, whose scores need not be uncorrelated.  The fit's
+  diagnostics (fit rows, rank, weighting, training split) are drawn in exports
+  and listed in ⋯ → *About this figure*; on screen only a fit warning shows.  The
+  toolbar's time cursor (▶ plays;
   ← / → step; space plays) marks the same moment in every panel.
 - **Layout.**  On wide screens the trajectory and the time courses share the
   top row half and half.  Drag the divider between them to resize (at least
@@ -333,9 +369,10 @@ Neurons tab on phones) and a model block at the top of *Model & display*.
   axis, and redraws keep the scroll position; exports draw every component.
 - **Reference markers and single trials.**  t = 0 (●) and every reference line
   (■ ▲ ▼ ✚ in time order, set in *Markers*) are marked on each trajectory at the
-  bin that contains that time.  *Show single trials at those times* adds a cloud
+  bin that contains that time; each reference chip in *Markers* shows its glyph.
+  *Show single trials at those times* adds a cloud
   of every trial's population state at those times, projected with the fitted
-  basis (not full single-trial trajectories), with an opacity slider, an
+  basis (not full single-trial trajectories); while it is on, an opacity slider, an
   optional t = 0, and *Fit axes to* trajectories (the default; dots beyond the
   frame are counted) or the trial cloud (central 98%).  A point is one trial —
   its events averaged — under *Average over trials*, or one event under
@@ -343,7 +380,7 @@ Neurons tab on phones) and a model block at the top of *Model & display*.
   and normalisation, so each group's cloud is centred exactly on its trajectory
   marker (tested).  The server caches each fit's linear transform, so the cloud
   needs no refit.  Hover a dot for its trial (or event row) and coordinates;
-  *Export → Single-trial cloud · CSV* writes every point.
+  *Export → Single trials · CSV* writes every point.
 - **Export**: figure SVG/PNG, coordinates CSV (every group's component time
   courses), loadings CSV (unit, peak channel, area, quality) and a settings &
   fit JSON (roster, groups, method, variance, source SHA256).
@@ -354,10 +391,12 @@ that a component is a latent cognitive variable.
 
 ### Training subsets, projections and differences
 
-**Fit groups** in *Model & display* selects which groups train PCA, ICA, FA or
-TDR. Every group is still displayed, marked `[fit]` or `[projected group]`.
-Hiding a legend entry only changes the display. A projected group can share
-trials with training groups; the support line reports that overlap. Filters
+**Fit on** in *Model & display* has two menus.  The first selects which groups
+train PCA, ICA, FA or TDR. Every group is still displayed; a group outside the
+fit draws a hollow swatch in the legend (its tooltip says *projected group* or
+*held-out trials*). Hiding a legend entry only changes the display. A projected
+group can share trials with training groups; the fit JSON and #figure-state
+report the training counts and that overlap. Filters
 and roster selection remain user choices and are not cross-validated.
 Restricted fits support categorical/discrete grouping. Continuous numeric groups
 use adaptive quantile boundaries from all selected rows, so they are rejected
@@ -365,8 +404,8 @@ for a training subset or trial split until training-only boundaries are supporte
 The default joint descriptive fit still permits them. API callers supply explicit
 row memberships and must learn any grouping thresholds using training data only.
 
-**Training trials** optionally fits odd trial IDs and displays even IDs, or
-vice versa. These are the actual session trial IDs, not event-row positions.
+The second (*odd → show even*, *even → show odd*) optionally fits odd trial IDs
+and displays even IDs, or vice versa. These are the actual session trial IDs, not event-row positions.
 All events from a trial stay together. The displayed means, cloud, legend,
 markers, support counts and exports use only complementary trials. Training
 and display spike windows, including smoothing padding, must not overlap;
@@ -388,20 +427,20 @@ the fit/probe cache key. The API additionally accepts explicit `fit_trial_ids`
 their complement; `fit_group_keys` selects nonempty distinct group keys and
 `fit_split` accepts `all`, `odd` or `even`. Omitting these preserves the joint fit.
 
-For **2–4 visible groups**, the heatmap toolbar's **A** and **Subtract B**
-selectors display any ordered A minus B pair. Subtraction uses raw group means
+For **2–4 visible groups**, the heatmap header's two group selectors
+(*A* − *B*) display any ordered A minus B pair. Subtraction uses raw group means
 from the same response, with identical unit/time axes, before dividing by the
 shared training SD or peak. The diverging blue/neutral/red scale is symmetric
 about zero, with its numeric limits shown: red is A greater than B. Reversing
 the pair reverses the sign. It is a descriptive difference, with no p-value.
-Choose **None** to restore the ordinary heatmap. Figure exports and provenance
+Choose **none** to restore the ordinary heatmap. Figure exports and provenance
 record the selected pair, scale and range.
 
 Double-click a heatmap neuron row or its aligned loading bar to open that
 unit's raster. Alignment, filters, grouping, count/display windows and other
 shared raster controls remain intact; the population fit split stays a
 population setting (the raster shows its original selected trials). In the unit
-picker, **Step through population roster** makes its list, previous/next
+picker, the **Roster** side of *All units | Roster* makes its list, previous/next
 buttons and raster left/right keys follow the last displayed population sort
 (loadings, peak time, etc.). Missing units are skipped; units absent from the
 fit follow in roster ID order. After a relevant setting changes, or after a
@@ -436,8 +475,9 @@ descriptive: there is no significance testing in the explorer (use `/classic/`),
 and nothing corrects for browsing many units, windows or groupings.
 
 Rasters with more rows than about four per pixel of raster height are thinned
-for drawing only (evenly spaced within each group; the axis says how many are
-drawn); PSTHs, bars, counts and exports always use every row.
+for drawing only (evenly spaced within each group; a `drawn / total rows` badge
+on the raster says so, and exports keep it on the axis); PSTHs, bars, counts and
+exports always use every row.
 
 ### Views, links and export
 
@@ -475,8 +515,9 @@ drawn); PSTHs, bars, counts and exports always use every row.
 ### Findings
 
 A **finding** is a figure you want to come back to, saved with what it shows.
-**Save** (beside Views; ⋯ → *Save finding…* on a phone) asks for a title and,
-optionally, notes, tags and a status: *lead* (the default), *checking*,
+**Save** (beside Views; ⋯ → *Save finding* on a phone) asks for a title and,
+optionally, notes, tags (chips: Enter or a comma adds one, Backspace takes the
+last back) and a status: *lead* (the default), *checking*,
 *supported* or *dropped*.  The status is your judgement; the program never sets
 it.  Saving is possible only once the figure is fully drawn for the current
 settings, so not while a session, raster or fit is loading and not from an empty

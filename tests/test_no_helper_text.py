@@ -26,6 +26,16 @@ class QuietInterfaceTests(unittest.TestCase):
                      '<span class="pick-label">unit</span>', '<span class="pick-label">aligned to</span>'):
             self.assertNotIn(text, HTML, text)
 
+    def test_one_action_table_drives_bar_menu_and_keys(self):
+        # Top-bar buttons, ⋯ items and the shortcut sheet come from ACTIONS; controls carry data-action ids.
+        self.assertIn("const ACTIONS = [", JS)
+        self.assertIn("for (const a of ACTIONS) if (a.button) $(a.button).addEventListener('click', () => a.run());", JS)
+        self.assertNotIn("data-menu=", JS)
+        for action in ("finding.save", "views.open", "export.open", "resultviewer.open", "menu.open"):
+            self.assertIn(f'data-action="{action}"', HTML, action)
+        self.assertIn("document.title = S.session ?", JS)
+        self.assertNotIn("<span>electro</span>", HTML)
+
     def test_figure_controls_sit_on_the_figure(self):
         # Axis pickers and the heatmap header are overlays on the population figure; the yoke sits on the divider.
         overlay = HTML[HTML.index('id="figOverlay"'):HTML.index('<div class="empty"')]

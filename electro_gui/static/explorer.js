@@ -807,6 +807,7 @@
     $('rosterLabel').textContent = S.roster.length ? `${S.roster.length} neurons` : 'no neurons';
     const a = D.summary && D.summary.alignments.find(x => x.key === S.align);
     $('alignLabel').textContent = eventLabel(S.align) + (a ? ` · ${a.n}` : '');
+    document.title = S.session ? `${shortSession(S.session)} · ${S.mode === 'population' ? `${S.roster.length} neurons` : `unit ${S.unit ?? '—'}`} · ${eventLabel(S.align)} — electro` : 'electro';
     renderRV();
   }
 
@@ -916,6 +917,7 @@
     const trials = new Set(); M.visible.forEach(g => g.rows.forEach(i => trials.add(M.T.trial[i])));
     $('support').innerHTML = `<b>${shown}</b> events · <b>${trials.size}</b> trials`;
     markExclusions(M);
+    $('ymax').placeholder = S.ylock === null ? `auto · ${tidy(M.ymax, 1)}` : 'auto';   // the top the PSTH has just been drawn with
   }
   // Each control that leaves events out says how many, on itself: Trials, Window, Filter and the yoke.
   // (Hidden groups show their own counts in the legend.)  The same numbers are in #figure-state.
@@ -1814,7 +1816,7 @@
   }
 
   function openExport() {
-    const b = (kind, label) => `<button type="button" class="small" data-exp="${kind}">${label}</button>`;
+    const b = (kind, label) => `<button type="button" class="small" data-exp="${kind}" data-action="export.${kind}">${label}</button>`;
     const row = (name, buttons) => `<div class="exp-row"><span>${name}</span><div>${buttons}</div></div>`;
     const data = S.mode === 'population'
       ? b('coords', 'Coordinates · CSV') + b('loadings', 'Loadings · CSV') + (D.probeShown ? b('cloud', 'Single trials · CSV') : '')
@@ -1914,30 +1916,69 @@
     if (!rv.here) toast(`Opened in Result Viewer on ${rv.host}: ${rvElsewhere(rv)}.`);
   }
 
+  // ---------------------------------------------------------------- actions
+  // One table of commands.  The top bar's buttons run them, the ⋯ menu lists the ones the screen does not
+  // show (so on a phone the folded top-bar buttons appear there), the shortcut sheet lists their keys, and
+  // every control carries data-action="<id>" so scripts and agents can find it without matching words.
+  const ACTIONS = [
+    {id: 'finding.save', label: 'Save finding', button: 'saveBtn', run: () => openSaveFinding()},
+    {id: 'views.open', label: 'Views', button: 'viewsBtn', run: () => openViews()},
+    {id: 'export.open', label: 'Export', button: 'exportBtn', run: () => openExport()},
+    {id: 'resultviewer.open', label: 'Open in Result Viewer', button: 'rvBtn', run: () => openRV(), when: () => S.mode === 'raster', status: () => rvTitle(currentRV(), true)},
+    {id: 'mode.raster', label: 'Rasters', fold: '.modes', run: () => setMode('raster'), when: () => S.mode !== 'raster'},
+    {id: 'mode.population', label: 'Population', fold: '.modes', run: () => setMode('population'), when: () => S.mode !== 'population'},
+    {id: 'findings.page', label: 'Findings', href: '/findings/'},
+    {id: 'shortcuts.show', label: 'Keyboard and mouse', keys: '?', run: () => openShortcuts()},
+    {id: 'figure.about', label: 'About this figure', run: () => openAbout(), when: () => !!D.summary},
+    {id: 'classic.page', label: 'Classic workspace', href: '/classic/', note: 'v0.1'},
+    {id: 'server.restart', label: 'Restart server', run: () => restartServer(), status: () => '', statusId: 'restartInfo'},
+  ];
+  // What the keyboard and the pointer do, for the sheet (the cut on-screen hints live here now).
+  const GESTURES = [
+    ['← →', 'previous / next unit', 'raster'], ['← →', 'move the time cursor', 'population'], ['Space', 'play through time', 'population'],
+    ['Esc', 'close · unpin the trial'], ['?', 'this sheet'],
+    ['drag on the PSTH', 'draw a new count window', 'raster'], ['drag a grip', 'move a count-window edge', 'raster'],
+    ['click a legend entry', 'hide or show the group'], ['double-click it', 'show only that group'], ['right-click or hold it', 'colour and line style'],
+    ['click a raster row', 'pin its trial', 'raster'], ['drag a divider', 'resize the panels'], ['double-click a divider', 'fit the window'],
+    ['double-click a neuron row', 'open its raster', 'population'], ['drag the trajectory', 'rotate it (3D)', 'population'],
+  ];
+  const actionById = id => ACTIONS.find(a => a.id === id);
+  const visibleEl = el => !!(el && el.offsetParent);
+  function openShortcuts() {
+    const rows = GESTURES.filter(([, , mode]) => !mode || mode === S.mode);
+    openPop($('menuBtn'), popHead('Keyboard and mouse') + `<div class="pop-body"><dl class="keys">${rows.map(([k, v]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(v)}</dd>`).join('')}</dl></div>`, {wide: true});
+  }
+  // Where the footer went: the figure's source, checksum, method and caption, one click from the menu.
+  function openAbout() {
+    const st = figureState();
+    const rows = [['Session', st.session], ['Source', st.source && st.source.path], ['SHA256', st.source && st.source.sha256], ['Figure', st.caption],
+      ['Method', st.method_note], ['Version', st.tool]].filter(([, v]) => v);
+    openPop($('menuBtn'), popHead('About this figure') + `<div class="pop-body"><dl class="about" id="aboutList">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>` +
+      `<div class="pop-foot"><button type="button" class="small" id="aboutCopy">Copy as JSON</button><button type="button" class="primary" data-close>Done</button></div>`, {wide: true});
+    $('aboutCopy').addEventListener('click', async () => toast(await copyText(JSON.stringify(st, null, 2), $('aboutList')) ? 'Copied.' : 'Could not copy; the text is selected, press ⌘C.'));
+  }
+
   function openMenu() {
     const theme = localStorage.getItem('eg-theme') || 'auto';
-    const other = S.mode === 'population' ? ['raster', 'Rasters', 'one unit: raster over PSTH'] : ['population', 'Population', 'many neurons: heatmap, components, trajectories'];
-    const rv = currentRV();
-    const html = popHead('electro_gui') + `<div class="pop-body"><button type="button" class="item" data-menu="mode:${other[0]}"><span class="main"><b>Switch to ${other[1]}</b><small>${other[2]}</small></span></button>` +
-      (S.mode === 'raster' ? `<button type="button" class="item" data-menu="resultviewer"><span class="main"><b>Open in Result Viewer</b><small>${esc(rvTitle(rv, true))}</small></span></button>` : '') +
-      `<button type="button" class="item" data-menu="views"><span class="main"><b>Views & templates</b><small>apply a template or config file, reopen a finding, copy a link</small></span></button>` +
-      `<button type="button" class="item" data-menu="savefinding"><span class="main"><b>Save finding…</b><small>this figure, with notes and the numbers it shows</small></span></button>` +
-      `<a class="item" href="/findings/"><span class="main"><b>Findings</b><small>every saved finding, with its picture, notes and status</small></span></a>` +
-      `<button type="button" class="item" data-menu="export"><span class="main"><b>Export</b><small>SVG, PNG, CSV, settings</small></span></button>` +
-      `<button type="button" class="item" data-menu="restart"><span class="main"><b>Restart server</b><small id="restartInfo">load the code now on disk, then reload this page</small></span></button><div class="editor">` +
-      `<label class="row"><span>Session</span><select id="menuSession">${D.catalog.map(s => `<option value="${esc(s.id)}"${s.id === S.session ? ' selected' : ''}>${esc(shortSession(s.id))}</option>`).join('')}</select></label>` +
+    const items = ACTIONS.filter(a => (!a.when || a.when()) && !(a.button && visibleEl($(a.button))) && !(a.fold && visibleEl(document.querySelector(a.fold))));
+    const item = a => (a.href
+      ? `<a class="item" href="${a.href}" data-action="${a.id}"><span class="main"><b>${esc(a.label)}</b></span><span class="n">${a.note ? `${esc(a.note)} ` : ''}↗</span></a>`
+      : `<button type="button" class="item" data-action="${a.id}"><span class="main"><b>${esc(a.label)}</b></span>` +
+        (a.keys ? `<kbd>${esc(a.keys)}</kbd>` : a.status ? `<span class="n"${a.statusId ? ` id="${a.statusId}"` : ''}>${esc(a.status())}</span>` : '') + '</button>');
+    // The session picker folds into the menu where the top bar hides it (tablets and phones).
+    const session = visibleEl(document.querySelector('.session-pick')) ? ''
+      : `<label class="row"><span>Session</span><select id="menuSession">${D.catalog.map(s => `<option value="${esc(s.id)}"${s.id === S.session ? ' selected' : ''}>${esc(shortSession(s.id))}</option>`).join('')}</select></label>`;
+    const html = popHead('electro') + `<div class="pop-body">${items.map(item).join('')}<div class="editor">${session}` +
       `<div class="row"><span>Theme</span><div class="seg" id="themeSeg">${['auto', 'light', 'dark'].map(t => `<button type="button" data-theme="${t}" class="${theme === t ? 'on' : ''}">${t}</button>`).join('')}</div></div>` +
-      `<a class="item" href="/classic/"><span class="main"><b>Classic workspace</b></span><span class="n">v0.1</span></a>` +
-      `<p class="pop-note" style="padding:0">${D.summary ? `${esc(D.summary.session_id)} · ${D.summary.counts.units} units · ${D.summary.counts.trials} trials<br><code>${esc(D.summary.source.path || '')}</code>` : ''}</p>` +
       `</div></div>`;
     openPop($('menuBtn'), html);
-    $('menuSession').addEventListener('change', e => { closePop(); selectSession(e.target.value).then(renderStructure); });
+    if ($('menuSession')) $('menuSession').addEventListener('change', e => { closePop(); selectSession(e.target.value).then(renderStructure); });
     serverHealth().then(h => {
       const el = document.getElementById('restartInfo');
       if (!el || !h) return;
       const since = new Date(h.started * 1000), n = h.code_changed.length;
       const when = since.toDateString() === new Date().toDateString() ? since.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : since.toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
-      el.textContent = `running since ${when} · ${n ? `${n} file${n > 1 ? 's' : ''} changed` : 'code up to date'}`;
+      el.textContent = `since ${when} · ${n ? `${n} file${n > 1 ? 's' : ''} changed` : 'up to date'}`;
       el.title = n ? `Changed since the server started: ${h.code_changed.join(', ')}` : '';
       if (n) el.style.color = 'var(--accent)';
     });
@@ -3737,16 +3778,13 @@
     $('nextUnit').addEventListener('click', () => stepUnit(1));
     $('unitBtn').addEventListener('click', () => D.units.length && openUnitPicker());
     $('alignBtn').addEventListener('click', () => D.summary && openAlignPicker());
-    $('viewsBtn').addEventListener('click', openViews);
-    $('saveBtn').addEventListener('click', openSaveFinding);
+    for (const a of ACTIONS) if (a.button) $(a.button).addEventListener('click', () => a.run());
     $('findingBar').addEventListener('toggle', e => { if (openedFinding && e.target.matches('.fb-note')) openedFinding.notesOpen = e.target.open; }, true);
     $('findingBar').addEventListener('click', e => {
       if (e.target.closest('[data-fbclose]')) { openedFinding = null; renderFindingBar(); }
       else if (e.target.closest('[data-fbback]') && openedFinding) openFinding(openedFinding.finding);
     });
     $('cfgFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) openConfigFile(f); });
-    $('exportBtn').addEventListener('click', openExport);
-    $('rvBtn').addEventListener('click', openRV);
     // Back from another tab: a result viewer may have started or stopped meanwhile.
     addEventListener('focus', () => { if (S.session && (!currentRV() || Date.now() - D.rv.at > 30000)) refreshRV(); });
     $('menuBtn').addEventListener('click', openMenu);
@@ -3759,6 +3797,8 @@
       }
       const tag = (e.target.tagName || '').toLowerCase();
       if (['input', 'select', 'textarea'].includes(tag) || e.metaKey || e.ctrlKey || e.altKey || !$('popover').hidden) return;
+      const keyed = ACTIONS.find(a => a.keys === e.key && (!a.when || a.when()));
+      if (keyed) { e.preventDefault(); keyed.run(); return; }
       if (S.mode === 'population') {
         if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && D.popLayout) {
           e.preventDefault(); stopPlay();
@@ -3778,15 +3818,8 @@
       const t = e.target.closest('button, [data-close]');
       if (!t) return;
       if (t.hasAttribute('data-close')) { closePop(); return; }
-      if (t.dataset.menu) {
-        closePop();
-        if (t.dataset.menu.startsWith('mode:')) setMode(t.dataset.menu.slice(5));
-        else if (t.dataset.menu === 'restart') restartServer();
-        else if (t.dataset.menu === 'resultviewer') openRV();
-        else if (t.dataset.menu === 'savefinding') openSaveFinding();
-        else (t.dataset.menu === 'views' ? openViews : openExport)();
-        return;
-      }
+      const act = t.dataset.action && actionById(t.dataset.action);
+      if (act && act.run) { closePop(); act.run(); return; }
       if (t.dataset.ru) {
         const id = Number(t.dataset.ru), set = new Set(S.roster);
         set.has(id) ? set.delete(id) : set.add(id);
@@ -3981,8 +4014,11 @@
     ruler.addEventListener('pointerdown', evt => {
       const r = ruler.getBoundingClientRect(), R = rulerSpan(), px = v => r.left + (v + R) / (2 * R) * r.width, t = rulerT(evt);
       // The nearest edge within reach (count-window edges first when they coincide), else the band, else the nearer side.
-      const near = [['c0', S.cw[0]], ['c1', S.cw[1]], ['w0', S.win[0]], ['w1', S.win[1]]].map(([k, v]) => [k, Math.abs(evt.clientX - px(v))]).sort((a, b) => a[1] - b[1])[0];
-      const kind = near[1] <= 8 ? near[0] : t > S.cw[0] && t < S.cw[1] ? 'band' : t < S.win[0] ? 'w0' : t > S.win[1] ? 'w1' : Math.abs(t - S.cw[0]) < Math.abs(t - S.cw[1]) ? 'c0' : 'c1';
+      // A narrow band keeps its middle third for sliding.
+      const cwReach = Math.min(8, (px(S.cw[1]) - px(S.cw[0])) / 3);
+      const near = [['c0', S.cw[0], cwReach], ['c1', S.cw[1], cwReach], ['w0', S.win[0], 8], ['w1', S.win[1], 8]]
+        .map(([k, v, reach]) => [k, Math.abs(evt.clientX - px(v)), reach]).filter(([, d, reach]) => d <= reach).sort((a, b) => a[1] - b[1])[0];
+      const kind = near ? near[0] : t > S.cw[0] && t < S.cw[1] ? 'band' : t < S.win[0] ? 'w0' : t > S.win[1] ? 'w1' : Math.abs(t - S.cw[0]) < Math.abs(t - S.cw[1]) ? 'c0' : 'c1';
       rdrag = {kind, t0: t, cw0: S.cw.slice()};
       ruler.setPointerCapture(evt.pointerId); evt.preventDefault();
       if (kind !== 'band') rulerMove(evt);
