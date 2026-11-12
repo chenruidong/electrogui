@@ -33,6 +33,38 @@ assert.throws(() => C.populationDifference(fit, 0, 0, 'z'), /distinct/);
   for (const [key, value] of [['speed', 0], ['bar', false], ['trial.stimuli_changed', 0], ['world', 'PP'], ['speed', null]])
     assert.doesNotMatch(C.formatLevel(key, value), /object Object|undefined|NaN/);
 }
+// Markers: 'window' takes every occurrence inside the row's window, in any trial or object;
+// 'trial' and 'object' keep to the row's own trial or object, whatever the window.
+{
+  const events = C.indexEvents({n: 5, trial: [2, 1, 1, 2, 3], t: [10.8, 10.2, 9.0, 11.5, 14], object: ['c', 'b', 'a', null, 'd']});
+  assert.deepEqual(events.all.map(e => e.t), [9.0, 10.2, 10.8, 11.5, 14]);
+  const table = {n: 2, t: Float64Array.from([10, 30]), trial: [1, 9], objectCodes: [0, -1], objectLevels: ['a']};
+  const rel = hits => hits.map(h => Math.round(h.t * 1e6) / 1e6);
+  const times = (spec, win, end = null, row = 0) => C.markerTimes(table, [0, 1], events, spec, end, win)[row];
+  assert.deepEqual(rel(times({match: 'window', occ: 'all'}, [-1.5, 1])), [-1, 0.2, 0.8]);   // trial 2's 10.8 included, 11.5 outside
+  assert.deepEqual(rel(times({match: 'window'}, [-1.5, 1])), [-1, 0.2, 0.8]);               // 'all' unless told otherwise
+  assert.deepEqual(rel(times({match: 'window', occ: 'nearest'}, [-1.5, 1])), [0.2]);
+  assert.deepEqual(rel(times({match: 'window', occ: 'last_before'}, [-1.5, 1])), [-1]);
+  assert.deepEqual(rel(times({match: 'window', occ: 'all'}, [-1, 0.8])), [-1, 0.2, 0.8]);   // window edges are inclusive
+  assert.deepEqual(rel(times({match: 'window', occ: 'all'}, [-3, -2])), []);
+  assert.deepEqual(rel(times({match: 'window', occ: 'all'}, [-1.5, 1], null, 1)), []);      // a trial with no events of its own
+  assert.deepEqual(rel(times({match: 'trial', occ: 'all'}, [-0.1, 0.1])), [-1, 0.2]);       // the window does not limit a match
+  assert.deepEqual(rel(times({match: 'object', occ: 'all'}, [-0.1, 0.1])), [-1]);
+  assert.deepEqual(rel(times({match: 'trial', occ: 'nearest'})), [0.2]);                    // matched markers need no window
+  // A band ends at the next end event: anywhere for 'window', inside the trial otherwise.
+  const ends = C.indexEvents({n: 2, trial: [1, 2], t: [9.5, 11.0], object: [null, null]});
+  const t2 = spec => times(spec, [-1.5, 1], ends).map(h => (Number.isFinite(h.t2) ? Math.round(h.t2 * 1e6) / 1e6 : null));
+  assert.deepEqual(t2({match: 'window', occ: 'all'}), [-0.5, 1, 1]);
+  assert.deepEqual(t2({match: 'trial', occ: 'all'}), [-0.5, null]);
+  assert.throws(() => C.markerTimes(table, [0], events, {match: 'window'}, null), /needs the window/);
+  // Medians, sorting and the CSV take a row's occurrence nearest its event, not its first.
+  assert.equal(C.markerLatency([{t: -4}, {t: 0.3}, {t: 2}]), 0.3);
+  assert.equal(C.markerLatency([{t: -0.5}, {t: 0.5}]), -0.5);
+  assert.ok(Number.isNaN(C.markerLatency([]))); assert.ok(Number.isNaN(C.markerLatency(undefined)));
+  const sortTable = {t: Float64Array.from([5, 6, 7]), byKey: new Map()};
+  const sorted = C.sortRows(sortTable, [0, 1, 2], 'marker:m1', 1, {markers: {m1: [[{t: -3}, {t: 0.4}], [{t: 0.1}], []]}});
+  assert.deepEqual(sorted, [1, 0, 2]);
+}
 const elements = new Map(), globalHandlers = new Map();
 function el(id) {
   if (elements.has(id)) return elements.get(id);
@@ -49,7 +81,7 @@ const context = {window: {EGCore: C}, document: {getElementById: el, querySelect
   requestAnimationFrame: () => 0, ResizeObserver: class {observe() {}}, console};
 let source = fs.readFileSync(path.join(root, 'explorer.js'), 'utf8');
 source = source.replace('  start();', `
-  window.qa = {S, D, unitList, stepUnit, bindPopFigure, bindControls, navOrderKey, fillUnitItems, refreshUnitNotes, sanitize, fitRequest, populationFitKey, popModelKey, popFitIsCurrent, rerenderPopFigure, popEmpty, popExportSVG, popExport, closePop, setPopAnchor: a => {popAnchor = a;}};
+  window.qa = {S, D, unitList, stepUnit, bindPopFigure, bindControls, navOrderKey, fillUnitItems, refreshUnitNotes, sanitize, addMarker, renderPresets, fitRequest, populationFitKey, popModelKey, popFitIsCurrent, rerenderPopFigure, popEmpty, popExportSVG, popExport, closePop, setPopAnchor: a => {popAnchor = a;}};
   changed = () => {}; renderStructure = () => {}; closeSheet = () => {}; applyMode = () => {};
   bindFigure = () => {}; bindBehavior = () => {}; saveState = () => {};`);
 vm.runInNewContext(source, context);
@@ -86,6 +118,23 @@ assert.equal(context.window.qa.sanitize({unitNoted: true}).unitNoted, true);
 assert.deepEqual(JSON.parse(JSON.stringify(context.window.qa.sanitize({filters: [{k: 'correct', v: [true]}, {k: 'order', v: [1, null]},
   {k: 'rt', r: [0, 'x']}, {k: 'bad', v: 'touch'}, {k: 'empty'}, null, {v: ['a']}]}).filters)),
   [{k: 'correct', v: ['true']}, {k: 'order', v: ['1', C.MISSING]}, {k: 'rt', r: [0, null]}]);
+// A marker with no match takes every occurrence in the window; a saved match and occurrence are kept.
+assert.deepEqual(context.window.qa.sanitize({markers: [{e: 'reward_valve_onset'}, {e: 'object_visible_onset', match: 'object', occ: 'nearest'},
+  {e: 'trial_initiation', match: 'trial'}, {e: 'goal_release', match: 'bogus', occ: 'bogus'}, {match: 'trial'}]}).markers.map(m => [m.e, m.match, m.occ]),
+  [['reward_valve_onset', 'window', 'all'], ['object_visible_onset', 'object', 'nearest'], ['trial_initiation', 'trial', 'nearest'], ['goal_release', 'window', 'all']]);
+{
+  // New markers and the one-tap presets start as 'in window' · 'all'.
+  const Q = context.window.qa, saved = S.markers;
+  S.markers = [];
+  const m = Q.addMarker('object_visible_onset');
+  assert.equal(m.match, 'window'); assert.equal(m.occ, 'all');
+  D.summary = {events: ['reward_valve_onset', 'object_visible_onset']};
+  Q.renderPresets();
+  assert.match(el('markerPresets').innerHTML, /data-mp="reward_valve_onset\|window\|all\|reward"/);
+  assert.match(el('markerPresets').innerHTML, /data-mp="object_outcome\|window\|all\|outcome"/);
+  assert.doesNotMatch(el('markerPresets').innerHTML, /object_visible_onset/);   // already a marker
+  S.markers = saved; D.summary = null;
+}
 S.unitNoted = false; S.unit = 1; D.unitNotes = null;
 S.win = [-1, 2]; assert.equal(JSON.stringify(unitList().map(u => u.id)), '[1,3]'); // stale order falls back
 for (const [field, value] of [['qbins', 4], ['hidden', ['other']], ['filters', [{k:'world',v:['PP']}]]]) {

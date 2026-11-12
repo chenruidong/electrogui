@@ -289,16 +289,34 @@
   }
 
   // --------------------------------------------------------------- markers
-  /** Index one event's occurrences by trial: Map(trial -> [{t, obj}] sorted by t). */
+  /**
+   * Index one event's occurrences by trial: Map(trial -> [{t, obj}] sorted by t).
+   * The map's `all` property lists every occurrence sorted by t, for markers
+   * that take whatever falls in the window regardless of trial or object.
+   */
   function indexEvents(json) {
-    const byTrial = new Map();
+    const byTrial = new Map(), all = [];
     for (let j = 0; j < json.n; j++) {
-      const trial = json.trial[j];
+      const trial = json.trial[j], e = {t: json.t[j], obj: json.object[j]};
       if (!byTrial.has(trial)) byTrial.set(trial, []);
-      byTrial.get(trial).push({t: json.t[j], obj: json.object[j]});
+      byTrial.get(trial).push(e);
+      all.push(e);
     }
     for (const list of byTrial.values()) list.sort((a, b) => a.t - b.t);
+    byTrial.all = all.sort((a, b) => a.t - b.t);
     return byTrial;
+  }
+  /** Index of the first occurrence with t >= x in a t-sorted list. */
+  function firstIndexAtOrAfter(list, x) {
+    let a = 0, b = list.length;
+    while (a < b) { const mid = (a + b) >> 1; if (list[mid].t < x - 1e-9) a = mid + 1; else b = mid; }
+    return a;
+  }
+  /** Occurrences with lo <= t <= hi in a t-sorted list (both ends inclusive). */
+  function eventsBetween(list, lo, hi) {
+    const out = [];
+    for (let j = firstIndexAtOrAfter(list, lo); j < list.length && list[j].t <= hi + 1e-9; j++) out.push(list[j]);
+    return out;
   }
 
   function pick(list, anchor, occ) {
@@ -315,27 +333,52 @@
 
   /**
    * Per-row marker times relative to each row's event.
-   * spec: {match:'object'|'trial', occ, end?}; start/end: indexEvents() maps.
+   * spec: {match:'window'|'trial'|'object', occ, end?}; start/end: indexEvents() maps;
+   * win: [pre, post] relative to each row's event (needed for 'window').
+   * 'window' takes the occurrences inside [anchor + pre, anchor + post] whatever
+   * their trial or object, and its band ends at the next end event anywhere;
+   * 'trial' and 'object' take the row's own trial (and object), unlimited by the window.
    * Returns [{t, t2?}] per row (t2 = band end); empty array when unmatched.
    */
-  function markerTimes(table, rows, start, spec, end) {
+  function markerTimes(table, rows, start, spec, end, win) {
     const out = new Array(table.n);
+    const inWindow = spec.match === 'window';
+    if (inWindow && !(Array.isArray(win) && win.length === 2 && win.every(Number.isFinite))) throw new Error('A window marker needs the window.');
+    const allStarts = start.all || [], allEnds = end ? end.all || [] : null;
     for (const i of rows) {
       const anchor = table.t[i], trial = table.trial[i];
-      const obj = table.objectCodes[i] >= 0 ? table.objectLevels[table.objectCodes[i]] : null;
-      const sameObject = e => spec.match !== 'object' || (obj !== null && e.obj === obj);
-      const hits = pick((start.get(trial) || []).filter(sameObject), anchor, spec.occ || 'nearest');
-      const ends = end ? (end.get(trial) || []).filter(sameObject) : null;
+      let hits, stopAt = null;
+      if (inWindow) {
+        hits = pick(eventsBetween(allStarts, anchor + win[0], anchor + win[1]), anchor, spec.occ || 'all');
+        if (allEnds) stopAt = t => allEnds[firstIndexAtOrAfter(allEnds, t)];
+      } else {
+        const obj = table.objectCodes[i] >= 0 ? table.objectLevels[table.objectCodes[i]] : null;
+        const sameObject = e => spec.match !== 'object' || (obj !== null && e.obj === obj);
+        hits = pick((start.get(trial) || []).filter(sameObject), anchor, spec.occ || 'nearest');
+        const ends = end ? (end.get(trial) || []).filter(sameObject) : null;
+        if (ends) stopAt = t => ends.find(e => e.t >= t - 1e-9);
+      }
       out[i] = hits.map(h => {
         const m = {t: h.t - anchor};
-        if (ends) {
-          const stop = ends.find(e => e.t >= h.t - 1e-9);
+        if (stopAt) {
+          const stop = stopAt(h.t);
           m.t2 = stop ? stop.t - anchor : NaN;
         }
         return m;
       });
     }
     return out;
+  }
+  /**
+   * The one time that stands for a row's marker in medians, sorting and the CSV:
+   * its only occurrence, or (several in the window or trial) the one nearest the
+   * row's event, the earlier on a tie.  NaN when the row has none.
+   */
+  function markerLatency(hits) {
+    if (!hits || !hits.length) return NaN;
+    let best = hits[0];
+    for (const h of hits) if (Math.abs(h.t) < Math.abs(best.t)) best = h;
+    return best.t;
   }
 
   function median(values) {
@@ -471,7 +514,7 @@
     if (key === 'count') value = i => ctx.count(i);
     else if (key && key.startsWith('marker:')) {
       const times = ctx.markers && ctx.markers[key.slice(7)];
-      value = i => (times && times[i] && times[i].length ? times[i][0].t : NaN);
+      value = i => markerLatency(times && times[i]);
     } else if (key && key.startsWith('field:')) {
       const col = table.byKey.get(key.slice(6));
       if (col && col.kind === 'cat') value = i => (col.codes[i] < 0 ? NaN : col.levelOrder.indexOf(col.codes[i]));
@@ -877,8 +920,8 @@
 
   return {GUARD_S, MISSING, SEP, FIELD_LABELS, LEVEL_ORDER, fieldLabel, formatLevel, fmtNum, humanize, levelKey,
     stimulusColor, prepareBehavior, decodeSpikeTrain, spikeColumns, timeAtPos, posAtTime, behaviorView, viewTrials, yokedTrials, upperBound,
-    prepareTable, rawValue, fieldLevels, filterMask, eligibility, quantileEdges, groupRows, indexEvents,
-    markerTimes, median, countIn, lowerBound, psthGrid, rowCurve, psth, psthFromCurves, thin, windowRates, smoothRows, sortRows, encodeState, decodeState,
+    prepareTable, rawValue, fieldLevels, filterMask, eligibility, quantileEdges, groupRows, indexEvents, eventsBetween,
+    markerTimes, markerLatency, median, countIn, lowerBound, psthGrid, rowCurve, psth, psthFromCurves, thin, windowRates, smoothRows, sortRows, encodeState, decodeState,
     populationUnitList, populationDifference, decodeMask, andMask, andCount, popcount, fullMask, bestSubset, heatColor, project3d, hash,
     stableJSON, stateChanges, compareEvidence, findingMatches};
 });

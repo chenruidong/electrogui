@@ -40,7 +40,6 @@
   const eventLabel = e => EVENT_NAMES[e] || C.humanize(e);
   const PINNED_ALIGN = ['object_outcome', 'object_touched', 'object_avoided', 'prey_capture', 'predator_contact', 'prey_miss', 'predator_avoid',
     'object_visible_onset', 'trial_initiation', 'joystick_move_onset', 'goal_release', 'reward_valve_onset'];
-  const OBJECT_EVENTS = /^(object_|prey_|predator_(contact|avoid)|gaze_on_object)/;
   function eventCategory(e) {
     if (/^(sync_|state_|preset_|block_type|stimuli_changed|predator_trial_flag|mworks_trial_duration|report$|task_start)|_(hue|image)_change$/.test(e)) return 'Technical';
     if (/^(object_|prey_|predator_(contact|avoid))/.test(e)) return 'Object & outcome';
@@ -80,6 +79,10 @@
   const RAMP = ['#74c0fc', '#339af0', '#1c7ed6', '#1864ab', '#0b3d74'];
   const MISSING_COLOR = '#adb5bd';
   const MARKER_COLORS = [INK, '#0b7285', '#e8590c', '#ae3ec9', '#1971c2', '#f59f00', '#c2255c', '#2f9e44'];
+  // Which occurrences a marker may take: any in the window (no match), the row's trial, or its object.
+  const MARKER_MATCHES = ['window', 'trial', 'object'];
+  const MARKER_MATCH_LABEL = {window: 'in window', trial: 'same trial', object: 'same object'};
+  const MARKER_OCCS = ['nearest', 'first_after', 'last_before', 'all', 'first', 'last'];
 
   function mix(hex, other, amount) {
     const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
@@ -172,7 +175,11 @@
     s.filters = s.filters.map(f => !f || typeof f.k !== 'string' ? null
       : Array.isArray(f.v) ? {k: f.k, v: f.v.map(C.levelKey)}
       : Array.isArray(f.r) && f.r.length === 2 ? {k: f.k, r: [bound(f.r[0]), bound(f.r[1])]} : null).filter(Boolean);
-    s.markers = s.markers.filter(m => m && typeof m.e === 'string').map((m, i) => ({id: m.id || `m${i + 1}`, match: 'trial', occ: 'nearest', c: INK, ...m}));
+    // A marker without a match takes every occurrence in the window; matched ones default to the nearest.
+    s.markers = s.markers.filter(m => m && typeof m.e === 'string').map((m, i) => {
+      const match = MARKER_MATCHES.includes(m.match) ? m.match : 'window';
+      return {id: m.id || `m${i + 1}`, c: INK, ...m, match, occ: MARKER_OCCS.includes(m.occ) ? m.occ : match === 'window' ? 'all' : 'nearest'};
+    });
     s.refs = s.refs.filter(Number.isFinite);
     s.rasterH = Number.isFinite(s.rasterH) ? clamp(s.rasterH, RASTER_MIN, RASTER_MAX) : DEFAULTS.rasterH;
     s.rasterFit = s.rasterFit !== false;
@@ -418,7 +425,7 @@
       if (m.off) continue;
       const start = D.events.get(m.e), end = m.end ? D.events.get(m.end) : null;
       if (!start || (m.end && !end)) continue;
-      markerData[m.id] = C.markerTimes(T, rows, start, m, end);
+      markerData[m.id] = C.markerTimes(T, rows, start, m, end, [pre, post]);
     }
     // Per-row smoothed curves depend only on the unit's spikes and the grid, so
     // filtering, grouping, sorting and markers reuse them.
@@ -618,14 +625,14 @@
         let li = 0;
         for (const m of markers) {
           const rowsHere = gs.flatMap(g => g.rows);
-          const med = C.median(rowsHere.map(i => (M.markerData[m.id][i] && M.markerData[m.id][i][0] ? M.markerData[m.id][i][0].t : NaN)));
+          const med = C.median(rowsHere.map(i => C.markerLatency(M.markerData[m.id][i])));
           if (!(med >= pre && med <= post)) continue;
           const mx = X(med), c = paint(m.c);
           out.push(`<line x1="${f(mx)}" x2="${f(mx)}" y1="${f(pTop - markerLabelH + 2)}" y2="${f(pBot)}" stroke="${c}" stroke-width="1.2" stroke-dasharray="4 3"/>`);
           const anchor = mx > x1 - 110 ? 'end' : 'start';
           out.push(`<text x="${f(mx + (anchor === 'end' ? -4 : 4))}" y="${f(pTop - markerLabelH + 10 + (li % 2) * 11)}" font-size="10.5" fill="${c}" text-anchor="${anchor}">${esc(m.label || eventLabel(m.e))} (median)</text>`);
           for (const g of gs) {
-            const gm = C.median(g.rows.map(i => (M.markerData[m.id][i] && M.markerData[m.id][i][0] ? M.markerData[m.id][i][0].t : NaN)));
+            const gm = C.median(g.rows.map(i => C.markerLatency(M.markerData[m.id][i])));
             if (gm >= pre && gm <= post) out.push(`<path d="M${f(X(gm) - 3.5)} ${f(pTop)}h7l-3.5 5z" fill="${g.color}"/>`);
           }
           li++;
@@ -1132,7 +1139,7 @@
 
   function renderMarkers() {
     $('markerList').innerHTML = S.markers.map(m => {
-      const where = m.match === 'object' ? 'same object' : 'same trial';
+      const where = MARKER_MATCH_LABEL[m.match] || MARKER_MATCH_LABEL.trial;
       const occ = {nearest: 'nearest', first_after: 'first after', last_before: 'last before', all: 'all', first: 'first in trial', last: 'last in trial'}[m.occ] || m.occ;
       return `<div class="marker${m.off ? ' off' : ''}" style="--c:${paint(m.c)}"><i class="${m.end ? 'band' : ''}"></i><div><b>${esc(m.label || eventLabel(m.e))}</b><small>${esc(eventLabel(m.e))}${m.end ? ` → ${esc(eventLabel(m.end))}` : ''} · ${where} · ${occ}</small></div>` +
         `<button type="button" data-medit="${esc(m.id)}" title="Edit" aria-label="Edit marker">✎</button><button type="button" data-mdel="${esc(m.id)}" title="Remove" aria-label="Remove marker">×</button></div>`;
@@ -1145,9 +1152,9 @@
   function renderPresets() {
     const T = D.tables.get(S.align);
     const avail = new Set(D.summary ? D.summary.events : []);
-    const mk = [['object_visible_onset', 'object', 'nearest', 'object visible'], ['joystick_move_onset', 'trial', 'last_before', 'joystick onset'],
-      ['trial_initiation', 'trial', 'nearest', 'trial initiation'], ['goal_release', 'trial', 'nearest', 'goal release'],
-      ['reward_valve_onset', 'trial', 'first_after', 'reward'], ['object_outcome', 'object', 'first_after', 'outcome']];
+    // Presets take every occurrence in the window, like any new marker; the editor narrows them to a trial or object.
+    const mk = [['object_visible_onset', 'object visible'], ['joystick_move_onset', 'joystick onset'], ['trial_initiation', 'trial initiation'],
+      ['goal_release', 'goal release'], ['reward_valve_onset', 'reward'], ['object_outcome', 'outcome']].map(([e, label]) => [e, 'window', 'all', label]);
     $('markerPresets').innerHTML = mk.filter(([e]) => (avail.has(e) || e === 'object_outcome') && !S.markers.some(m => m.e === e))
       .map(([e, match, occ, label]) => `<button type="button" class="preset" data-mp="${e}|${match}|${occ}|${label}">+ ${esc(label)}</button>`).join('');
     const gp = [['world', null, 'world'], ['role', 'action', 'role × action'], ['world', 'previous_role', 'world × previous object'],
@@ -1469,9 +1476,7 @@
   }
   function newMarkerId() { let k = 1; while (S.markers.some(m => m.id === `m${k}`)) k++; return `m${k}`; }
   function addMarker(e, match, occ, label) {
-    const T = D.tables.get(S.align);
-    const objRows = T ? T.objectCodes.filter(c => c >= 0).length : 0;
-    const m = {id: newMarkerId(), e, match: match || (OBJECT_EVENTS.test(e) && objRows > (T ? T.n / 2 : 0) ? 'object' : 'trial'), occ: occ || 'nearest',
+    const m = {id: newMarkerId(), e, match: match || 'window', occ: occ || 'all',
       label: label || eventLabel(e), c: MARKER_COLORS[S.markers.length % MARKER_COLORS.length]};
     S.markers.push(m);
     renderStructure(); changed({data: true});
@@ -1484,7 +1489,7 @@
     const draw = () => {
       $('popover').innerHTML = popHead('Marker') + `<div class="pop-body"><div class="editor">` +
         `<label class="row"><span>Event</span><select id="mkEvent">${eventOptions(m.e)}</select></label>` +
-        `<div class="row"><span>Match</span>${seg('match', [['object', 'same object'], ['trial', 'same trial']])}</div>` +
+        `<div class="row"><span>Match</span>${seg('match', MARKER_MATCHES.map(v => [v, MARKER_MATCH_LABEL[v]]))}</div>` +
         `<div class="row"><span>Occurrence</span>${seg('occ', [['nearest', 'nearest'], ['first_after', 'first after'], ['last_before', 'last before'], ['all', 'all']])}</div>` +
         `<label class="row"><span>Shade until</span><select id="mkEnd">${eventOptions(m.end || '', {none: 'none'})}</select></label>` +
         `<label class="row"><span>Label</span><input type="text" id="mkLabel" value="${esc(m.label || '')}" placeholder="${esc(eventLabel(m.e))}"></label>` +
@@ -2272,7 +2277,7 @@
     for (const m of S.markers) {
       if (m.off) continue;
       const start = D.events.get(m.e), end = m.end ? D.events.get(m.end) : null;
-      if (start && (!m.end || end)) markerData[m.id] = C.markerTimes(T, rows, start, m, end);
+      if (start && (!m.end || end)) markerData[m.id] = C.markerTimes(T, rows, start, m, end, [pre, post]);
     }
     return {T, raster: P, rows, grouping, visible: grouping.groups.filter(g => !g.hidden), excl, filtered, markerData,
       pre, post, cw: S.cw, common: P.common_trials, pop: true};
@@ -2477,7 +2482,7 @@
     const cwIdx = times.map((t, j) => (t >= M.cw[0] && t <= M.cw[1] ? j : -1)).filter(j => j >= 0);
     const markers = S.markers.filter(m => !m.off && M.markerData[m.id]);
     const medianIdx = (m, rows) => {
-      const med = C.median(rows.map(i => (M.markerData[m.id][i] && M.markerData[m.id][i][0] ? M.markerData[m.id][i][0].t : NaN)));
+      const med = C.median(rows.map(i => C.markerLatency(M.markerData[m.id][i])));
       return med >= pre && med <= post ? {t: med, j: idxOf(med)} : null;
     };
 
@@ -3161,7 +3166,7 @@
       for (const g of M.visible) for (const i of g.sorted) {
         const n = C.countIn(M.spikes[i], M.cw[0], M.cw[1]);
         lines.push([M.T.rowId[i], M.T.trial[i], tidy(M.T.t[i], 6), csv(M.T.event ? M.T.event[i] : S.align), csv(g.label), csv(g.panelLabel), n, tidy(n / (M.cw[1] - M.cw[0]), 4),
-          ...markers.map(m => { const h = M.markerData[m.id][i]; return h && h[0] ? tidy(h[0].t, 5) : ''; }),
+          ...markers.map(m => { const v = C.markerLatency(M.markerData[m.id][i]); return Number.isFinite(v) ? tidy(v, 5) : ''; }),
           ...fields.map(k => csv(C.rawValue(M.T.byKey.get(k), i)))].join(','));
       }
       download(`${stem}_rows.csv`, new Blob([`# ${JSON.stringify(provenance(M))}\n` + lines.join('\n')], {type: 'text/csv'}));
