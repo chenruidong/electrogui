@@ -215,11 +215,18 @@ The page carries no captions or helper text; controls sit on what they change
   can be sorted by session order, spikes in the count window, any marker's
   latency or any field; *Rows: grouped* stacks one block per group, *mixed*
   interleaves them.
-- **Markers.**  A marker is a recorded event matched to each row in the same
-  object or the same trial, choosing the nearest, first-after, last-before or
-  every occurrence; optionally *shade until* a second event draws a per-row
-  band.  Rows show a dot at the event; the PSTH shows the median across shown
-  rows as a dashed line plus a small triangle per group.  One-tap presets add
+- **Markers.**  A marker is a recorded event drawn on each row.  By default
+  (*in window*) it takes every occurrence inside the row's window, whatever its
+  trial or object; *same trial* or *same object* match it to the row instead,
+  regardless of the window.  Either way it then takes the nearest, first-after,
+  last-before or every occurrence; optionally *shade until* a second event draws
+  a per-row band (an *in window* band ends at the next such event, in any
+  trial).  New markers and the presets start as *in window* · *all*; markers
+  saved with a match keep it.  Where a row has several occurrences, its
+  median, its sort latency and its CSV column use the one nearest the row's
+  event (the hover lists them all).  Rows show a dot at the event; the PSTH
+  shows the median across shown rows as a dashed line plus a small triangle per
+  group.  One-tap presets add
   object visible, joystick onset, trial initiation, goal release, reward and
   outcome.  *+ Line at … s* adds a reference line at a fixed time; lines show as
   chips beside the markers.  The legend's *medians* entry hides or shows the
