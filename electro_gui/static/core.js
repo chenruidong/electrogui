@@ -36,6 +36,8 @@
     trial_has_predator_touch: 'trial has predator touch', trial_has_prey_miss: 'trial has prey miss',
     trial_changed_strategy: 'strategy changed', previous_trial_intention: 'previous-trial strategy',
     next_trial_intention: 'next-trial strategy', next_trial_changes_strategy: 'strategy changes next trial',
+    first_trial_of_rule_block: 'first trial of rule block', first_trial_of_color_block: 'first trial of colour block',
+    block_change: 'block change',
     goal_release_t: 'goal release (s from event)',
     next_outcome_t: 'next outcome (s from event)', trial_end_t: 'trial end (s from event)',
     object_outcome_t: 'object outcome (s from event)',
@@ -77,6 +79,9 @@
     if (key === 'trial_error_free') return value ? 'error-free trial' : 'trial has an error';
     if (key === 'before_first_error') return value ? 'before first error' : 'after first error';
     if (key === 'success') return value ? 'trial success' : 'trial failure';
+    if (key === 'first_trial_of_rule_block') return value ? 'first trial of rule block' : 'later in rule block';
+    if (key === 'first_trial_of_color_block') return value ? 'first trial of colour block' : 'later in colour block';
+    if (key === 'block_change') return {rule: 'rule block starts', color: 'colour changes within rule', none: 'no block change'}[value] || humanize(value);
     if (typeof value === 'boolean') return `${fieldLabel(key)}: ${value ? 'yes' : 'no'}`;
     if (typeof value === 'number') return `${fieldLabel(key)} ${fmtNum(value)}`;
     if (value && typeof value === 'object' && value.bin) return `${fieldLabel(key)} ${value.label}`;
