@@ -19,6 +19,20 @@ for (const norm of ['z', 'peak']) {
 }
 assert.throws(() => C.populationDifference({...fit, groups: [{means: [[1]]}, fit.groups[1]]}, 0, 1, 'z'), /identical/);
 assert.throws(() => C.populationDifference(fit, 0, 0, 'z'), /distinct/);
+// Every quantile bin has a readable legend label, the first one (bin 0) included, and a
+// whole-number field's bins name ranges that do not share a value.
+{
+  const data = Float64Array.from({length: 28}, (_, i) => i + 1);
+  const col = {key: 'block_id', kind: 'num', discrete: false, data};
+  const labels = C.groupRows({byKey: new Map([['block_id', col]])}, [...data.keys()], {color: 'block_id', qbins: 3}).groups.map(g => g.label);
+  assert.deepEqual(labels, ['block 1/3: 1–9', 'block 2/3: 10–18', 'block 3/3: 19–28']);
+  const real = {key: 'speed', kind: 'num', discrete: false, data: Float64Array.from([0.5, 1.5, 2.5, 3.5])};
+  assert.deepEqual(C.groupRows({byKey: new Map([['speed', real]])}, [0, 1, 2, 3], {style: 'speed', qbins: 2}).groups.map(g => g.label),
+    ['speed 1/2: 0.5 to <2.5', 'speed 2/2: 2.5–3.5']);
+  assert.equal(C.formatLevel('speed', {bin: 0, label: 'x'}), 'speed x');
+  for (const [key, value] of [['speed', 0], ['bar', false], ['trial.stimuli_changed', 0], ['world', 'PP'], ['speed', null]])
+    assert.doesNotMatch(C.formatLevel(key, value), /object Object|undefined|NaN/);
+}
 const elements = new Map(), globalHandlers = new Map();
 function el(id) {
   if (elements.has(id)) return elements.get(id);
@@ -26,7 +40,7 @@ function el(id) {
   const value = {id, handlers, hidden: true, isConnected: true, focus: () => { value.focused = true; }, dataset: {}, style: {}, value: '', innerHTML: '',
     classList: {add: x => classes.add(x), remove: x => classes.delete(x), contains: x => classes.has(x), toggle: () => {}},
     addEventListener: (k, f) => { (handlers[k] ||= []).push(f); }, querySelector: q => q === 'svg' ? el('svg') : null,
-    querySelectorAll: () => [], getBoundingClientRect: () => ({left: 0, top: 0, width: 100, height: 100}), scrollIntoView: () => {}};
+    querySelectorAll: () => [], closest: q => el(`${id}:${q}`), getBoundingClientRect: () => ({left: 0, top: 0, width: 100, height: 100}), scrollIntoView: () => {}};
   elements.set(id, value); return value;
 }
 const context = {window: {EGCore: C}, document: {getElementById: el, querySelector: () => el('any'), querySelectorAll: () => [], documentElement: {dataset: {}}},
@@ -67,6 +81,11 @@ assert.equal(JSON.stringify(unitList().map(u => u.id)), '[3]');
 S.unit = 1; stepUnit(1); assert.equal(S.unit, 3);
 assert.equal(context.window.qa.sanitize({unitNoted: 'true'}).unitNoted, false);
 assert.equal(context.window.qa.sanitize({unitNoted: true}).unitNoted, true);
+// A filter from a hand-written link or config: level keys become the strings the table uses, a range
+// keeps number-or-null bounds, and an entry that is neither is dropped rather than breaking the page.
+assert.deepEqual(JSON.parse(JSON.stringify(context.window.qa.sanitize({filters: [{k: 'correct', v: [true]}, {k: 'order', v: [1, null]},
+  {k: 'rt', r: [0, 'x']}, {k: 'bad', v: 'touch'}, {k: 'empty'}, null, {v: ['a']}]}).filters)),
+  [{k: 'correct', v: ['true']}, {k: 'order', v: ['1', C.MISSING]}, {k: 'rt', r: [0, null]}]);
 S.unitNoted = false; S.unit = 1; D.unitNotes = null;
 S.win = [-1, 2]; assert.equal(JSON.stringify(unitList().map(u => u.id)), '[1,3]'); // stale order falls back
 for (const [field, value] of [['qbins', 4], ['hidden', ['other']], ['filters', [{k:'world',v:['PP']}]]]) {
