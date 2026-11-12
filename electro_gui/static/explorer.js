@@ -1303,6 +1303,47 @@
     $('fieldItems').addEventListener('click', e => { const b = e.target.closest('[data-field]'); if (b) onPick(b.dataset.field); });
   }
 
+  // The grouping and sort menus list every field, so they open as a searchable list rather than
+  // the native menu.  The <select> stays the holder of the value: the list is built from its
+  // own options and a pick fires its ordinary change event.
+  function openSelectPicker(sel, title) {
+    if (!sel.options.length) return;
+    openPop(sel, popHead(title) + `<div class="pop-search"><input type="search" id="pickSearch" placeholder="Search" aria-label="Search ${esc(title.toLowerCase())} options" autocomplete="off"></div><div class="pop-body" id="pickItems"></div>`);
+    const item = o => `<button type="button" class="item${o.value === sel.value ? ' on' : ''}" data-pick="${esc(o.value)}" title="${esc(o.value.replace(/^field:/, ''))}"><span class="main"><b>${esc(o.textContent)}</b></span></button>`;
+    const fill = text => {
+      const t = text.trim().toLowerCase();
+      const hit = o => !t || `${o.textContent} ${o.value}`.toLowerCase().includes(t);
+      let html = '';
+      for (const el of sel.children) {
+        if (el.tagName === 'OPTGROUP') {
+          const list = [...el.children].filter(hit);
+          if (list.length) html += `<div class="pop-group">${esc(el.label)}</div>${list.map(item).join('')}`;
+        } else if (hit(el)) html += item(el);
+      }
+      $('pickItems').innerHTML = html || '<div class="pop-note">No fields match.</div>';
+      const on = !t && $('pickItems').querySelector('.on');
+      if (on) on.scrollIntoView({block: 'center'});
+    };
+    const pick = value => { closePop(); if (sel.value !== value) { sel.value = value; sel.dispatchEvent(new Event('change', {bubbles: true})); } };
+    fill('');
+    $('pickSearch').addEventListener('input', e => fill(e.target.value));
+    $('pickSearch').addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      const first = $('pickItems').querySelector('[data-pick]');
+      if (first) { e.preventDefault(); pick(first.dataset.pick); }
+    });
+    $('pickItems').addEventListener('click', e => { const b = e.target.closest('[data-pick]'); if (b) pick(b.dataset.pick); });
+  }
+  function bindSelectPicker(id, title) {
+    const sel = $(id), label = sel.closest('label');
+    label.classList.add('picker');
+    label.addEventListener('click', e => { e.preventDefault(); openSelectPicker(sel, title); });
+    sel.addEventListener('keydown', e => {
+      if (![' ', 'Enter', 'ArrowDown', 'ArrowUp'].includes(e.key)) return;
+      e.preventDefault(); openSelectPicker(sel, title);
+    });
+  }
+
   function openFilterEditor(anchor, key) {
     const T = D.tables.get(S.align);
     const col = T && T.byKey.get(key);
@@ -3891,6 +3932,7 @@
 
     // grouping
     const regroup = () => { S.hidden = []; changed({structure: false}); syncControls(); };
+    [['colorBy', 'Colour by'], ['styleBy', 'Line style by'], ['panelBy', 'Panels by'], ['sortBy', 'Sort rows by']].forEach(([id, title]) => bindSelectPicker(id, title));
     $('colorBy').addEventListener('change', e => { S.color = e.target.value || null; regroup(); });
     $('styleBy').addEventListener('change', e => { S.style = e.target.value || null; regroup(); });
     $('panelBy').addEventListener('change', e => { S.panel = e.target.value || null; regroup(); });
