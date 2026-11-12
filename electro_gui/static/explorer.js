@@ -167,6 +167,11 @@
     for (const [k, allowed] of Object.entries({weight: ['event', 'trial'], err: ['sem', 'ci', 'none'], policy: ['verified_stable', 'all_complete'], tick: ['line', 'dot']}))
       if (!allowed.includes(s[k])) s[k] = DEFAULTS[k];
     for (const k of ['filters', 'hidden', 'markers', 'refs', 'unitQ', 'unitArea']) if (!Array.isArray(s[k])) s[k] = clone(DEFAULTS[k]);
+    // A filter is a field with a list of level keys (always strings: 'true', '1') or a [min, max] range.
+    const bound = v => (Number.isFinite(v) ? v : null);
+    s.filters = s.filters.map(f => !f || typeof f.k !== 'string' ? null
+      : Array.isArray(f.v) ? {k: f.k, v: f.v.map(C.levelKey)}
+      : Array.isArray(f.r) && f.r.length === 2 ? {k: f.k, r: [bound(f.r[0]), bound(f.r[1])]} : null).filter(Boolean);
     s.markers = s.markers.filter(m => m && typeof m.e === 'string').map((m, i) => ({id: m.id || `m${i + 1}`, match: 'trial', occ: 'nearest', c: INK, ...m}));
     s.refs = s.refs.filter(Number.isFinite);
     s.rasterH = Number.isFinite(s.rasterH) ? clamp(s.rasterH, RASTER_MIN, RASTER_MAX) : DEFAULTS.rasterH;
@@ -984,7 +989,8 @@
   function fieldOptions(T, {none = 'none', grouping = false, sortExtras = false} = {}) {
     const groups = new Map(FIELD_GROUP_ORDER.map(g => [g, []]));
     for (const col of T.columns) {
-      if (grouping && col.kind === 'cat' && col.levels.length > 16) continue;
+      // Too many levels to group by, unless the figure is already split by it: then the menu must still name it.
+      if (grouping && col.kind === 'cat' && col.levels.length > 16 && ![S.color, S.style, S.panel].includes(col.key)) continue;
       const g = fieldGroup(col);
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(col);
@@ -1394,6 +1400,10 @@
     if (idx < 0) {
       S.filters.push(levels ? {k: key, v: levels.map(l => l.key)} : {k: key, r: [null, null]});
       idx = S.filters.length - 1;
+    } else if (levels ? !Array.isArray(S.filters[idx].v) : !Array.isArray(S.filters[idx].r)) {
+      // Saved where this field had few values (a list of levels) and opened where it is continuous, or the
+      // reverse: the old filter cannot be edited in this form, so start it again in the form the field has now.
+      S.filters[idx] = levels ? {k: key, v: levels.map(l => l.key)} : {k: key, r: [null, null]};
     }
     const draw = () => {
       const f = S.filters[idx];
@@ -1495,8 +1505,10 @@
   }
 
   const STYLE_COLORS = ['#2b8a3e', '#8fcf9c', '#6741d9', '#b197fc', '#e03131', '#f4a3a3', '#1c7ed6', '#f08c00', '#0c8599', '#d6336c', '#495057', INK];
+  // The legend on screen belongs to the population model in that mode; its group keys carry no panel level.
+  const legendModel = () => (S.mode === 'population' ? D.popModel : D.model);
   function openGroupStyle(anchor, key) {
-    const g = D.model && D.model.grouping.groups.find(x => x.key === key);
+    const M = legendModel(), g = M && M.grouping.groups.find(x => x.key === key);
     if (!g) return;
     const own = S.gstyle[key] || {};
     const dashIdx = Number.isInteger(own.d) ? own.d : g.styleIndex % DASHES.length;
@@ -1510,7 +1522,7 @@
     pop.querySelectorAll('[data-gsc]').forEach(b => b.addEventListener('click', () => set({c: b.dataset.gsc})));
     pop.querySelectorAll('[data-gsd]').forEach(b => b.addEventListener('click', () => set({d: Number(b.dataset.gsd)})));
     pop.querySelector('[data-gsreset]').addEventListener('click', () => { delete S.gstyle[key]; changed(); closePop(); });
-    pop.querySelector('[data-gsonly]').addEventListener('click', () => { S.hidden = D.model.grouping.groups.map(x => x.key).filter(k => k !== key); changed(); closePop(); });
+    pop.querySelector('[data-gsonly]').addEventListener('click', () => { S.hidden = M.grouping.groups.map(x => x.key).filter(k => k !== key); changed(); closePop(); });
   }
 
   async function openViews() {
@@ -1596,7 +1608,7 @@
   }
   function summarizeState(s) {
     if (!s) return '';
-    return [s.unit !== undefined ? `unit ${s.unit}` : '', eventLabel(s.align || ''), [s.color, s.style].filter(Boolean).map(k => C.fieldLabel(k)).join(' × ')].filter(Boolean).join(' · ');
+    return [Number.isInteger(s.unit) ? `unit ${s.unit}` : '', eventLabel(s.align || ''), [s.color, s.style].filter(Boolean).map(k => C.fieldLabel(k)).join(' × ')].filter(Boolean).join(' · ');
   }
   // ------------------------------------------------------------- findings
   // A finding is this figure saved with a title, optional notes, tags and a status, its exact settings, the
@@ -1977,6 +1989,7 @@
   function rvTitle(rv, short = false) {
     if (!rv) return short ? 'the unit in view' : 'Open this unit in Result Viewer';
     if (!rv.url) return rv.error;
+    if (S.unit === null) return short ? 'the unit in view' : `Open this unit in Result Viewer on ${rv.host}`;
     return (short ? `unit ${S.unit} on ${rv.host}` : `Open unit ${S.unit} in Result Viewer on ${rv.host}`) +
       (rv.here ? '' : ` (${rvElsewhere(rv)})`);
   }
@@ -2272,9 +2285,14 @@
       const adaptive = [S.color, S.style].map(k => k && M.T.byKey.get(k)).find(c => c && c.kind === 'num' && !c.discrete);
       if (adaptive) throw Error('Restricted training does not support quantile-binned numeric groups: their boundaries use all selected trials. Choose categorical/discrete groups or fit all groups and trials.');
     }
+    // A chosen group can be gone (a filter emptied it, a template regrouped): the server refuses a key it was
+    // not sent, so fit on the chosen groups that exist, and on all of them when none or every one is left.
+    const present = new Set(M.grouping.groups.map(g => g.key));
+    const chosen = S.fitGroups === null ? null : S.fitGroups.filter(k => present.has(k));
+    const fitKeys = chosen && chosen.length && chosen.length < present.size ? chosen : null;
     return {session_id: S.session, unit_ids: S.roster.slice(), alignment: S.align, policy: S.policy,
       pre: S.win[0], post: S.win[1], bin: S.bin, sigma: S.sigma, weight: S.weight, method: S.method,
-      scaling: S.scaling, components: nComp(), fit_group_keys: S.fitGroups, fit_split: S.fitSplit,
+      scaling: S.scaling, components: nComp(), fit_group_keys: fitKeys, fit_split: S.fitSplit,
       ...(S.method === 'tdr' ? {factors: S.tdrFactors.slice(), tdr_window: tdrWindow(), world_coding: S.worldCoding} : {}),
       groups: M.grouping.groups.map(g => ({key: g.key, label: g.label, row_ids: g.rows.map(i => M.T.rowId[i])}))};
   }
@@ -3914,8 +3932,10 @@
       if (t.hasAttribute('data-rnone')) { const drop = new Set(rosterShown().map(u => u.id)); S.roster = S.roster.filter(id => !drop.has(id)); fillRosterItems(); rosterChanged(300); return; }
       if (t.hasAttribute('data-fitall')) { S.fitGroups = null; openFitGroups(); changed(); return; }
       if (t.hasAttribute('data-fitgroup')) {
-        const keys = S.fitGroups === null ? buildPopModel().grouping.groups.map(g => g.key) : S.fitGroups;
-        S.fitGroups = keys.includes(t.dataset.fitgroup) ? keys.filter(k => k !== t.dataset.fitgroup) : [...keys, t.dataset.fitgroup];
+        const all = buildPopModel().grouping.groups.map(g => g.key);
+        const keys = S.fitGroups === null ? all : S.fitGroups.filter(k => all.includes(k));   // drop groups that no longer exist
+        const next = keys.includes(t.dataset.fitgroup) ? keys.filter(k => k !== t.dataset.fitgroup) : [...keys, t.dataset.fitgroup];
+        S.fitGroups = next.length && next.length < all.length ? next : null;   // none left, or every one: fit on all groups
         openFitGroups(); changed(); return;
       }
       if (t.dataset.unit) { S.unit = Number(t.dataset.unit); closePop(); changed({data: true}); return; }
@@ -3972,7 +3992,9 @@
     $('clearFilters').addEventListener('click', () => { S.filters = []; renderFilterChips(); changed(); });
 
     // grouping
-    const regroup = () => { S.hidden = []; changed({structure: false}); syncControls(); };
+    // Group keys are level keys alone ('true', 'bin0'), so a colour or dash set on one field's group would
+    // land on another field's: per-group styles go with the grouping they were made for.
+    const regroup = () => { S.hidden = []; S.gstyle = {}; S.fitGroups = null; changed({structure: false}); syncControls(); };
     bindFieldTips();
     [['colorBy', 'Colour by'], ['styleBy', 'Line style by'], ['panelBy', 'Panels by'], ['sortBy', 'Sort rows by']].forEach(([id, title]) => bindSelectPicker(id, title));
     $('colorBy').addEventListener('change', e => { S.color = e.target.value || null; regroup(); });
@@ -4063,8 +4085,9 @@
     $('legend').addEventListener('click', e => { if (press === 'fired') { press = null; e.stopImmediatePropagation(); } }, true);
     $('legend').addEventListener('dblclick', e => {
       const b = e.target.closest('[data-g]');
-      if (!b || !D.model || b.dataset.g === '__all') return;
-      S.hidden = D.model.grouping.groups.map(g => g.key).filter(k => k !== b.dataset.g);
+      const M = legendModel();
+      if (!b || !M || b.dataset.g === '__all') return;
+      S.hidden = M.grouping.groups.map(g => g.key).filter(k => k !== b.dataset.g);
       changed();
     });
 
@@ -4110,10 +4133,11 @@
     ruler.addEventListener('pointermove', rulerMove);
     const rulerEnd = () => { rdrag = null; };
     ruler.addEventListener('pointerup', rulerEnd); ruler.addEventListener('pointercancel', rulerEnd);
-    $('winLoN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v < S.win[1] && v >= -10) { S.win[0] = v; winChanged(); } else syncControls(); });
-    $('winHiN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v > S.win[0] && v <= 10) { S.win[1] = v; winChanged(); } else syncControls(); });
-    $('cwLoN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v < S.cw[1]) S.cw[0] = v; changed(); });
-    $('cwHiN').addEventListener('change', e => { const v = Number(e.target.value); if (Number.isFinite(v) && v > S.cw[0]) S.cw[1] = v; changed(); });
+    const typed = e => (e.target.value.trim() === '' ? NaN : Number(e.target.value));   // an emptied box is not 0
+    $('winLoN').addEventListener('change', e => { const v = typed(e); if (Number.isFinite(v) && v < S.win[1] && v >= -10) { S.win[0] = v; winChanged(); } else syncControls(); });
+    $('winHiN').addEventListener('change', e => { const v = typed(e); if (Number.isFinite(v) && v > S.win[0] && v <= 10) { S.win[1] = v; winChanged(); } else syncControls(); });
+    $('cwLoN').addEventListener('change', e => { const v = typed(e); if (Number.isFinite(v) && v < S.cw[1]) S.cw[0] = v; changed(); });
+    $('cwHiN').addEventListener('change', e => { const v = typed(e); if (Number.isFinite(v) && v > S.cw[0]) S.cw[1] = v; changed(); });
     $('bin').addEventListener('input', e => { S.bin = Number(e.target.value) / 1000; changed(); });
     $('sigma').addEventListener('input', e => { S.sigma = Number(e.target.value) / 1000; changed(); });
     // The divider above the behavior timeline: drag to set the raster height, double-click

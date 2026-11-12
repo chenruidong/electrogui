@@ -84,7 +84,8 @@
     if (key === 'block_change') return {rule: 'rule block starts', color: 'colour changes within rule', none: 'no block change'}[value] || humanize(value);
     if (typeof value === 'boolean') return `${fieldLabel(key)}: ${value ? 'yes' : 'no'}`;
     if (typeof value === 'number') return `${fieldLabel(key)} ${fmtNum(value)}`;
-    if (value && typeof value === 'object' && value.bin) return `${fieldLabel(key)} ${value.label}`;
+    // A quantile bin ({bin, label}); bin 0 is the first one, so test the type, not the truth, of bin.
+    if (value && typeof value === 'object' && Number.isInteger(value.bin)) return `${fieldLabel(key)} ${value.label}`;
     return humanize(value);
   }
   function fmtNum(v, digits) {
@@ -211,10 +212,18 @@
     // Categories and small integer sets group by value; other numbers by quantile bins.
     if (col.kind === 'cat' || col.discrete) return i => ({key: levelKey(rawValue(col, i)), value: rawValue(col, i)});
     const edges = quantileEdges(rows.map(i => col.data[i]), k);
+    // A bin holds [edge j, edge j+1); only the last one includes its upper edge.  Whole-number
+    // fields name the last value inside the bin (17–21, 22–28) so no value reads as in two bins;
+    // other fields say "to <" for the open end.
+    const whole = rows.every(i => Number.isNaN(col.data[i]) || Number.isInteger(col.data[i]));
     const labels = [];
     for (let j = 0; j + 1 < edges.length; j++) {
-      const last = j + 2 === edges.length;
-      labels.push(`${j + 1}/${edges.length - 1}: ${last && edges[j + 1] === Infinity ? '≥ ' + fmtNum(edges[j]) : `${fmtNum(edges[j])}–${fmtNum(edges[j + 1])}`}`);
+      const last = j + 2 === edges.length, lo = edges[j], hi = edges[j + 1];
+      let range;
+      if (last) range = hi === Infinity ? (whole ? fmtNum(lo) : '≥ ' + fmtNum(lo)) : `${fmtNum(lo)}–${fmtNum(hi)}`;
+      else if (whole) range = hi - 1 === lo ? fmtNum(lo) : `${fmtNum(lo)}–${fmtNum(hi - 1)}`;
+      else range = `${fmtNum(lo)} to <${fmtNum(hi)}`;
+      labels.push(`${j + 1}/${edges.length - 1}: ${range}`);
     }
     return i => {
       const v = col.data[i];
