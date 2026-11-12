@@ -1174,7 +1174,7 @@
     if (top + h > innerHeight - 12) top = r.top - h - 6 >= 12 ? r.top - h - 6 : Math.max(12, innerHeight - 12 - h);
     pop.style.left = `${left}px`; pop.style.top = `${top}px`;
   }
-  function closePop() { const anchor = popAnchor; $('popover').hidden = true; $('scrim').hidden = true; popAnchor = null; if (anchor && anchor.isConnected) anchor.focus({preventScroll: true}); }
+  function closePop() { const anchor = popAnchor; hideFieldTip(); $('popover').hidden = true; $('scrim').hidden = true; popAnchor = null; if (anchor && anchor.isConnected) anchor.focus({preventScroll: true}); }
   const popHead = title => `<div class="pop-head"><h3>${esc(title)}</h3><button class="close" type="button" data-close aria-label="Close">×</button></div>`;
 
   // Inputs captured by buildPopModel, plus every fit input. Sort/axes/heatmap
@@ -1309,7 +1309,7 @@
   function openSelectPicker(sel, title) {
     if (!sel.options.length) return;
     openPop(sel, popHead(title) + `<div class="pop-search"><input type="search" id="pickSearch" placeholder="Search" aria-label="Search ${esc(title.toLowerCase())} options" autocomplete="off"></div><div class="pop-body" id="pickItems"></div>`);
-    const item = o => `<button type="button" class="item${o.value === sel.value ? ' on' : ''}" data-pick="${esc(o.value)}" title="${esc(o.value.replace(/^field:/, ''))}"><span class="main"><b>${esc(o.textContent)}</b></span></button>`;
+    const item = o => `<button type="button" class="item${o.value === sel.value ? ' on' : ''}" data-pick="${esc(o.value)}"><span class="main"><b>${esc(o.textContent)}</b></span></button>`;
     const fill = text => {
       const t = text.trim().toLowerCase();
       const hit = o => !t || `${o.textContent} ${o.value}`.toLowerCase().includes(t);
@@ -1333,6 +1333,47 @@
       if (first) { e.preventDefault(); pick(first.dataset.pick); }
     });
     $('pickItems').addEventListener('click', e => { const b = e.target.closest('[data-pick]'); if (b) pick(b.dataset.pick); });
+  }
+  // What an option means, shown beside the list while the pointer or keyboard focus is on it.
+  // Field text comes from the session's field registry (the pipeline's definitions).
+  const OPTION_TIPS = {
+    '': 'No split: every selected event stays in one group on this control.',
+    session: 'Rows in the order the events happened in the session.',
+    count: 'Rows ordered by the number of spikes in the count window (the shaded span).',
+  };
+  function optionTip(value) {
+    const T = D.tables.get(S.align);
+    const col = T && T.byKey.get(value.replace(/^field:/, ''));
+    if (col) {
+      const lv = C.fieldLevels(col);
+      const values = lv ? lv.slice(0, 6).map(l => l.key === C.MISSING ? 'missing' : l.label).join(', ') + (lv.length > 6 ? `, +${lv.length - 6} more` : '') : 'a number';
+      return {title: col.label, text: col.description || 'No definition is recorded for this field.', values,
+        timing: col.timing ? String(col.timing).replace(/_/g, ' ') : '', key: col.key};
+    }
+    if (value.startsWith('marker:')) return {title: 'Marker time', text: 'Rows ordered by when this marker happened relative to the alignment event.'};
+    return value in OPTION_TIPS ? {title: value ? '' : 'None', text: OPTION_TIPS[value]} : null;
+  }
+  function hideFieldTip() { const tip = $('fieldTip'); if (tip) tip.hidden = true; }
+  function showFieldTip(item) {
+    const tip = $('fieldTip'), info = optionTip(item.dataset.field ?? item.dataset.pick);
+    if (!info || matchMedia('(max-width: 959px)').matches) { hideFieldTip(); return; }
+    tip.innerHTML = (info.title ? `<b>${esc(info.title)}</b>` : '') + `<p>${esc(info.text)}</p>` +
+      (info.values ? `<small>Values: ${esc(info.values)}</small>` : '') +
+      (info.timing ? `<small>Timing: ${esc(info.timing)}</small>` : '') +
+      (info.key ? `<small class="key">${esc(info.key)}</small>` : '');
+    tip.hidden = false;
+    const p = $('popover').getBoundingClientRect(), r = item.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const left = p.right + 8 + w <= innerWidth - 12 ? p.right + 8 : Math.max(12, p.left - 8 - w);
+    tip.style.left = `${left}px`;
+    tip.style.top = `${clamp(r.top, 12, Math.max(12, innerHeight - 12 - h))}px`;
+  }
+  function bindFieldTips() {
+    const pop = $('popover'), at = e => e.target.closest && e.target.closest('.item[data-field], .item[data-pick]');
+    pop.addEventListener('mouseover', e => { const item = at(e); if (item) showFieldTip(item); else hideFieldTip(); });
+    pop.addEventListener('mouseleave', hideFieldTip);
+    pop.addEventListener('focusin', e => { const item = at(e); if (item) showFieldTip(item); });
+    pop.addEventListener('input', hideFieldTip);
+    pop.addEventListener('scroll', hideFieldTip, true);
   }
   function bindSelectPicker(id, title) {
     const sel = $(id), label = sel.closest('label');
@@ -3932,6 +3973,7 @@
 
     // grouping
     const regroup = () => { S.hidden = []; changed({structure: false}); syncControls(); };
+    bindFieldTips();
     [['colorBy', 'Colour by'], ['styleBy', 'Line style by'], ['panelBy', 'Panels by'], ['sortBy', 'Sort rows by']].forEach(([id, title]) => bindSelectPicker(id, title));
     $('colorBy').addEventListener('change', e => { S.color = e.target.value || null; regroup(); });
     $('styleBy').addEventListener('change', e => { S.style = e.target.value || null; regroup(); });
