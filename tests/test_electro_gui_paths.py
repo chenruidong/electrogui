@@ -82,6 +82,16 @@ class PathsTests(unittest.TestCase):
         with _env(HOME=str(self.root)):
             self.assertEqual(cli._folders(given), (Path("c"), Path("f"), []))
 
+    def test_labels_folder_is_the_flag_else_the_dropbox_folder_else_nothing(self):
+        bare = cli.add_arguments(argparse.ArgumentParser()).parse_args([])
+        with _env(HOME=str(self.root), DROPBOX_ROOT="/d"):
+            self.assertEqual(cli._labels_dir(bare), Path("/d/projects/electro_gui/output/labels"))
+        with _env(HOME=str(self.root)):
+            self.assertIsNone(cli._labels_dir(bare))
+        given = cli.add_arguments(argparse.ArgumentParser()).parse_args(["--labels-dir", "l"])
+        with _env(HOME=str(self.root), DROPBOX_ROOT="/d"):
+            self.assertEqual(cli._labels_dir(given), Path("l"))
+
 
 if __name__ == "__main__":
     unittest.main()

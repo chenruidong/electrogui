@@ -4,14 +4,15 @@ They live in Dropbox, so every machine that runs the explorer shares them:
 
 * ``<Dropbox>/projects/electro_gui/output/cache``    the verified stability cache
 * ``<Dropbox>/projects/electro_gui/output/findings`` saved findings (JSON + PNG each)
+* ``<Dropbox>/projects/electro_gui/output/labels``   labels files joined onto their sessions
 * ``<Dropbox>/projects/analysis_imitation/data/output/presentation``
   figure configs, which the presentation decks write as ``*/electro_gui_configs/*.json``
 
 The Dropbox root is found the way the thread-handoff kit finds it, so it is the
 same folder on every Mac whatever its mount point: ``DROPBOX_ROOT``, else the
 business (then personal) path in ``~/.dropbox/info.json``.  ``ELECTRO_GUI_OUTPUT``
-replaces the output folder outright; ``--cache-dir``, ``--findings-dir`` and
-``--config-dir`` replace one folder each.
+replaces the output folder outright; ``--cache-dir``, ``--findings-dir``,
+``--labels-dir`` and ``--config-dir`` replace one folder each.
 """
 from __future__ import annotations
 

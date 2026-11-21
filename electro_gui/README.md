@@ -46,6 +46,26 @@ Both flags can be repeated. Explicit files must have the exact assembled-session
 filename and matching embedded session identity. No external behavioral data,
 prepared bundles or scene files are substituted when a field is missing.
 
+`--labels-dir DIR` is a folder of **labels files**: labels worked out from a
+session file after the fact and kept beside it, never inside it
+(`<session>_<name>.json`; the format is `imitation_phys/session_labels.py`).
+Each file names the SHA256 of the session file it was made from and is joined
+only onto that exact file; one made from another version is left out and the
+session's notices say so.  A joined file adds its events to the alignment,
+marker and event lists, and its labels to the filter, group and sort fields of
+every row of the object or trial they describe.  The recorded rows keep their
+order and content, and what a result was computed from then includes the
+labels files (`source.labels` in the session metadata, and the computation
+identity of classic jobs).  A file that appears, changes or goes away is picked
+up the next time the session is requested.
+
+The first label set is **change of mind**, written by analysis_imitation's
+`python -m imitation_phys change-of-mind-labels --session-file … --out-dir <labels folder>`:
+the alignments `change_of_mind` (the moment of change of a counted event) and
+`change_of_mind_first_move` (the start of the movement it reverses), and the
+fields `change_of_mind`, `change_of_mind_counted`, `change_of_mind_look_back`
+and `trial_change_of_mind`.
+
 `--config-dir DIR` (repeatable; a missing directory is simply empty) names where
 the Views menu looks for JSON config files; see **Config files** below.
 `--findings-dir DIR` is where findings are saved; see **Findings** below.  Their
@@ -56,6 +76,7 @@ checkout shares them (`electro_gui/paths.py`):
 |---|---|
 | `--cache-dir` | `<Dropbox>/projects/electro_gui/output/cache` |
 | `--findings-dir` | `<Dropbox>/projects/electro_gui/output/findings` |
+| `--labels-dir` | `<Dropbox>/projects/electro_gui/output/labels` |
 | `--config-dir` | `<Dropbox>/projects/analysis_imitation/data/output/presentation` |
 | `--unit-notes-dir` (read only) | `<Dropbox>/projects/result-viewer/data/notes` |
 
