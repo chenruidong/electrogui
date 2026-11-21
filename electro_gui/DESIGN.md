@@ -13,7 +13,7 @@ pipeline package, and electro_gui imports them: `imitation_phys.session_store`
 spans, the time grid, rates, the basis fit and the stable roster).  No
 `imitation_phys` module imports `electro_gui`.
 
-`imitation_phys.session_store.SessionStore(roots, session_files, cache_dir)` discovers only exact
+`imitation_phys.session_store.SessionStore(roots, session_files, cache_dir, labels_dir)` discovers only exact
 `<sid>/analysis/nwb/<sid>_session.nwb` products (explicit session files are also
 accepted). `catalog()` returns `{id, path}` entries. `get(session_id)` loads and
 validates the source lazily and returns a `LoadedSession`. Its interface is:
@@ -38,6 +38,14 @@ validates the source lazily and returns a `LoadedSession`. Its interface is:
   Policy `verified_stable` recomputes/reuses content-bound stability; policy
   `all_complete` deliberately performs no stability filtering.
 - `metadata()`: source, units, fields, alignments, counts and provenance for UI.
+- `labels`: the labels files joined onto the session, `{name, file, sha256}` each
+  (`imitation_phys/session_labels.py`; `--labels-dir`).  Their events are rows
+  after the recorded ones, so recorded `row_id`s never move; their object and
+  trial labels are fields on every row of that object or trial.  A file is
+  joined only onto the exact session file it names, and `SessionStore.get`
+  reloads the session when its labels files change.  `metadata()["source"]`
+  carries `labels`, and `server._label_keys` adds them to the computation
+  identity of classic jobs.  With no labels file the session is unchanged.
 
 `analysis.compute_unit(loaded, request)` and `population.compute_population`
 accept the same request: `{session_id, unit_id, alignment, pre, post, bin,
