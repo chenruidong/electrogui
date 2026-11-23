@@ -72,23 +72,32 @@
     return {pairs, families, scope, skipped: null};
   }
 
-  /** 32-bit hash of numbers (their float64 bits) and strings; seeds and cache keys. */
-  function hashParts(parts) {
-    let h = 0x811c9dc5;
-    const mix = w => { h ^= w; h = Math.imul(h, 0x01000193) >>> 0; };
+  /**
+   * 32-bit MurmurHash3-style hash of numbers (their float64 bits) and strings.  Every word is
+   * mixed in full: rates are often small whole numbers over a fixed window, whose float64 low
+   * word is 0 and whose high word varies only in its top bits.
+   */
+  function hashParts(parts, seed) {
+    let h = (seed === undefined ? 0x9747b28c : seed) | 0, len = 0;
+    const mix = k => {
+      k = Math.imul(k, 0xcc9e2d51); k = (k << 15) | (k >>> 17); k = Math.imul(k, 0x1b873593);
+      h ^= k; h = (h << 13) | (h >>> 19); h = (Math.imul(h, 5) + 0xe6546b64) | 0; len++;
+    };
     const buf = new Float64Array(1), words = new Uint32Array(buf.buffer);
     for (const part of parts) {
-      if (typeof part === 'string') { for (let i = 0; i < part.length; i++) mix(part.charCodeAt(i)); mix(0x1f); continue; }
+      if (typeof part === 'string') { for (let i = 0; i < part.length; i++) mix(part.charCodeAt(i)); mix(0x1f1f1f1f); continue; }
       for (let i = 0; i < part.length; i++) { buf[0] = part[i]; mix(words[0]); mix(words[1]); }
-      mix(0x1e);
+      mix(0x1e1e1e1e);
     }
+    h ^= len; h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
     return h >>> 0;
   }
-  /** What a result depends on: each bar's key, panel and values, in order. */
+  /** What a result depends on: each bar's key, panel and values, in order (64 bits, two seeds). */
   function contentKey(groups) {
     const parts = [];
     for (const g of groups) parts.push(String(g.key), String(g.panel), g.values);
-    return `${groups.length}:${hashParts(parts).toString(16)}`;
+    const hex = h => h.toString(16).padStart(8, '0');
+    return `${groups.map(g => g.values.length).join('.')}:${hex(hashParts(parts, 1))}${hex(hashParts(parts, 0x5bd1e995))}`;
   }
 
   function mulberry32(seed) {
@@ -123,6 +132,7 @@
     for (let i = 0; i < nb; i++) pool[na + i] = b[i];
     for (let i = 0; i < n; i++) total += pool[i];
     const diff = sumA / na - (total - sumA) / nb;
+    if (!Number.isFinite(diff)) return {diff: null, p: 1, exact: false, permutations: 0, exceed: 0};   // never a star
     const bar = Math.abs(diff) - 1e-12;
     // Splits are drawn by choosing the smaller group's members; s is their sum.
     const smallIsA = na <= nb, k = smallIsA ? na : nb;

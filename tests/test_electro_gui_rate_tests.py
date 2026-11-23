@@ -148,6 +148,17 @@ class RateTestsTests(unittest.TestCase):
         self.assertEqual(stars[("PP", "MM")], "***")
         self.assertEqual(stars[("PM", "MM")], "***")
 
+    def test_content_keys_do_not_collide_on_whole_number_rates(self):
+        # Event-weighted rates over a 0.5 s window are small even numbers: float64 words whose low
+        # half is 0.  A cache hit on a colliding key would draw another view's stars.
+        got = run_stats("const seen = new Set(); let x = 12345;"
+                        " const r = () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) / 4294967296; };"
+                        " for (let t = 0; t < 20000; t++) { const mk = () => Array.from({length: 120}, () => 2 * Math.floor(r() * 7));"
+                        " seen.add(St.contentKey([{key: 'a', panel: 0, values: mk()}, {key: 'b', panel: 0, values: mk()}])); }"
+                        " out([seen.size, St.permutationTest([1, 2, NaN], [3, 4, 5]).p]);", None)
+        self.assertEqual(got[0], 20000)
+        self.assertEqual(got[1], 1)   # a non-finite rate never gives a star
+
     def test_three_stars_are_reachable_after_correction(self):
         # Ten bars (45 pairs): the budget grows so that no split reaching the observed difference
         # still gives Holm p < 0.001 for the most extreme pair.

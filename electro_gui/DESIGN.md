@@ -185,8 +185,10 @@ a budget of max(10000, 1200 m) for m pairs and applies Holm.  `|null| ≥
 |ΔM| and `alternative="greater"`.
 
 In `explorer.js`, `renderRaster` sets `M.sig = sigState(M)`: the bars' keys,
-panels and values (`g.rate.values`) are hashed (`St.contentKey`) and looked
-up in an in-memory cache of 64 answers.  A miss queues the test
+panels and values (`g.rate.values`) are hashed (`St.contentKey`: 64 bits,
+MurmurHash3-style mixing of every float64 word, since whole-number rates leave
+most bits 0 and a weaker hash let different views share a key) and looked up
+in an in-memory cache of 64 answers.  A miss queues the test
 (`sigRequest`): one runs at a time in a persistent worker; a newer view's
 test replaces a queued one, and a running test of a view no longer drawn is
 stopped (`worker.terminate()`) after 200 ms, so a drag of the count window

@@ -284,6 +284,49 @@ async function rateTestChecks() {
   // Hidden bars ask for nothing; neither do bars of one event.
   S.bars = false; assert.equal(Q.sigState(M1).status, 'none'); S.bars = true;
   assert.equal(Q.sigState(model(10, 1)).status, 'none');
+  // With a Worker (as in the page): one worker serves every test; a test of a view no longer drawn
+  // is stopped after 200 ms and a late message from it is ignored; an error is cached and draws nothing.
+  class FakeWorker {
+    constructor(url) { this.url = url; this.posted = []; this.terminated = false; FakeWorker.made.push(this); }
+    postMessage(m) { this.posted.push(m); }
+    terminate() { this.terminated = true; }
+    reply(m = this.posted[this.posted.length - 1]) { this.onmessage({data: {id: m.id, result: St.rateTests(m.groups)}}); }
+  }
+  FakeWorker.made = [];
+  context.Worker = FakeWorker;
+  const W1 = model(30); D.model = W1; W1.sig = Q.sigState(W1);
+  assert.equal(FakeWorker.made.length, 1); assert.equal(FakeWorker.made[0].url, '/stats.js');
+  FakeWorker.made[0].reply();
+  assert.equal(W1.sig.status, 'done');
+  const W2 = model(40); D.model = W2; W2.sig = Q.sigState(W2);
+  assert.equal(FakeWorker.made.length, 1); assert.equal(FakeWorker.made[0].posted.length, 2);   // the same worker
+  const W3 = model(50); D.model = W3; W3.sig = Q.sigState(W3);
+  assert.equal(FakeWorker.made[0].posted.length, 2);                                            // queued, not posted
+  await new Promise(r => setTimeout(r, 260));
+  assert.ok(FakeWorker.made[0].terminated); assert.equal(FakeWorker.made.length, 2);
+  assert.equal(FakeWorker.made[1].posted[0].id, W3.sig.key);
+  FakeWorker.made[0].reply(FakeWorker.made[0].posted[1]);                                       // late, from the stopped worker
+  assert.equal(W3.sig.status, 'pending');
+  FakeWorker.made[1].reply();
+  assert.equal(W3.sig.status, 'done');
+  assert.equal(Q.sigState(model(40)).status, 'pending');                                        // the late answer was not kept
+  assert.equal(FakeWorker.made[1].posted.length, 2);
+  FakeWorker.made[1].reply();
+  assert.equal(Q.sigState(model(40)).status, 'done');
+  // Back to a view whose test is running cancels the queued one.
+  const W4 = model(60); D.model = W4; W4.sig = Q.sigState(W4);
+  const W5 = model(70); D.model = W5; W5.sig = Q.sigState(W5);
+  D.model = W4; Q.sigState(W4);
+  await new Promise(r => setTimeout(r, 260));
+  assert.equal(FakeWorker.made.length, 2); assert.ok(!FakeWorker.made[1].terminated);
+  FakeWorker.made[1].reply();
+  assert.equal(W4.sig.status, 'done');
+  const W6 = model(80); D.model = W6; W6.sig = Q.sigState(W6);
+  FakeWorker.made[1].onerror({preventDefault() {}, message: 'boom'});
+  assert.equal(W6.sig.status, 'error'); assert.equal(Q.sigSummary(W6).error, 'boom');
+  assert.equal(Q.sigMarkup(G, W6.sig, {screen: true}), '');
+  assert.equal(Q.sigState(model(80)).status, 'error');                                          // cached, not retried
+  delete context.Worker;
   St.rateTests = real;
   console.log('Window-rate significance checks passed');
 }
