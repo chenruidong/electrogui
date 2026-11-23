@@ -439,7 +439,7 @@ ACCESS_LOG_APPS = {8778: "electrogui", 8790: "electrogui", 8765: "electro_gui"}
 # /api/jobs/<id> is what the page polls while a job runs (every 0.7 s); its /export is told apart in _AccessLog.
 ROUTES = [("/", "page"), ("/index.html", "page"), ("/classic/", "page.classic"), ("/classic/index.html", "page.classic"),
           ("/findings/", "page.findings"), ("/findings/index.html", "page.findings"), ("/core.js", "static"),
-          ("/explorer.js", "static"), ("/explorer.css", "static"), ("/site.webmanifest", "static"),
+          ("/stats.js", "static"), ("/explorer.js", "static"), ("/explorer.css", "static"), ("/site.webmanifest", "static"),
           ("/classic/*", "static"), ("/findings/*", "static"), ("/icons/*", "icon"), ("/api/health", "health"),
           ("/api/catalog", "api.catalog"), ("/api/configs", "api.configs"), ("/api/explorer/popfit", "api.explorer.popfit"),
           ("/api/explorer/popprobe", "api.explorer.popprobe"), ("/api/explorer/*", "api.explorer"),

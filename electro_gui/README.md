@@ -269,6 +269,29 @@ The page carries no captions or helper text; controls sit on what they change
   colours and dashes name them; hover a bar for its group and rate); exports
   keep the heading and names.
 
+**Significance of the bars.**  Bars that differ are joined by a bracket with
+stars: `*` p < .05, `**` p < .01, `***` p < .001; pairs that do not differ
+draw nothing.  Every pair of bars in a panel is compared (every pair in the
+figure when no panel has two bars; a bar needs n ≥ 2; with more than 45 pairs,
+over ten bars in a panel, nothing is tested).  The test is a two-sided
+permutation test of the difference of the two means, on the bar's own samples
+(each event's count-window rate, or each trial's mean under *averaging over
+trials*, so n is the number on the bar), as in the classic workspace: p is
+the share of random splits of the pooled values whose |mean A − mean B| is at
+least the observed one, every split when there are few enough.  p-values are
+Holm-corrected across all the figure's pairs.  The splits are seeded from the
+values, so the same view always gives the same stars.  Like the SEM bars, the
+test treats the samples as independent; several events of one trial, or
+groups that share trials, are not accounted for.  It runs in the background:
+the bars draw at once, three pulsing dots over them say the test is still
+running (only if it takes more than about half a second, which only very large
+figures do), and the brackets appear when it finishes; changing the view
+drops a test that no longer matters.  Hover a bracket for both groups, the
+corrected and uncorrected p, the difference and the n's.  Exports wait for
+the test and say what the stars mean under the heading; a saved finding's
+thumbnail has the stars if the test had finished.  `#figure-state` lists
+every pair under `rate_tests`, significant or not.
+
 **Rate by row.**  Beside the raster, level with its rows, each group's
 count-window rate is drawn against the raster's own row order (session order by
 default, so it reads as rate over trials).  x is spikes/s; a row's value is the

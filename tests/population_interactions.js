@@ -75,13 +75,14 @@ function el(id) {
     querySelectorAll: () => [], closest: q => el(`${id}:${q}`), getBoundingClientRect: () => ({left: 0, top: 0, width: 100, height: 100}), scrollIntoView: () => {}};
   elements.set(id, value); return value;
 }
-const context = {window: {EGCore: C}, document: {getElementById: el, querySelector: () => el('any'), querySelectorAll: () => [], documentElement: {dataset: {}}},
+const St = require(path.join(root, 'stats.js'));
+const context = {window: {EGCore: C, EGStats: St}, document: {getElementById: el, querySelector: () => el('any'), querySelectorAll: () => [], documentElement: {dataset: {}}},
   addEventListener: (k, f) => { (globalHandlers.get(k) || globalHandlers.set(k, []).get(k)).push(f); },
   matchMedia: () => ({matches: false, addEventListener() {}}), setTimeout, clearTimeout, clearInterval, performance,
   requestAnimationFrame: () => 0, ResizeObserver: class {observe() {}}, console};
 let source = fs.readFileSync(path.join(root, 'explorer.js'), 'utf8');
 source = source.replace('  start();', `
-  window.qa = {S, D, unitList, stepUnit, bindPopFigure, bindControls, navOrderKey, fillUnitItems, refreshUnitNotes, sanitize, addMarker, renderPresets, fitRequest, populationFitKey, popModelKey, popFitIsCurrent, rerenderPopFigure, popEmpty, popExportSVG, popExport, closePop, setPopAnchor: a => {popAnchor = a;}};
+  window.qa = {S, D, unitList, stepUnit, bindPopFigure, bindControls, navOrderKey, fillUnitItems, refreshUnitNotes, sanitize, addMarker, renderPresets, fitRequest, populationFitKey, popModelKey, popFitIsCurrent, rerenderPopFigure, popEmpty, popExportSVG, popExport, closePop, setPopAnchor: a => {popAnchor = a;}, sigMarkup, sigState, sigRoom, sigSummary};
   changed = () => {}; renderStructure = () => {}; closeSheet = () => {}; applyMode = () => {};
   bindFigure = () => {}; bindBehavior = () => {}; saveState = () => {};`);
 vm.runInNewContext(source, context);
@@ -231,4 +232,102 @@ async function finalReviewChecks() {
   assert.doesNotThrow(() => el('heatGroup').handlers.change[0]({target:{value:'other'}}));
   console.log('Population numerical display and interaction checks passed');
 }
-finalReviewChecks().catch(e => { console.error(e); process.exitCode=1; });
+// The window-rate bars' significance layer and the page's request/cache controller (stats.js in tests/test_electro_gui_rate_tests.py).
+async function rateTestChecks() {
+  const Q = context.window.qa;
+  const G = {bars: [{key: 'a', label: 'A', cx: 50, top: 100}, {key: 'b', label: 'B', cx: 100, top: 80}, {key: 'c', label: 'C', cx: 150, top: 120}],
+    ink: '#000', mid: 100, top: 20, ceil: 14};
+  const pair = (i, j, stars, g = G) => ({i, j, a: g.bars[i].key, b: g.bars[j].key, n_a: 10, n_b: 12, diff: 1.5, p: 0.001, p_holm: 0.003, stars, exact: false, permutations: 10000});
+  const done = pairs => ({status: 'done', result: {family: 3, pairs}});
+  const lines = svg => [...svg.matchAll(/<path d="M([\d.]+) ([\d.]+)V([\d.]+)H([\d.]+)/g)].map(m => ({x1: +m[1], y: +m[3], x2: +m[4]}));
+  // Shorter brackets go lowest, just above the bars they span; adjacent ones share a level; one over both goes above.
+  const all = Q.sigMarkup(G, done([pair(0, 2, '***'), pair(0, 1, '**'), pair(1, 2, '*')]), {screen: true});
+  assert.deepEqual(lines(all), [{x1: 53, y: 75, x2: 97}, {x1: 103, y: 75, x2: 147}, {x1: 53, y: 63, x2: 147}]);
+  assert.match(all, />\*\*\*<\/text>/); assert.match(all, /<title>A vs C\np = 0\.003, Holm over 3 pairs/);
+  assert.doesNotMatch(Q.sigMarkup(G, done([pair(0, 2, '*')])), /<title>/);             // exports: no hover text
+  // Insignificant pairs draw nothing; the pending dots are for the screen only; an error draws nothing.
+  assert.equal(Q.sigMarkup(G, done([pair(0, 1, '')]), {screen: true}), '');
+  assert.match(Q.sigMarkup(G, {status: 'pending'}, {screen: true}), /class="sig-pending"/);
+  assert.equal(Q.sigMarkup(G, {status: 'pending'}), '');
+  assert.equal(Q.sigMarkup(G, {status: 'error', result: {error: 'x'}}, {screen: true}), '');
+  // An answer about other bars (their keys changed) is not drawn on these.
+  assert.equal(Q.sigMarkup({...G, bars: G.bars.map(b => ({...b, key: b.key + '2'}))}, done([pair(0, 1, '*')]), {screen: true}), '');
+  // Crowded: the step between levels shrinks rather than leave the plot.
+  const tall = {...G, bars: G.bars.map(b => ({...b, top: 34}))};
+  const crowd = lines(Q.sigMarkup(tall, done([pair(0, 1, '*', tall), pair(1, 2, '*', tall), pair(0, 2, '*', tall)]), {screen: true}));
+  assert.equal(crowd[0].y, 29); assert.equal(crowd[2].y, 29 - 7); assert.ok(crowd[2].y - 8 >= tall.ceil);
+  // The room above the bars follows how many bars can be compared, never the answer.
+  assert.equal(Q.sigRoom({status: 'none'}), 0);
+  assert.equal(Q.sigRoom({status: 'pending', plan: {pairs: [[0, 1]], families: [[0, 1]]}}), 17);
+  assert.equal(Q.sigRoom({status: 'done', plan: {pairs: [[0, 1], [0, 2], [1, 2]], families: [[0, 1, 2]]}}), 28);
+  // Controller (no Worker in this harness: the test runs on a later tick).  A miss is pending and
+  // queues one test, however often the same bars are drawn; the answer reaches D.model.sig and the cache.
+  let runs = 0; const real = St.rateTests; St.rateTests = gs => { runs++; return real(gs); };
+  const model = (shift, n = 30) => ({visible: [0, 1, 2].map(k => ({key: 'g' + k, label: 'G' + k, panel: 0, rate: {n, values: Array.from({length: n}, (_, j) => k * shift + (j % 4))}}))});
+  S.mode = 'raster'; S.bars = true;
+  const M1 = model(10); D.model = M1; M1.sig = Q.sigState(M1);
+  assert.equal(M1.sig.status, 'pending');
+  assert.equal(Q.sigState(model(10)).status, 'pending');                                   // the same bars drawn again
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(runs, 1); assert.equal(M1.sig.status, 'done');
+  assert.ok(M1.sig.result.pairs.every(p => p.stars === '***'));
+  assert.equal(Q.sigState(model(10)).status, 'done'); assert.equal(runs, 1);               // from the cache
+  const sum = Q.sigSummary(M1);
+  assert.equal(sum.status, 'done'); assert.equal(sum.pairs.length, 3); assert.equal(sum.pairs[0].a_label, 'G0');
+  // A newer view while a test runs: the older answer is cached but never drawn on the newer bars.
+  const M2 = model(20); D.model = M2; M2.sig = Q.sigState(M2);
+  const M3 = model(0.1); D.model = M3; M3.sig = Q.sigState(M3);
+  assert.equal(M3.sig.status, 'pending');
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(M3.sig.status, 'done'); assert.equal(M2.sig.status, 'pending');
+  assert.ok(M3.sig.result.pairs.every(p => p.stars === ''));
+  // Hidden bars ask for nothing; neither do bars of one event.
+  S.bars = false; assert.equal(Q.sigState(M1).status, 'none'); S.bars = true;
+  assert.equal(Q.sigState(model(10, 1)).status, 'none');
+  // With a Worker (as in the page): one worker serves every test; a test of a view no longer drawn
+  // is stopped after 200 ms and a late message from it is ignored; an error is cached and draws nothing.
+  class FakeWorker {
+    constructor(url) { this.url = url; this.posted = []; this.terminated = false; FakeWorker.made.push(this); }
+    postMessage(m) { this.posted.push(m); }
+    terminate() { this.terminated = true; }
+    reply(m = this.posted[this.posted.length - 1]) { this.onmessage({data: {id: m.id, result: St.rateTests(m.groups)}}); }
+  }
+  FakeWorker.made = [];
+  context.Worker = FakeWorker;
+  const W1 = model(30); D.model = W1; W1.sig = Q.sigState(W1);
+  assert.equal(FakeWorker.made.length, 1); assert.equal(FakeWorker.made[0].url, '/stats.js');
+  FakeWorker.made[0].reply();
+  assert.equal(W1.sig.status, 'done');
+  const W2 = model(40); D.model = W2; W2.sig = Q.sigState(W2);
+  assert.equal(FakeWorker.made.length, 1); assert.equal(FakeWorker.made[0].posted.length, 2);   // the same worker
+  const W3 = model(50); D.model = W3; W3.sig = Q.sigState(W3);
+  assert.equal(FakeWorker.made[0].posted.length, 2);                                            // queued, not posted
+  await new Promise(r => setTimeout(r, 260));
+  assert.ok(FakeWorker.made[0].terminated); assert.equal(FakeWorker.made.length, 2);
+  assert.equal(FakeWorker.made[1].posted[0].id, W3.sig.key);
+  FakeWorker.made[0].reply(FakeWorker.made[0].posted[1]);                                       // late, from the stopped worker
+  assert.equal(W3.sig.status, 'pending');
+  FakeWorker.made[1].reply();
+  assert.equal(W3.sig.status, 'done');
+  assert.equal(Q.sigState(model(40)).status, 'pending');                                        // the late answer was not kept
+  assert.equal(FakeWorker.made[1].posted.length, 2);
+  FakeWorker.made[1].reply();
+  assert.equal(Q.sigState(model(40)).status, 'done');
+  // Back to a view whose test is running cancels the queued one.
+  const W4 = model(60); D.model = W4; W4.sig = Q.sigState(W4);
+  const W5 = model(70); D.model = W5; W5.sig = Q.sigState(W5);
+  D.model = W4; Q.sigState(W4);
+  await new Promise(r => setTimeout(r, 260));
+  assert.equal(FakeWorker.made.length, 2); assert.ok(!FakeWorker.made[1].terminated);
+  FakeWorker.made[1].reply();
+  assert.equal(W4.sig.status, 'done');
+  const W6 = model(80); D.model = W6; W6.sig = Q.sigState(W6);
+  FakeWorker.made[1].onerror({preventDefault() {}, message: 'boom'});
+  assert.equal(W6.sig.status, 'error'); assert.equal(Q.sigSummary(W6).error, 'boom');
+  assert.equal(Q.sigMarkup(G, W6.sig, {screen: true}), '');
+  assert.equal(Q.sigState(model(80)).status, 'error');                                          // cached, not retried
+  delete context.Worker;
+  St.rateTests = real;
+  console.log('Window-rate significance checks passed');
+}
+finalReviewChecks().then(rateTestChecks).catch(e => { console.error(e); process.exitCode=1; });

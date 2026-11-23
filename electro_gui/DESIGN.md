@@ -170,6 +170,42 @@ current model/fit inputs, including quantile bins and hidden groups; only a
 fresh result publishes a stepping order. Error/empty views invalidate that fit
 and clear/disable heatmap selectors.
 
+## Window-rate significance
+
+`static/stats.js` (`window.EGStats`, also a Web Worker script) is pure:
+`comparisons(groups)` picks the pairs (within panels, else across the figure;
+n ≥ 2; at most `MAX_PAIRS` = 45) and their families, `permutationTest(a, b)`
+is the two-sided difference-of-means test (every split when C(n, k) fits the
+budget, else random splits from a partial Fisher–Yates shuffle with
+Besag–Clifford stopping at 50 exceedances), `rateTests(groups)` runs them with
+a budget of max(10000, 1200 m) for m pairs and applies Holm.  `|null| ≥
+|observed| − 1e-12` is `analysis._infer`'s two-sided rule; scipy's
+`alternative="two-sided"` doubles the smaller tail instead, so
+`tests/test_electro_gui_rate_tests.py` pins it to scipy with the statistic
+|ΔM| and `alternative="greater"`.
+
+In `explorer.js`, `renderRaster` sets `M.sig = sigState(M)`: the bars' keys,
+panels and values (`g.rate.values`) are hashed (`St.contentKey`: 64 bits,
+MurmurHash3-style mixing of every float64 word, since whole-number rates leave
+most bits 0 and a weaker hash let different views share a key) and looked up
+in an in-memory cache of 64 answers.  A miss queues the test
+(`sigRequest`): one runs at a time in a persistent worker; a newer view's
+test replaces a queued one, and a running test of a view no longer drawn is
+stopped (`worker.terminate()`) after 200 ms, so a drag of the count window
+neither piles up tests nor restarts one per frame, while a single change
+starts at once.  The same view drawn again (the raster fit re-renders up to
+six times) hits the cache or the running test.  `barsSVG` keeps the top
+`sigRoom()` px of the plot for brackets, by how many bars a family has and
+never by the answer, so the bars do not move when it arrives; it records each
+bar's centre and top in `M.barsGeom` and draws `sigMarkup()` into
+`<g id="sigLayer">`.  The answer fills that layer in place (`sigArrived`,
+only if `D.model.sig.key` is still its key) and republishes `#figure-state`,
+without a render, so the raster and its hover layers stay as they are.  The
+pending dots are CSS-delayed (`.sig-pending`, 0.45 s), so a quick test never
+shows them.  Exports call `sigSettled()` first; results are never in `S` or
+in a finding's evidence, so links and the comparison of reopened findings are
+unchanged.
+
 ## Quiet interface
 
 The explorer shows no taglines, helper paragraphs or secondary labels. When a

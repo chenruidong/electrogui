@@ -2,6 +2,7 @@
 (() => {
   'use strict';
   const C = window.EGCore;
+  const St = window.EGStats || null;   // stats.js: the window-rate bars' significance tests
   const $ = id => document.getElementById(id);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
   const clone = v => JSON.parse(JSON.stringify(v));
@@ -695,13 +696,147 @@
     return {svg: parts.join(''), height: y + 18};
   }
 
+  // ------------------------------------------------ significance of the bars
+  // Pairwise tests of the window-rate bars (stats.js) run in a Web Worker.  A render only asks:
+  // sigState() looks the bars' content up in a cache and, on a miss, queues the test and draws
+  // a pending mark.  The answer fills #sigLayer in place (sigArrived), so the raster and its
+  // hover layers are not redrawn.  One test runs at a time; a newer view's test replaces a
+  // queued one, and a running test of a view no longer drawn is stopped after SIG_PATIENCE ms.
+  const SIG_CACHE = new Map(), SIG_CACHE_MAX = 64, SIG_PATIENCE = 200;
+  const SIG_NOTE = '* p<.05 ** p<.01 *** p<.001 (permutation, Holm)';
+  const sig = {worker: null, busy: null, want: null, timer: 0};
+  const sigGroups = M => M.visible.filter(g => g.rate && g.rate.n).map(g => ({key: g.key, panel: g.panel, values: g.rate.values}));
+  function sigState(M) {
+    if (!St || !S.bars) return {status: 'none'};
+    const groups = sigGroups(M), plan = St.comparisons(groups);
+    if (!plan.pairs.length) return {status: 'none', plan};
+    const key = St.contentKey(groups), result = SIG_CACHE.get(key);
+    if (result) return {status: result.error ? 'error' : 'done', key, plan, result};
+    sigRequest(key, groups);
+    return {status: 'pending', key, plan};
+  }
+  function sigRequest(key, groups) {
+    if (sig.busy && sig.busy.key === key) { sig.want = null; clearTimeout(sig.timer); return; }   // back to the running view
+    if (sig.want && sig.want.key === key) return;
+    sig.want = {key, groups};
+    if (!sig.busy) { sigStart(); return; }
+    clearTimeout(sig.timer);
+    sig.timer = setTimeout(() => { if (sig.busy && sig.want) { sigStop(); sigStart(); } }, SIG_PATIENCE);
+  }
+  function sigStop() {
+    if (sig.worker) sig.worker.terminate();
+    sig.worker = null; sig.busy = null;
+  }
+  function sigStart() {
+    clearTimeout(sig.timer);
+    const job = sig.want;
+    sig.want = null;
+    if (!job) return;
+    sig.busy = job;
+    if (typeof Worker !== 'function') {   // no workers (the test harness): compute on a later tick
+      setTimeout(() => { let msg; try { msg = {id: job.key, result: St.rateTests(job.groups)}; } catch (e) { msg = {id: job.key, error: e.message}; } sigDone(msg); }, 0);
+      return;
+    }
+    try {
+      if (!sig.worker) {
+        sig.worker = new Worker('/stats.js');
+        sig.worker.onmessage = e => sigDone(e.data || {});
+        sig.worker.onerror = e => { e.preventDefault(); const k = sig.busy && sig.busy.key; sigStop(); if (k) sigDone({id: k, error: e.message || 'the test could not run'}, k); };
+      }
+      sig.worker.postMessage({id: job.key, groups: job.groups});
+    } catch (e) { sigStop(); sigDone({id: job.key, error: e.message}, job.key); }
+  }
+  function sigDone(msg, stopped = null) {
+    const key = stopped || (sig.busy && sig.busy.key);
+    if (!key || msg.id !== key) return;   // from a test that was stopped
+    if (!stopped) sig.busy = null;
+    const result = msg.error ? {error: String(msg.error)} : msg.result;
+    SIG_CACHE.set(key, result);
+    if (SIG_CACHE.size > SIG_CACHE_MAX) SIG_CACHE.delete(SIG_CACHE.keys().next().value);
+    if (sig.want) sigStart();
+    sigArrived(key, result);
+  }
+  function sigArrived(key, result) {
+    const M = D.model;
+    if (!M || !M.sig || M.sig.key !== key || S.mode !== 'raster') return;
+    M.sig = {...M.sig, status: result.error ? 'error' : 'done', result};
+    const layer = document.getElementById('sigLayer');
+    if (layer && M.barsGeom) layer.innerHTML = sigMarkup(M.barsGeom, M.sig, {screen: true});
+    publishState();
+  }
+  /** Exports wait for the test of the view they draw (a toast says so if that takes a moment). */
+  async function sigSettled(limitMs = 60000) {
+    const t0 = Date.now();
+    let told = false;
+    while (D.model && D.model.sig && D.model.sig.status === 'pending' && Date.now() - t0 < limitMs) {
+      if (!told && Date.now() - t0 > 300) { toast('Waiting for the significance test…'); told = true; }
+      await sleep(50);
+    }
+  }
+  // Room above the bars for brackets: by how many bars can be compared, never by the answer.
+  function sigRoom(s) {
+    if (!s.plan || !s.plan.pairs.length) return 0;
+    const k = Math.max(...s.plan.families.map(f => f.length));
+    return 6 + 11 * Math.min(2, k - 1);
+  }
+  const sigShown = s => (s.status === 'done' && s.result && s.result.pairs ? s.result.pairs.filter(p => p.stars) : []);
+  const fmtP = p => (p < 0.001 ? p.toExponential(1) : String(Number(p.toPrecision(2))));
+  /**
+   * The significance layer from the bars' geometry G ({bars: [{key, label, cx, top}], ink, mid, top,
+   * ceil}) and the test state: pending dots (screen only), or one bracket with stars per
+   * significant pair.  Brackets over fewer bars go lowest, each just above the bars it spans and
+   * any bracket it overlaps; the step between levels shrinks (to 7 px) before they pass G.ceil.
+   */
+  function sigMarkup(G, s, {screen = false} = {}) {
+    if (!G || !s) return '';
+    if (s.status === 'pending') return screen ? `<g class="sig-pending" pointer-events="none"><title>significance test running</title>${[-6, 0, 6].map(dx => `<circle cx="${f1(G.mid + dx)}" cy="${f1(G.top + 3)}" r="1.7" fill="${G.ink}"/>`).join('')}</g>` : '';
+    const shown = sigShown(s).filter(p => G.bars[p.i] && G.bars[p.j] && G.bars[p.i].key === p.a && G.bars[p.j].key === p.b);
+    if (!shown.length) return '';
+    const items = shown.map(p => ({p, lo: Math.min(p.i, p.j), hi: Math.max(p.i, p.j)})).sort((u, v) => (u.hi - u.lo) - (v.hi - v.lo) || u.lo - v.lo);
+    const place = step => {
+      const done = [];
+      for (const it of items) {
+        const x1 = G.bars[it.lo].cx + 3, x2 = G.bars[it.hi].cx - 3;
+        let y = Math.min(...G.bars.slice(it.lo, it.hi + 1).map(b => b.top)) - 5;
+        for (const q of done) if (q.x1 < x2 && x1 < q.x2) y = Math.min(y, q.y - step);
+        done.push({...it, x1, x2, y});
+      }
+      return done;
+    };
+    let step = 12, placed = place(step);
+    while (step > 7 && Math.min(...placed.map(q => q.y)) - 8 < G.ceil) placed = place(--step);
+    const m = s.result.family;
+    return placed.map(q => {
+      const p = q.p, a = G.bars[p.i], b = G.bars[p.j];
+      const title = `${a.label} vs ${b.label}\np = ${fmtP(p.p_holm)}, Holm over ${m} pair${m === 1 ? '' : 's'} (uncorrected ${fmtP(p.p)})\n` +
+        `difference ${C.fmtNum(p.diff)} spikes/s · n = ${p.n_a} vs ${p.n_b} · permutation test${p.exact ? ', every split' : `, ${p.permutations} splits`}`;
+      return `<g class="sig">${screen ? `<title>${esc(title)}</title><rect x="${f1(q.x1)}" y="${f1(q.y - 9)}" width="${f1(q.x2 - q.x1)}" height="12" fill="transparent"/>` : ''}` +
+        `<path d="M${f1(q.x1)} ${f1(q.y + 3)}V${f1(q.y)}H${f1(q.x2)}V${f1(q.y + 3)}" fill="none" stroke="${G.ink}" stroke-width="1"/>` +
+        `<text x="${f1((q.x1 + q.x2) / 2)}" y="${f1(q.y + 1)}" text-anchor="middle" font-size="11" font-weight="600" fill="${G.ink}">${p.stars}</text></g>`;
+    }).join('');
+  }
+  /** The test as #figure-state shows it: what ran, and every pair (significant or not). */
+  function sigSummary(M) {
+    const s = M && M.sig;
+    if (!s || s.status === 'none') return s && s.plan && s.plan.skipped ? {status: 'skipped', reason: s.plan.skipped} : null;
+    const label = k => { const g = M.visible.find(x => x.key === k); return g ? g.label + (g.panelLabel ? ` · ${g.panelLabel}` : '') : k; };
+    const base = {status: s.status, pairs_tested: s.plan.pairs.length, scope: s.plan.scope};
+    if (s.status !== 'done') return s.result && s.result.error ? {...base, error: s.result.error} : base;
+    const r = s.result;
+    return {...base, method: r.method, correction: r.correction, max_permutations: r.max_permutations, star_levels: r.levels,
+      pairs: r.pairs.map(p => ({a: p.a, b: p.b, a_label: label(p.a), b_label: label(p.b), n_a: p.n_a, n_b: p.n_b, diff_hz: tidy(p.diff, 4),
+        p: Number(p.p.toPrecision(4)), p_holm: Number(p.p_holm.toPrecision(4)), stars: p.stars, exact: p.exact, permutations: p.permutations}))};
+  }
+
   function barsSVG(M, width, height, {screen = false} = {}) {
     const ink = figVar('--fig-ink'), muted = figVar('--fig-muted'), gridC = figVar('--fig-grid'), axisC = figVar('--fig-axis'), windowC = figVar('--fig-window');
     const gs = M.visible.filter(g => g.rate && g.rate.n);
     if (!gs.length) return '';
     const f = f1;
     const labelOf = g => g.label + (g.panelLabel ? ` · ${g.panelLabel}` : '');
-    const ml = 36, mr = 6, mt = screen ? 12 : 26;
+    const sig = M.sig || {status: 'none'}, room = sigRoom(sig);
+    const starNote = !screen && sigShown(sig).length > 0;   // exports say what the stars mean, under the heading
+    const ml = 36, mr = 6, mt = screen ? 12 : starNote ? 38 : 26;
     const slotsGuess = gs.length + (new Set(gs.map(g => g.panel)).size - 1) * 0.6;
     const longestLine = Math.max(...gs.map(g => Math.max(...labelOf(g).split(' · ').map(x => x.length))));
     const many = gs.length > 6 || longestLine * 5.3 > (width - ml - mr) / slotsGuess * 0.96;
@@ -711,7 +846,9 @@
     let max = 0;
     for (const g of gs) max = Math.max(max, g.rate.mean + (M.errMul || 1) * (g.rate.sem || 0));
     max = niceMax(Math.max(1, max * 1.08));
-    const Y = v => mt + h - v / max * h;
+    // The top `room` px are kept for the significance brackets whatever the test's answer, so
+    // the bars do not move when it arrives.
+    const Y = v => mt + h - v / max * (h - room);
     const panelsSeen = [];
     gs.forEach(g => { if (!panelsSeen.includes(g.panel)) panelsSeen.push(g.panel); });
     const slots = gs.length + (panelsSeen.length - 1) * 0.6;
@@ -719,6 +856,8 @@
     const out = [];
     if (screen) out.push(`<rect x="${ml - 6}" y="${mt - 8}" width="${w + 10}" height="${h + 10}" rx="6" fill="${windowC}" opacity="${isDark() ? 0.45 : 0.5}"/>`);
     else out.push(`<text x="0" y="12" font-size="11.5" font-weight="600" fill="${ink}">rate in [${C.fmtNum(M.cw[0])}, ${C.fmtNum(M.cw[1])}) s</text>`);
+    if (starNote) out.push(`<text x="0" y="25" font-size="9" fill="${muted}">${esc(SIG_NOTE)}</text>`);
+    const geom = {bars: [], ink, mid: ml + w / 2, top: mt, ceil: mt - (screen ? 6 : 4)};
     for (const v of niceTicks(0, max, 4)) {
       out.push(`<line x1="${ml}" x2="${ml + w}" y1="${f(Y(v))}" y2="${f(Y(v))}" stroke="${gridC}"/>`);
       out.push(`<text x="${ml - 5}" y="${f(Y(v) + 3.5)}" text-anchor="end" font-size="10" fill="${muted}">${C.fmtNum(v)}</text>`);
@@ -732,6 +871,7 @@
       const light = g.dash ? 0.45 : 0.88;
       out.push(`<rect x="${f(cx - bw / 2)}" y="${f(top)}" width="${f(bw)}" height="${f(mt + h - top)}" rx="2" fill="${g.color}" opacity="${light}"${g.dash ? ` stroke="${g.color}" stroke-dasharray="${g.dash}" stroke-width="1.4"` : ''}${screen ? `><title>${esc(labelOf(g))}: ${C.fmtNum(g.rate.mean, 1)} spikes/s, n = ${g.rate.n}</title></rect>` : '/>'}`);
       if (g.rate.n > 1) out.push(`<path d="M${f(cx)} ${f(Y(g.rate.mean + e))}V${f(Y(Math.max(0, g.rate.mean - e)))}M${f(cx - 4)} ${f(Y(g.rate.mean + e))}h8M${f(cx - 4)} ${f(Y(Math.max(0, g.rate.mean - e)))}h8" stroke="${ink}" stroke-width="1.2" fill="none"/>`);
+      geom.bars.push({key: g.key, label: labelOf(g), cx, top: Y(g.rate.mean + (g.rate.n > 1 ? e : 0))});
       out.push(`<text x="${f(cx)}" y="${f(mt + h - 4)}" text-anchor="middle" font-size="9.5" fill="${light > 0.6 ? '#fff' : ink}">${g.rate.n}</text>`);
       const lines = labelOf(g).split(' · ');
       if (screen) return;
@@ -740,6 +880,9 @@
     });
     out.push(`<line x1="${ml}" x2="${ml + w}" y1="${f(mt + h)}" y2="${f(mt + h)}" stroke="${axisC}"/>`);
     out.push(`<text transform="translate(10,${f(mt + h / 2)}) rotate(-90)" text-anchor="middle" font-size="10.5" fill="${muted}">spikes/s (mean ± ${S.err === 'ci' ? '95% CI' : 'SEM'})</text>`);
+    // On screen the test's answer fills #sigLayer in place when it arrives (sigArrived).
+    out.push(screen ? `<g id="sigLayer">${sigMarkup(geom, sig, {screen})}</g>` : sigMarkup(geom, sig));
+    if (screen) M.barsGeom = geom;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">${out.join('')}</svg>`;
   }
 
@@ -876,6 +1019,7 @@
     }
     fig.classList.remove('stale');
     D.model = M;
+    M.sig = sigState(M);
     $('empty').hidden = true;
     const u = M.unit;
     const title = `${unitName(u)} · ${u.area || 'area ?'} · ${String(u.quality || '').toUpperCase()}`;
@@ -3112,6 +3256,7 @@
       groups, title: $('title').textContent, caption: D.figMeta ? D.figMeta.subtitle || '' : '', method_note: D.figMeta ? D.figMeta.method || '' : '',
       settings: {policy: S.policy, window_s: S.win, count_window_s: S.cw, bin_ms: Math.round(S.bin * 1000), sigma_ms: Math.round(S.sigma * 1000),
         weight: S.weight, error: S.err, color: S.color, style: S.style, panel: S.panel, filters: S.filters, sort: pop ? S.nsort : S.sort},
+      ...(!pop && M && M.sig ? {rate_tests: sigSummary(M)} : {}),
       ...(pop && D.popFit && popFitIsCurrent() ? {fit: {components: D.popFit.components, component_r2: D.popFit.component_r2, training: D.popFit.training || null,
         scope: D.popFit.scope || null, warnings: D.popFit.warnings || []}} : {}),
     };
@@ -3151,6 +3296,7 @@
   }
   async function doExport(kind) {
     if (!D.model || !D.model.rows.length) { toast('Nothing to export yet.', true); return; }
+    if (kind === 'svg' || kind === 'png') await sigSettled();
     const M = D.model, stem = fileStem();
     if (kind === 'svg') download(`${stem}.svg`, new Blob([exportSVG()], {type: 'image/svg+xml'}));
     else if (kind === 'png') await pngFromSVG(exportSVG(), `${stem}.png`);

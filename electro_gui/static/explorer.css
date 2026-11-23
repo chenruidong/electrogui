@@ -364,6 +364,11 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius
 .lg-add:hover { color: var(--accent); border-color: var(--accent); }
 .lg-med svg { width: 26px; }
 .bars:empty { display: none; }
+/* The bars' significance test: its pending dots appear only if it takes a moment, then pulse. */
+.sig-pending { opacity: 0; animation: sig-pulse 1.2s ease-in-out .45s infinite; }
+@keyframes sig-pulse { 0%, 100% { opacity: .2; } 50% { opacity: .75; } }
+@keyframes sig-show { to { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .sig-pending { animation: sig-show 0s .45s forwards; } }
 .figure-wrap.stacked { grid-template-columns: minmax(0, 1fr); }
 .figure-wrap.stacked .bars { width: 100%; }
 /* behavior timeline */
