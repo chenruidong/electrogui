@@ -136,11 +136,11 @@ class Application:
                 annotation_code = [package / name for name in ("annotations.py", "exports.py", "server.py")]
                 identity = computation_identity(kind="electro_gui_annotations", schema=1,
                                                 source=loaded.session.source_identity(), parameters=annotation_parameters,
-                                                code_paths=annotation_code)
+                                                code_paths=annotation_code, dependencies=_label_keys(loaded))
                 result = annotate_result(base_result, loaded, request.get("layers", []))
                 after = computation_identity(kind="electro_gui_annotations", schema=1,
                                              source=loaded.session.source_identity(), parameters=annotation_parameters,
-                                             code_paths=annotation_code)
+                                             code_paths=annotation_code, dependencies=_label_keys(loaded))
                 if identity != after:
                     raise RuntimeError("Annotation source or code changed while running; retry the annotation update.")
                 result.setdefault("provenance", {}).update(annotation_job=job_id, source_path=str(loaded.session.path),
@@ -152,12 +152,14 @@ class Application:
                 code = [path for root in _PACKAGES.values() for path in root.rglob("*.py")]
                 code += list(getattr(loaded, "code_paths", []))
                 identity = computation_identity(kind=f"electro_gui_{request['action']}", schema=1,
-                                                source=loaded.session.source_identity(), parameters=request, code_paths=code)
+                                                source=loaded.session.source_identity(), parameters=request, code_paths=code,
+                                                dependencies=_label_keys(loaded))
                 with self.lock:
                     job["message"] = "Computing eligibility, event selection and numerical results from the selected session."
                 result = (compute_unit if request["action"] == "unit" else compute_population)(loaded, request)
                 after = computation_identity(kind=f"electro_gui_{request['action']}", schema=1,
-                                             source=loaded.session.source_identity(), parameters=request, code_paths=code)
+                                             source=loaded.session.source_identity(), parameters=request, code_paths=code,
+                                             dependencies=_label_keys(loaded))
                 if identity != after:
                     raise RuntimeError("Computation code changed while running; retry using the current code.")
                 provenance = result.setdefault("provenance", {})
@@ -313,6 +315,12 @@ class Application:
     def close(self):
         self.executor.shutdown(wait=True, cancel_futures=True)
         self.preview_executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _label_keys(loaded):
+    """Labels files joined onto the session, as part of a computation's identity; None when there are none."""
+    labels = getattr(loaded, "labels", None)
+    return {"session_labels": {item["name"]: item["sha256"] for item in labels}} if labels else None
 
 
 def _git_identity(repo):

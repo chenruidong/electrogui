@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,10 @@ def add_arguments(parser):
     parser.add_argument("--data-root", action="append", help="Session product root; repeat for multiple roots. Defaults to T7 and Transfer.")
     parser.add_argument("--session-file", action="append", help="Exact assembled <session>_session.nwb; repeat to add sessions.")
     parser.add_argument("--cache-dir", help="Disposable verified stability cache (default: <Dropbox>/projects/electro_gui/output/cache).")
+    parser.add_argument("--labels-dir",
+                        help="Folder of session labels files (<session>_<name>.json, e.g. analysis_imitation's "
+                             "change-of-mind-labels); each is joined onto the session it was made from "
+                             "(default: <Dropbox>/projects/electro_gui/output/labels).")
     parser.add_argument("--port", type=int, default=8765, help="Port; 0 chooses a free port (default: %(default)s).")
     parser.add_argument("--host", default="127.0.0.1",
                         help="Interface to listen on (default: loopback only). Use --lan, or e.g. 0.0.0.0, to open it "
@@ -70,6 +75,28 @@ def _folders(args):
     return cache_dir, findings_dir, config_dirs
 
 
+def _labels_dir(args):
+    """The labels folder: the flag where given, else the Dropbox default; None without either."""
+    if args.labels_dir is not None:
+        return Path(args.labels_dir).expanduser()
+    output = output_root()
+    return output / "labels" if output is not None else None
+
+
+def _labels_option(store_class, args):
+    """``labels_dir`` for the session store, or nothing when this imitation_phys predates labels files.
+
+    electro_gui and analysis_imitation are updated separately (the nightly app
+    update pulls only this repository), so a newer explorer can meet an older
+    loader; it then runs without labels rather than not at all.
+    """
+    if "labels_dir" in inspect.signature(store_class.__init__).parameters:
+        return {"labels_dir": _labels_dir(args)}
+    print("electro_gui: this imitation_phys cannot join labels files; update analysis_imitation to use --labels-dir.",
+          flush=True)
+    return {}
+
+
 def run(args):
     # A restart keeps the port (even one --port 0 chose) and the token (even a
     # random one), so open pages and phones reconnect, and opens no browser.
@@ -82,7 +109,8 @@ def run(args):
     from .result_viewer import DASHBOARD_URLS, ResultViewerFinder
     from .server import Application, Tailnet, attach_access_log, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
-    store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=cache_dir)
+    store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=cache_dir,
+                         **_labels_option(SessionStore, args))
     finder = ResultViewerFinder(args.result_viewer_url,
                                 args.apps_dashboard_url if args.apps_dashboard_url is not None else DASHBOARD_URLS)
     notes = Path(args.unit_notes_dir).expanduser() if args.unit_notes_dir is not None else unit_notes_dir()

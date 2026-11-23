@@ -1,5 +1,7 @@
 """Where the explorer keeps its cache and findings and finds figure configs (electro_gui/paths.py, cli._folders)."""
 import argparse
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -81,6 +83,27 @@ class PathsTests(unittest.TestCase):
         given = cli.add_arguments(argparse.ArgumentParser()).parse_args(["--cache-dir", "c", "--findings-dir", "f"])
         with _env(HOME=str(self.root)):
             self.assertEqual(cli._folders(given), (Path("c"), Path("f"), []))
+
+    def test_labels_folder_is_the_flag_else_the_dropbox_folder_else_nothing(self):
+        bare = cli.add_arguments(argparse.ArgumentParser()).parse_args([])
+        with _env(HOME=str(self.root), DROPBOX_ROOT="/d"):
+            self.assertEqual(cli._labels_dir(bare), Path("/d/projects/electro_gui/output/labels"))
+        with _env(HOME=str(self.root)):
+            self.assertIsNone(cli._labels_dir(bare))
+        given = cli.add_arguments(argparse.ArgumentParser()).parse_args(["--labels-dir", "l"])
+        with _env(HOME=str(self.root), DROPBOX_ROOT="/d"):
+            self.assertEqual(cli._labels_dir(given), Path("l"))
+
+    def test_an_older_session_store_is_started_without_labels(self):
+        class Older:
+            def __init__(self, roots=(), session_files=(), cache_dir=None): pass
+        class Newer:
+            def __init__(self, roots=(), session_files=(), cache_dir=None, labels_dir=None): pass
+        given = cli.add_arguments(argparse.ArgumentParser()).parse_args(["--labels-dir", "l"])
+        self.assertEqual(cli._labels_option(Newer, given), {"labels_dir": Path("l")})
+        with contextlib.redirect_stdout(io.StringIO()) as said:
+            self.assertEqual(cli._labels_option(Older, given), {})
+        self.assertIn("update analysis_imitation", said.getvalue())
 
 
 if __name__ == "__main__":

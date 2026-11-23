@@ -43,8 +43,8 @@ tailscale serve --bg --https=8765 http://127.0.0.1:8765   # tailnet, owner only,
 
 Sessions are discovered under `/Volumes/T7/engaging-results` and
 `/Volumes/Transfer/engaging_results` (`--data-root` / `--session-file` for
-others).  The stability cache and findings live in Dropbox,
-`<Dropbox>/projects/electro_gui/output/{cache,findings}`, and figure configs are
+others).  The stability cache, findings and labels files live in Dropbox,
+`<Dropbox>/projects/electro_gui/output/{cache,findings,labels}`, and figure configs are
 read from analysis_imitation's presentation decks; see the folder table in
 [electro_gui/README.md](electro_gui/README.md) and `electro_gui/paths.py`.
 
