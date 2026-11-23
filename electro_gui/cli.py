@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 from pathlib import Path
@@ -82,6 +83,20 @@ def _labels_dir(args):
     return output / "labels" if output is not None else None
 
 
+def _labels_option(store_class, args):
+    """``labels_dir`` for the session store, or nothing when this imitation_phys predates labels files.
+
+    electro_gui and analysis_imitation are updated separately (the nightly app
+    update pulls only this repository), so a newer explorer can meet an older
+    loader; it then runs without labels rather than not at all.
+    """
+    if "labels_dir" in inspect.signature(store_class.__init__).parameters:
+        return {"labels_dir": _labels_dir(args)}
+    print("electro_gui: this imitation_phys cannot join labels files; update analysis_imitation to use --labels-dir.",
+          flush=True)
+    return {}
+
+
 def run(args):
     # A restart keeps the port (even one --port 0 chose) and the token (even a
     # random one), so open pages and phones reconnect, and opens no browser.
@@ -95,7 +110,7 @@ def run(args):
     from .server import Application, Tailnet, attach_access_log, make_server
     roots = args.data_root if args.data_root is not None else DEFAULT_ROOTS
     store = SessionStore(roots=roots, session_files=args.session_file or [], cache_dir=cache_dir,
-                         labels_dir=_labels_dir(args))
+                         **_labels_option(SessionStore, args))
     finder = ResultViewerFinder(args.result_viewer_url,
                                 args.apps_dashboard_url if args.apps_dashboard_url is not None else DASHBOARD_URLS)
     notes = Path(args.unit_notes_dir).expanduser() if args.unit_notes_dir is not None else unit_notes_dir()
